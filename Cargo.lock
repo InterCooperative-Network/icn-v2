@@ -1415,6 +1415,7 @@ dependencies = [
  "cid 0.10.1",
  "ed25519-dalek",
  "futures",
+ "hex",
  "icn-identity-core",
  "lazy_static",
  "libp2p",

@@ -443,19 +443,212 @@ impl DagStore for RocksDbDagStore {
     }
 
     fn get_ordered_nodes(&self) -> Result<Vec<SignedDagNode>, DagError> {
-        unimplemented!("Sync get_ordered_nodes is not yet implemented for RocksDbDagStore")
+        let cf_name_nodes: &'static str = CF_NODES;
+
+        // --- Build graph structure directly ---
+        let mut nodes_map = HashMap::<Cid, SignedDagNode>::new();
+        let mut adj_list = HashMap::<Cid, Vec<Cid>>::new(); // parent -> children
+        let mut in_degree = HashMap::<Cid, usize>::new(); // child -> parent_count
+        let mut all_node_cids = HashSet::<Cid>::new(); // Keep track of all nodes encountered
+
+        let cf_handle_nodes = self.cf_handle(cf_name_nodes)?; // Use self.cf_handle
+
+        let iter = self.db.iterator_cf(cf_handle_nodes, rocksdb::IteratorMode::Start);
+        for result in iter {
+            let (_key, value) = result.map_err(DagError::RocksDbError)?;
+            let mut signed_node = Self::deserialize_node(&value)?;
+            let node_cid = signed_node.ensure_cid()?; // Ensure CID is present
+            
+            all_node_cids.insert(node_cid.clone());
+            nodes_map.insert(node_cid.clone(), signed_node.clone());
+
+            // Initialize in-degree for this node
+            in_degree.entry(node_cid.clone()).or_insert(0);
+
+            // Process parents to build adjacency list and in-degrees
+            for parent_cid in &signed_node.node.parents {
+                adj_list.entry(parent_cid.clone()).or_default().push(node_cid.clone());
+                *in_degree.entry(node_cid.clone()).or_insert(0) += 1;
+                in_degree.entry(parent_cid.clone()).or_insert(0);
+            }
+        }
+        
+        // Ensure all nodes are in the in_degree map
+        for parent_cid in adj_list.keys() {
+            in_degree.entry(parent_cid.clone()).or_insert(0);
+        }
+
+        // --- Kahn's Algorithm for Topological Sort ---
+        let mut sorted_list = Vec::with_capacity(nodes_map.len());
+        let mut queue = VecDeque::new();
+
+        // Initialize queue with nodes having in-degree 0
+        for (cid, degree) in &in_degree {
+            if *degree == 0 {
+                queue.push_back(cid.clone());
+            }
+        }
+        
+        if nodes_map.is_empty() {
+            return Ok(sorted_list);
+        }
+        
+        if queue.is_empty() && !nodes_map.is_empty() {
+             return Err(DagError::StorageError("Cycle detected in DAG or no root nodes found".to_string()));
+        }
+
+        while let Some(cid) = queue.pop_front() {
+            if let Some(node) = nodes_map.get(&cid) {
+                 sorted_list.push(node.clone());
+            } else {
+                 return Err(DagError::StorageError(format!("Node {} found in queue but not in map", cid)));
+            }
+
+            if let Some(children) = adj_list.get(&cid) {
+                for child_cid in children {
+                    // Need mutable access to in_degree here
+                    if let Some(degree) = in_degree.get_mut(child_cid) { 
+                        *degree -= 1;
+                        if *degree == 0 {
+                            queue.push_back(child_cid.clone());
+                        }
+                    } else {
+                         return Err(DagError::StorageError(format!("Child node {} of {} not found in in-degree map", child_cid, cid)));
+                    }
+                }
+            }
+        }
+
+        if sorted_list.len() != nodes_map.len() {
+            Err(DagError::StorageError(format!(
+                "Cycle detected in DAG. Processed {} nodes, expected {}.",
+                sorted_list.len(),
+                nodes_map.len()
+            )))
+        } else {
+            Ok(sorted_list)
+        }
     }
 
     fn get_nodes_by_author(&self, author: &Did) -> Result<Vec<SignedDagNode>, DagError> {
-        unimplemented!("Sync get_nodes_by_author is not yet implemented for RocksDbDagStore")
+        let author_key = author.to_string().into_bytes();
+        let cf_authors = self.cf_handle(CF_AUTHORS)?;
+        let cf_nodes = self.cf_handle(CF_NODES)?;
+
+        // 1. Get the list of node CID bytes from the author index
+        let node_cid_bytes_list: Vec<Vec<u8>> = match self.db.get_cf(cf_authors, &author_key)? {
+            Some(bytes) => Self::deserialize_cid_list(&bytes)?,
+            None => return Ok(Vec::new()), // No nodes found for this author
+        };
+
+        // 2. Retrieve and deserialize each node from the main nodes CF
+        let mut nodes = Vec::with_capacity(node_cid_bytes_list.len());
+        for node_cid_bytes in node_cid_bytes_list {
+            match self.db.get_cf(cf_nodes, &node_cid_bytes)? {
+                Some(node_bytes) => {
+                    let node = Self::deserialize_node(&node_bytes)?;
+                    nodes.push(node);
+                }
+                None => {
+                    // This indicates an inconsistency between the index and the nodes table
+                    let cid_str = Cid::from_bytes(&node_cid_bytes).map(|c| c.to_string()).unwrap_or_else(|_| hex::encode(&node_cid_bytes));
+                    return Err(DagError::StorageError(format!(
+                        "Author index points to non-existent node CID: {}", cid_str
+                    )));
+                }
+            }
+        }
+
+        Ok(nodes)
     }
 
     fn get_nodes_by_payload_type(&self, payload_type: &str) -> Result<Vec<SignedDagNode>, DagError> {
-        unimplemented!("Sync get_nodes_by_payload_type is not yet implemented for RocksDbDagStore")
+        let payload_key = payload_type.as_bytes().to_vec();
+        let cf_payload_types = self.cf_handle(CF_PAYLOAD_TYPES)?;
+        let cf_nodes = self.cf_handle(CF_NODES)?;
+
+        // 1. Get the list of node CID bytes from the payload type index
+        let node_cid_bytes_list: Vec<Vec<u8>> = match self.db.get_cf(cf_payload_types, &payload_key)? {
+            Some(bytes) => Self::deserialize_cid_list(&bytes)?,
+            None => return Ok(Vec::new()), // No nodes found for this payload type
+        };
+
+        // 2. Retrieve and deserialize each node from the main nodes CF
+        let mut nodes = Vec::with_capacity(node_cid_bytes_list.len());
+        for node_cid_bytes in node_cid_bytes_list {
+            match self.db.get_cf(cf_nodes, &node_cid_bytes)? {
+                Some(node_bytes) => {
+                    let node = Self::deserialize_node(&node_bytes)?;
+                    nodes.push(node);
+                }
+                None => {
+                    // This indicates an inconsistency between the index and the nodes table
+                    let cid_str = Cid::from_bytes(&node_cid_bytes).map(|c| c.to_string()).unwrap_or_else(|_| hex::encode(&node_cid_bytes));
+                    return Err(DagError::StorageError(format!(
+                        "Payload type index points to non-existent node CID: {}", cid_str
+                    )));
+                }
+            }
+        }
+
+        Ok(nodes)
     }
 
     fn find_path(&self, from: &Cid, to: &Cid) -> Result<Vec<SignedDagNode>, DagError> {
-        unimplemented!("Synchronous find_path not implemented for RocksDB store");
+        let cf_nodes = self.cf_handle(CF_NODES)?;
+
+        let mut queue = VecDeque::new();
+        let mut visited = HashSet::new();
+        let mut predecessors = HashMap::new(); // child -> parent
+
+        queue.push_back(from.clone());
+        visited.insert(from.clone());
+        let mut target_found = false;
+
+        while let Some(current_cid) = queue.pop_front() {
+            if current_cid == *to {
+                target_found = true;
+                break;
+            }
+
+            let node_bytes = self.db.get_cf(cf_nodes, &Self::cid_to_key(&current_cid))?
+                .ok_or_else(|| DagError::NodeNotFound(current_cid.clone()))?;
+            let signed_node = Self::deserialize_node(&node_bytes)?;
+
+            for parent_cid in &signed_node.node.parents {
+                if visited.insert(parent_cid.clone()) {
+                    predecessors.insert(parent_cid.clone(), current_cid.clone());
+                    queue.push_back(parent_cid.clone());
+                }
+            }
+        }
+
+        if !target_found {
+            return Ok(Vec::new());
+        }
+
+        // Reconstruct path
+        let mut path_cids = VecDeque::new();
+        let mut current = to.clone();
+        while current != *from {
+            path_cids.push_front(current.clone());
+            match predecessors.get(&current) {
+                Some(pred) => current = pred.clone(),
+                None => return Err(DagError::StorageError("Path reconstruction failed".to_string())),
+            }
+        }
+        path_cids.push_front(from.clone());
+
+        // Retrieve nodes
+        let mut path_nodes = Vec::with_capacity(path_cids.len());
+        for cid in path_cids {
+            let node_bytes = self.db.get_cf(cf_nodes, &Self::cid_to_key(&cid))?
+                .ok_or_else(|| DagError::NodeNotFound(cid.clone()))?;
+            let signed_node = Self::deserialize_node(&node_bytes)?;
+            path_nodes.push(signed_node);
+        }
+
+        Ok(path_nodes)
     }
 
     fn verify_branch(&self, tip: &Cid, resolver: &(dyn PublicKeyResolver + Send + Sync)) -> Result<(), DagError> {
@@ -777,14 +970,153 @@ impl DagStore for RocksDbDagStore {
     }
 
     async fn get_nodes_by_author(&self, author: &Did) -> Result<Vec<SignedDagNode>, DagError> {
-        unimplemented!("Async get_nodes_by_author is not yet implemented for RocksDbDagStore")
+        let db_clone = self.db.clone();
+        let author_key = author.to_string().into_bytes();
+        let cf_name_authors: &'static str = CF_AUTHORS;
+        let cf_name_nodes: &'static str = CF_NODES;
+        
+        tokio::task::spawn_blocking(move || {
+            let cf_authors = db_clone.cf_handle(cf_name_authors)
+                .ok_or_else(|| DagError::StorageError(format!("CF not found: {}", cf_name_authors)))?;
+            let cf_nodes = db_clone.cf_handle(cf_name_nodes)
+                .ok_or_else(|| DagError::StorageError(format!("CF not found: {}", cf_name_nodes)))?;
+
+            // 1. Get the list of node CID bytes from the author index
+            let node_cid_bytes_list: Vec<Vec<u8>> = match db_clone.get_cf(cf_authors, &author_key)? {
+                Some(bytes) => Self::deserialize_cid_list(&bytes)?,
+                None => return Ok(Vec::new()), // No nodes found for this author
+            };
+
+            // 2. Retrieve and deserialize each node from the main nodes CF
+            let mut nodes = Vec::with_capacity(node_cid_bytes_list.len());
+            for node_cid_bytes in node_cid_bytes_list {
+                match db_clone.get_cf(cf_nodes, &node_cid_bytes)? {
+                    Some(node_bytes) => {
+                        let node = Self::deserialize_node(&node_bytes)?;
+                        nodes.push(node);
+                    }
+                    None => {
+                        // This indicates an inconsistency between the index and the nodes table
+                        let cid_str = Cid::from_bytes(&node_cid_bytes).map(|c| c.to_string()).unwrap_or_else(|_| hex::encode(&node_cid_bytes));
+                        return Err(DagError::StorageError(format!(
+                            "Author index points to non-existent node CID: {}", cid_str
+                        )));
+                    }
+                }
+            }
+
+            Ok(nodes)
+        }).await.map_err(DagError::from)? // Propagate JoinError
     }
 
     async fn get_nodes_by_payload_type(&self, payload_type: &str) -> Result<Vec<SignedDagNode>, DagError> {
-        unimplemented!("Async get_nodes_by_payload_type is not yet implemented for RocksDbDagStore")
+        let db_clone = self.db.clone();
+        let payload_key = payload_type.as_bytes().to_vec();
+        let cf_name_payload_types: &'static str = CF_PAYLOAD_TYPES;
+        let cf_name_nodes: &'static str = CF_NODES;
+        
+        tokio::task::spawn_blocking(move || {
+            let cf_payload_types = db_clone.cf_handle(cf_name_payload_types)
+                .ok_or_else(|| DagError::StorageError(format!("CF not found: {}", cf_name_payload_types)))?;
+            let cf_nodes = db_clone.cf_handle(cf_name_nodes)
+                .ok_or_else(|| DagError::StorageError(format!("CF not found: {}", cf_name_nodes)))?;
+
+            // 1. Get the list of node CID bytes from the payload type index
+            let node_cid_bytes_list: Vec<Vec<u8>> = match db_clone.get_cf(cf_payload_types, &payload_key)? {
+                Some(bytes) => Self::deserialize_cid_list(&bytes)?,
+                None => return Ok(Vec::new()), // No nodes found for this payload type
+            };
+
+            // 2. Retrieve and deserialize each node from the main nodes CF
+            let mut nodes = Vec::with_capacity(node_cid_bytes_list.len());
+            for node_cid_bytes in node_cid_bytes_list {
+                match db_clone.get_cf(cf_nodes, &node_cid_bytes)? {
+                    Some(node_bytes) => {
+                        let node = Self::deserialize_node(&node_bytes)?;
+                        nodes.push(node);
+                    }
+                    None => {
+                        // This indicates an inconsistency between the index and the nodes table
+                        let cid_str = Cid::from_bytes(&node_cid_bytes).map(|c| c.to_string()).unwrap_or_else(|_| hex::encode(&node_cid_bytes));
+                        return Err(DagError::StorageError(format!(
+                            "Payload type index points to non-existent node CID: {}", cid_str
+                        )));
+                    }
+                }
+            }
+
+            Ok(nodes)
+        }).await.map_err(DagError::from)? // Propagate JoinError
     }
 
     async fn find_path(&self, from: &Cid, to: &Cid) -> Result<Vec<SignedDagNode>, DagError> {
-        unimplemented!("Async find_path is not yet implemented for RocksDbDagStore")
+        let db_clone = self.db.clone();
+        let from_cid = from.clone();
+        let to_cid = to.clone();
+        let cf_name_nodes: &'static str = CF_NODES;
+
+        tokio::task::spawn_blocking(move || {
+            let cf_nodes = db_clone.cf_handle(cf_name_nodes)
+                .ok_or_else(|| DagError::StorageError(format!("CF not found: {}", cf_name_nodes)))?;
+
+            let mut queue = VecDeque::new();
+            let mut visited = HashSet::new();
+            // Stores child -> immediate parent relationship discovered during BFS from 'from'
+            let mut predecessors = HashMap::new(); 
+
+            queue.push_back(from_cid.clone());
+            visited.insert(from_cid.clone());
+            let mut target_found = false;
+
+            while let Some(current_cid) = queue.pop_front() {
+                if current_cid == to_cid {
+                    target_found = true;
+                    break; // Found the target node
+                }
+
+                // Get the current node's data to find its parents
+                let node_bytes = db_clone.get_cf(cf_nodes, &Self::cid_to_key(&current_cid))?
+                    .ok_or_else(|| DagError::NodeNotFound(current_cid.clone()))?; 
+                let signed_node = Self::deserialize_node(&node_bytes)?;
+
+                for parent_cid in &signed_node.node.parents {
+                    if visited.insert(parent_cid.clone()) { // Returns true if value was not present
+                        predecessors.insert(parent_cid.clone(), current_cid.clone());
+                        queue.push_back(parent_cid.clone());
+                    }
+                }
+            }
+
+            if !target_found {
+                return Ok(Vec::new()); // No path found
+            }
+
+            // --- Reconstruct path from 'to' back to 'from' using predecessors --- 
+            let mut path_cids = VecDeque::new();
+            let mut current = to_cid.clone();
+            while current != from_cid {
+                path_cids.push_front(current.clone());
+                match predecessors.get(&current) {
+                    Some(pred) => current = pred.clone(),
+                    None => {
+                        // Should not happen if target_found is true and graph is consistent
+                        return Err(DagError::StorageError("Path reconstruction failed: predecessor not found".to_string()));
+                    }
+                }
+            }
+            path_cids.push_front(from_cid.clone()); // Add the starting node
+
+            // --- Retrieve actual nodes for the path --- 
+            let mut path_nodes = Vec::with_capacity(path_cids.len());
+            for cid in path_cids {
+                 let node_bytes = db_clone.get_cf(cf_nodes, &Self::cid_to_key(&cid))?
+                    .ok_or_else(|| DagError::NodeNotFound(cid.clone()))?; // Path points to missing node
+                 let signed_node = Self::deserialize_node(&node_bytes)?;
+                 path_nodes.push(signed_node);
+            }
+            
+            Ok(path_nodes)
+
+        }).await.map_err(DagError::from)? // Propagate JoinError
     }
 } 
