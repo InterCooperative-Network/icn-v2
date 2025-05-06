@@ -1,15 +1,63 @@
-# Rust artifacts
-target/
+# Gitignore for ICN v2 Development (main/dev branches)
+# This file contains rules for ignoring files generated during development.
+# It should not interfere with the gh-pages branch, which holds built artifacts.
 
-# IDE files
-.vscode/
-.idea/
-
-# Logs
+# === General ===
 *.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pids/
+*.pid
+*.seed
+*.pid.lock
 
-# Environment files
-.env
+# === Dependencies / Lock Files ===
+# Typically committed, but ignore if managed differently or locally generated
+# node_modules/
+# bower_components/
+# composer.lock
+# Gemfile.lock
+# Podfile.lock
+# /vendor/
 
-# MacOS files
-.DS_Store 
+# === Build output ===
+# Adjust these based on your project's build tools (Rust/Cargo, Node, Python etc.)
+target/
+dist/
+build/
+out/
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# === IDE / Editor Files ===
+.idea/
+.vscode/
+*.swp
+*~
+*.bak
+
+# === OS Files ===
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# === Secrets / Sensitive Data (Ensure these are NEVER committed) ===
+# Add specific secret file patterns here if necessary, e.g.:
+# .env
+# *.pem
+# *.key
+# credentials*.*
+# config/secrets.yml
+
+# === Documentation Build Output (if built outside gh-pages) ===
+# Uncomment if you sometimes build docs locally on dev branches
+# docs/book/ 

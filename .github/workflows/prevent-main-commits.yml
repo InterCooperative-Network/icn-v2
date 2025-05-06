@@ -1,0 +1,25 @@
+name: Prevent direct commits to main
+
+on:
+  push:
+    branches:
+      - main # Trigger only on pushes to main
+
+jobs:
+  block_direct_main_commit:
+    name: Block direct push to main
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check commit source
+        run: |
+          # Compare the pusher to the committer
+          # Allow pushes if they come from specific trusted actions or merge commits
+          # Example: Allow merge commits (adjust GITHUB_ACTOR if needed)
+          # This is a basic check; more sophisticated checks might be needed for complex workflows
+          if [[ "${{ github.event.pusher.name }}" != "web-flow" && "${{ github.event.head_commit.committer.name }}" != "GitHub" ]]; then
+             echo "⛔ Direct push to main branch by users is blocked."
+             echo "   Please use a Pull Request to merge changes into main."
+             exit 1
+          else
+             echo "✅ Allowed push to main (likely merge commit or trusted actor)."
+          fi 
