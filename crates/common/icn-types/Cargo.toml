@@ -19,6 +19,11 @@ async-trait = "0.1"
 tokio = { version = "1.27", features = ["full"], optional = true }
 futures = { version = "0.3", optional = true }
 
+# Optional libp2p dependencies
+libp2p = { version = "0.53", features = ["tokio", "noise", "gossipsub", "mdns", "kad", "identify", "ping", "request-response"], optional = true }
+libp2p-identity = { version = "0.2", features = ["ed25519"], optional = true }
+libp2p-swarm = { version = "0.44", optional = true }
+
 [dev-dependencies]
 tokio = { version = "1.27", features = ["full", "test-util"] }
 futures = "0.3"
@@ -27,3 +32,4 @@ futures = "0.3"
 default = []
 async = ["tokio", "futures", "async-trait"]
 persistence = ["rocksdb", "tokio", "futures"]
+networking = ["libp2p", "libp2p-identity", "libp2p-swarm", "tokio", "futures", "async-trait"]
