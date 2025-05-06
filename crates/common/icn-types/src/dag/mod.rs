@@ -31,6 +31,20 @@ mod tests_async;
 // Re-export sync types for easier access
 pub use sync::{DAGSyncBundle, DAGSyncService, FederationPeer, SyncError, VerificationResult};
 
+pub mod event;
+pub mod event_type;
+pub mod event_id;
+pub mod payload;
+pub mod merkle;
+pub mod node;
+pub mod ipld;
+
+pub use event::*;
+pub use event_type::*;
+pub use event_id::*;
+pub use payload::*;
+pub use node::*;
+
 /// Error types related to DAG operations
 #[derive(Error, Debug)]
 pub enum DagError {
