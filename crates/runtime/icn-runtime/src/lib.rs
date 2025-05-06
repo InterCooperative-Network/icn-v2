@@ -1,3 +1,3 @@
-//! Placeholder for icn-runtime library
+//! icn-runtime placeholder
 
 pub fn placeholder() {}

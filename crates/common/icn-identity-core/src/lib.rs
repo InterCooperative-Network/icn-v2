@@ -1,3 +1,3 @@
-//! Placeholder for icn-identity-core library
+//! icn-identity-core placeholder
 
 pub fn placeholder() {}

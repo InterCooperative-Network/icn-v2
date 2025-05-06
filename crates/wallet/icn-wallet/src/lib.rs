@@ -1,3 +1,3 @@
-//! Placeholder for icn-wallet library
+//! icn-wallet placeholder
 
 pub fn placeholder() {}
