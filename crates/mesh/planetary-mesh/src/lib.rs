@@ -1,1 +1,3 @@
-//! planetary-mesh placeholder
+//! Placeholder for planetary-mesh library
+
+pub fn placeholder() {}

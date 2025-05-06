@@ -1,1 +1,3 @@
-//! agoranet-core placeholder
+//! Placeholder for agoranet-core library
+
+pub fn placeholder() {}

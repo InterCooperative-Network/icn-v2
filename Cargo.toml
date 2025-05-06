@@ -6,12 +6,6 @@ members = [
     "crates/mesh/planetary-mesh",
     "crates/common/icn-types",
     "crates/common/icn-identity-core",
-    "crates/tools/icn-cli",
-    # Migrated crates
-    "crates/common/icn-dag",
-    "crates/runtime/icn-runtime-vm",
-    "crates/runtime/icn-governance-kernel",
-    "crates/wallet/icn-wallet-core",
-    "crates/wallet/icn-wallet-identity",
+    "crates/tools/icn-cli"
 ]
 resolver = "2"

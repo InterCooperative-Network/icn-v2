@@ -1,1 +1,3 @@
-//! icn-types placeholder
+//! Placeholder for icn-types library
+
+pub fn placeholder() {}
