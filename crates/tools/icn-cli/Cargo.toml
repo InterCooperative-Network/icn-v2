@@ -3,7 +3,15 @@ name = "icn-cli"
 version = "0.1.0"
 edition = "2021"
 
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
 [dependencies]
+# Add metrics dependencies
+metrics = "0.20"
+metrics-exporter-prometheus = "0.11"
+tokio-metrics = "0.2" 
+hyper = { version = "0.14", features = ["server", "http1"] }
+
 icn-types = { path = "../../common/icn-types", features = ["persistence", "async"] }
 icn-identity-core = { path = "../../common/icn-identity-core" }
 clap = { version = "4.0", features = ["derive"] }

@@ -19,6 +19,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+// Add this at the top with other mod declarations
+mod metrics;
+
+// Add these imports
+use metrics::{counter, gauge, histogram};
+use std::net::SocketAddr;
+use crate::metrics::{MetricsContext, init_metrics};
+
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
@@ -501,6 +509,42 @@ enum MeshCommands {
         /// Enable mDNS discovery
         #[arg(long, default_value = "true")]
         mdns: bool,
+    },
+    
+    /// Start a metrics server for monitoring mesh activity
+    #[command(name = "metrics-server")]
+    MetricsServer {
+        /// Federation ID
+        #[arg(long)]
+        federation: String,
+        
+        /// Listen address for metrics server (default: 127.0.0.1:9090)
+        #[arg(long, default_value = "127.0.0.1:9090")]
+        listen: String,
+        
+        /// Path to DAG storage
+        #[arg(long)]
+        dag_dir: PathBuf,
+    },
+    
+    /// Show mesh statistics
+    #[command(name = "stats")]
+    Stats {
+        /// Federation ID
+        #[arg(long)]
+        federation: String,
+        
+        /// Path to DAG storage
+        #[arg(long)]
+        dag_dir: PathBuf,
+        
+        /// Type of stats to show (tasks, bids, tokens, peers)
+        #[arg(long, default_value = "tasks")]
+        type_filter: String,
+        
+        /// Number of entries to show
+        #[arg(long, default_value = "10")]
+        limit: usize,
     },
 }
 
@@ -1042,6 +1086,11 @@ async fn handle_mesh_command(cmd: &MeshCommands) -> Result<()> {
             
             println!("Task published. Listen for bids by starting a scheduler node.");
             
+            // Record metrics for task publication
+            if let Ok(metrics_context) = init_metrics(&federation, None) {
+                metrics_context.record_task_published(&task_cid.to_string(), wasm_bytes.len() as u64);
+            }
+            
             Ok(())
         },
         
@@ -1170,6 +1219,16 @@ async fn handle_mesh_command(cmd: &MeshCommands) -> Result<()> {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             
             println!("Bid published successfully.");
+            
+            // Record metrics for bid submission
+            if let Ok(metrics_context) = init_metrics(&federation_id, None) {
+                metrics_context.record_bid_submitted(
+                    &bid_cid.to_string(),
+                    &task_cid.to_string(),
+                    *latency,
+                    score
+                );
+            }
             
             Ok(())
         },
@@ -1576,6 +1635,23 @@ async fn handle_mesh_command(cmd: &MeshCommands) -> Result<()> {
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                     
                     println!("Receipt and token transfer published successfully.");
+                    
+                    // Record metrics for execution completion
+                    if let Ok(metrics_context) = init_metrics(&federation_id, None) {
+                        metrics_context.record_execution_completed(
+                            &task_cid.to_string(),
+                            execution_time_ms as u64,
+                            end_metrics["memory_peak_mb"].as_u64().unwrap_or(0),
+                            end_metrics["cpu_usage_pct"].as_u64().unwrap_or(0)
+                        );
+                        
+                        // Record token transfer metrics
+                        metrics_context.record_token_transfer(
+                            &task_node.node.author.to_string(),
+                            &executor_did.to_string(),
+                            token_amount
+                        );
+                    }
                 } else {
                     return Err(anyhow::anyhow!("Invalid bid node payload type"));
                 }
@@ -1784,6 +1860,397 @@ async fn handle_mesh_command(cmd: &MeshCommands) -> Result<()> {
                 }
             } else {
                 println!("\nNo transfers found for this DID in federation {}.", federation);
+            }
+            
+            Ok(())
+        },
+        
+        MeshCommands::MetricsServer { federation, listen, dag_dir } => {
+            // Parse the listen address
+            let addr: SocketAddr = listen.parse()
+                .map_err(|e| anyhow::anyhow!("Invalid listen address: {}", e))?;
+            
+            // Create DAG store
+            let _store = Arc::new(icn_types::dag::rocksdb::RocksDbDagStore::new(dag_dir)?);
+            
+            // Initialize metrics server
+            let metrics_context = init_metrics(&federation, Some(addr))?;
+            
+            println!("Metrics server started on http://{}/metrics", addr);
+            println!("Press Ctrl+C to stop the server");
+            
+            // Keep the process running
+            loop {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        },
+        
+        MeshCommands::Stats { federation, dag_dir, type_filter, limit } => {
+            // Create DAG store
+            let store = Arc::new(icn_types::dag::rocksdb::RocksDbDagStore::new(dag_dir)?);
+            
+            // Get all nodes from the DAG
+            let nodes = store.get_ordered_nodes().await?;
+            
+            println!("Federation: {}", federation);
+            
+            match type_filter.as_str() {
+                "tasks" => {
+                    let mut tasks = Vec::new();
+                    
+                    for node in &nodes {
+                        if let icn_types::dag::DagPayload::Json(payload) = &node.node.payload {
+                            if payload.get("type").and_then(|t| t.as_str()) == Some("TaskTicket") {
+                                if let Some(cid) = &node.cid {
+                                    tasks.push((
+                                        cid.to_string(),
+                                        node.node.author.to_string(),
+                                        node.node.metadata.timestamp,
+                                        payload.get("wasm_size").and_then(|s| s.as_u64()).unwrap_or(0)
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Sort by timestamp (newest first)
+                    tasks.sort_by(|a, b| b.2.cmp(&a.2));
+                    
+                    // Limit to the requested number
+                    let tasks = if tasks.len() > limit {
+                        tasks.into_iter().take(limit).collect::<Vec<_>>()
+                    } else {
+                        tasks
+                    };
+                    
+                    println!("\nRecent tasks ({})", tasks.len());
+                    println!("{:<10} {:<20} {:<30} {:<15}", "Index", "Author", "Timestamp", "Size (bytes)");
+                    println!("{}", "-".repeat(80));
+                    
+                    for (i, (cid, author, timestamp, size)) in tasks.iter().enumerate() {
+                        println!("{:<10} {:<20} {:<30} {:<15}", 
+                            i + 1,
+                            author.chars().take(18).collect::<String>(),
+                            timestamp.format("%Y-%m-%d %H:%M:%S"),
+                            size
+                        );
+                    }
+                },
+                "bids" => {
+                    let mut bids = Vec::new();
+                    
+                    for node in &nodes {
+                        if let icn_types::dag::DagPayload::Json(payload) = &node.node.payload {
+                            if payload.get("type").and_then(|t| t.as_str()) == Some("TaskBid") {
+                                if let Some(cid) = &node.cid {
+                                    bids.push((
+                                        cid.to_string(),
+                                        node.node.author.to_string(),
+                                        node.node.metadata.timestamp,
+                                        payload.get("task_cid").and_then(|t| t.as_str()).unwrap_or("unknown"),
+                                        payload["offered_resources"].get("latency_ms").and_then(|l| l.as_u64()).unwrap_or(0),
+                                        payload["offered_resources"].get("memory_mb").and_then(|m| m.as_u64()).unwrap_or(0),
+                                        payload["offered_resources"].get("cores").and_then(|c| c.as_u64()).unwrap_or(0),
+                                        payload["offered_resources"].get("reputation").and_then(|r| r.as_u64()).unwrap_or(0)
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Sort by timestamp (newest first)
+                    bids.sort_by(|a, b| b.2.cmp(&a.2));
+                    
+                    // Limit to the requested number
+                    let bids = if bids.len() > limit {
+                        bids.into_iter().take(limit).collect::<Vec<_>>()
+                    } else {
+                        bids
+                    };
+                    
+                    println!("\nRecent bids ({})", bids.len());
+                    println!("{:<10} {:<20} {:<20} {:<10} {:<10} {:<10} {:<10}", 
+                        "Index", "Bidder", "Timestamp", "Latency", "Memory", "Cores", "Rep");
+                    println!("{}", "-".repeat(80));
+                    
+                    for (i, (_, author, timestamp, _, latency, memory, cores, reputation)) in bids.iter().enumerate() {
+                        println!("{:<10} {:<20} {:<20} {:<10} {:<10} {:<10} {:<10}", 
+                            i + 1,
+                            author.chars().take(18).collect::<String>(),
+                            timestamp.format("%Y-%m-%d %H:%M:%S"),
+                            latency,
+                            memory,
+                            cores,
+                            reputation
+                        );
+                    }
+                },
+                "tokens" => {
+                    let mut transfers = Vec::new();
+                    
+                    for node in &nodes {
+                        if let icn_types::dag::DagPayload::Json(payload) = &node.node.payload {
+                            if payload.get("type").and_then(|t| t.as_str()) == Some("ResourceTokenTransfer") {
+                                if let Some(cid) = &node.cid {
+                                    transfers.push((
+                                        cid.to_string(),
+                                        node.node.metadata.timestamp,
+                                        payload.get("from").and_then(|f| f.as_str()).unwrap_or("unknown"),
+                                        payload.get("to").and_then(|t| t.as_str()).unwrap_or("unknown"),
+                                        payload.get("amount").and_then(|a| a.as_f64()).unwrap_or(0.0),
+                                        payload.get("token_type").and_then(|t| t.as_str()).unwrap_or("UNKNOWN")
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Sort by timestamp (newest first)
+                    transfers.sort_by(|a, b| b.1.cmp(&a.1));
+                    
+                    // Limit to the requested number
+                    let transfers = if transfers.len() > limit {
+                        transfers.into_iter().take(limit).collect::<Vec<_>>()
+                    } else {
+                        transfers
+                    };
+                    
+                    println!("\nRecent token transfers ({})", transfers.len());
+                    println!("{:<10} {:<20} {:<20} {:<20} {:<15} {:<10}", 
+                        "Index", "Timestamp", "From", "To", "Amount", "Type");
+                    println!("{}", "-".repeat(90));
+                    
+                    for (i, (_, timestamp, from, to, amount, token_type)) in transfers.iter().enumerate() {
+                        println!("{:<10} {:<20} {:<20} {:<20} {:<15.6} {:<10}", 
+                            i + 1,
+                            timestamp.format("%Y-%m-%d %H:%M:%S"),
+                            from.chars().take(18).collect::<String>(),
+                            to.chars().take(18).collect::<String>(),
+                            amount,
+                            token_type
+                        );
+                    }
+                    
+                    // Calculate total token supply and distribution
+                    let mut balances: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+                    
+                    for (_, _, from, to, amount, _) in &transfers {
+                        *balances.entry(from.to_string()).or_default() -= amount;
+                        *balances.entry(to.to_string()).or_default() += amount;
+                    }
+                    
+                    let mut balance_list: Vec<(String, f64)> = balances.into_iter().collect();
+                    balance_list.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                    
+                    println!("\nTop token holders:");
+                    println!("{:<10} {:<30} {:<15}", "Rank", "DID", "Balance");
+                    println!("{}", "-".repeat(60));
+                    
+                    for (i, (did, balance)) in balance_list.iter().take(5).enumerate() {
+                        println!("{:<10} {:<30} {:<15.6}", 
+                            i + 1,
+                            did.chars().take(28).collect::<String>(),
+                            balance
+                        );
+                    }
+                },
+                "receipts" => {
+                    let mut receipts = Vec::new();
+                    
+                    for node in &nodes {
+                        if let icn_types::dag::DagPayload::Json(payload) = &node.node.payload {
+                            if payload.get("type").and_then(|t| t.as_str()) == Some("ExecutionReceipt") {
+                                if let Some(cid) = &node.cid {
+                                    if let Some(credential) = payload.get("credential") {
+                                        if let Some(subject) = credential.get("credentialSubject") {
+                                            receipts.push((
+                                                cid.to_string(),
+                                                node.node.author.to_string(),
+                                                node.node.metadata.timestamp,
+                                                subject.get("taskCid").and_then(|t| t.as_str()).unwrap_or("unknown"),
+                                                subject.get("executionTime").and_then(|e| e.as_u64()).unwrap_or(0),
+                                                subject.get("tokenCompensation").and_then(|t| t.as_f64()).unwrap_or(0.0)
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Sort by timestamp (newest first)
+                    receipts.sort_by(|a, b| b.2.cmp(&a.2));
+                    
+                    // Limit to the requested number
+                    let receipts = if receipts.len() > limit {
+                        receipts.into_iter().take(limit).collect::<Vec<_>>()
+                    } else {
+                        receipts
+                    };
+                    
+                    println!("\nRecent execution receipts ({})", receipts.len());
+                    println!("{:<10} {:<20} {:<20} {:<10} {:<15} {:<15}", 
+                        "Index", "Executor", "Timestamp", "Exec Time", "Compensation", "Receipt CID");
+                    println!("{}", "-".repeat(100));
+                    
+                    for (i, (cid, author, timestamp, _, exec_time, compensation)) in receipts.iter().enumerate() {
+                        println!("{:<10} {:<20} {:<20} {:<10} {:<15.6} {:<15}", 
+                            i + 1,
+                            author.chars().take(18).collect::<String>(),
+                            timestamp.format("%Y-%m-%d %H:%M:%S"),
+                            exec_time,
+                            compensation,
+                            cid.chars().take(13).collect::<String>()
+                        );
+                    }
+                    
+                    // Calculate execution statistics
+                    let total_executions = receipts.len();
+                    let total_compute_time: u64 = receipts.iter().map(|(_, _, _, _, time, _)| time).sum();
+                    let total_compensation: f64 = receipts.iter().map(|(_, _, _, _, _, comp)| comp).sum();
+                    
+                    let avg_time = if total_executions > 0 { 
+                        total_compute_time as f64 / total_executions as f64 
+                    } else { 
+                        0.0 
+                    };
+                    
+                    let avg_compensation = if total_executions > 0 { 
+                        total_compensation / total_executions as f64 
+                    } else { 
+                        0.0 
+                    };
+                    
+                    println!("\nExecution statistics:");
+                    println!("  Total executions: {}", total_executions);
+                    println!("  Total compute time: {} ms", total_compute_time);
+                    println!("  Average execution time: {:.2} ms", avg_time);
+                    println!("  Total token compensation: {:.6} COMPUTE", total_compensation);
+                    println!("  Average compensation per task: {:.6} COMPUTE", avg_compensation);
+                },
+                "resources" => {
+                    let mut resource_usage = std::collections::HashMap::new();
+                    let mut resource_events = std::collections::HashMap::new();
+                    let mut sensor_events = std::collections::HashMap::new();
+                    let mut actuation_events = std::collections::HashMap::new();
+                    let mut bandwidth_usage = (0u64, 0u64); // (in, out)
+                    
+                    // Process execution receipts to extract resource usage
+                    for node in &nodes {
+                        if let icn_types::dag::DagPayload::Json(payload) = &node.node.payload {
+                            if payload.get("type").and_then(|t| t.as_str()) == Some("ExecutionReceipt") {
+                                if let Some(credential) = payload.get("credential") {
+                                    if let Some(subject) = credential.get("credentialSubject") {
+                                        // Extract resource usage from the receipt
+                                        if let Some(resources) = subject.get("resourceUsage") {
+                                            if let Some(mem) = resources.get("memoryMb").and_then(|m| m.as_u64()) {
+                                                *resource_usage.entry("Memory".to_string()).or_insert(0u64) += mem;
+                                                *resource_events.entry("Memory".to_string()).or_insert(0u64) += 1;
+                                            }
+                                            
+                                            if let Some(cpu) = subject.get("executionTime").and_then(|t| t.as_u64()) {
+                                                *resource_usage.entry("CPU".to_string()).or_insert(0u64) += cpu;
+                                                *resource_events.entry("CPU".to_string()).or_insert(0u64) += 1;
+                                            }
+                                            
+                                            if let Some(io_read) = resources.get("ioReadBytes").and_then(|r| r.as_u64()) {
+                                                *resource_usage.entry("IO".to_string()).or_insert(0u64) += io_read;
+                                                *resource_events.entry("IO".to_string()).or_insert(0u64) += 1;
+                                                bandwidth_usage.0 += io_read;
+                                            }
+                                            
+                                            if let Some(io_write) = resources.get("ioWriteBytes").and_then(|w| w.as_u64()) {
+                                                *resource_usage.entry("IO".to_string()).or_insert(0u64) += io_write;
+                                                bandwidth_usage.1 += io_write;
+                                            }
+                                        }
+                                        
+                                        // Look for sensor events
+                                        if let Some(sensors) = subject.get("sensorEvents") {
+                                            if let Some(sensors_obj) = sensors.as_object() {
+                                                for (sensor_type, count) in sensors_obj {
+                                                    if let Some(count_val) = count.as_u64() {
+                                                        *sensor_events.entry(sensor_type.clone()).or_insert(0u64) += count_val;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        
+                                        // Look for actuation events
+                                        if let Some(actuations) = subject.get("actuationEvents") {
+                                            if let Some(actuations_obj) = actuations.as_object() {
+                                                for (actuation_type, count) in actuations_obj {
+                                                    if let Some(count_val) = count.as_u64() {
+                                                        *actuation_events.entry(actuation_type.clone()).or_insert(0u64) += count_val;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Display resource usage summary
+                    println!("\nResource usage summary:");
+                    println!("{:<15} {:<15} {:<15}", "Resource Type", "Total Usage", "Event Count");
+                    println!("{}", "-".repeat(45));
+                    
+                    for (resource_type, usage) in &resource_usage {
+                        let events = resource_events.get(resource_type).unwrap_or(&0);
+                        let unit = match resource_type.as_str() {
+                            "CPU" => "ms",
+                            "Memory" => "MB",
+                            "IO" => "bytes",
+                            _ => "units"
+                        };
+                        
+                        println!("{:<15} {:<15} {:<15}", 
+                            resource_type,
+                            format!("{} {}", usage, unit),
+                            events
+                        );
+                    }
+                    
+                    // Display bandwidth usage
+                    println!("\nBandwidth usage:");
+                    println!("  Ingress: {} bytes", bandwidth_usage.0);
+                    println!("  Egress:  {} bytes", bandwidth_usage.1);
+                    
+                    // Display sensor events if any
+                    if !sensor_events.is_empty() {
+                        println!("\nSensor events:");
+                        println!("{:<20} {:<15}", "Sensor Type", "Event Count");
+                        println!("{}", "-".repeat(35));
+                        
+                        for (sensor_type, count) in &sensor_events {
+                            println!("{:<20} {:<15}", sensor_type, count);
+                        }
+                    }
+                    
+                    // Display actuation events if any
+                    if !actuation_events.is_empty() {
+                        println!("\nActuation events:");
+                        println!("{:<20} {:<15}", "Actuation Type", "Trigger Count");
+                        println!("{}", "-".repeat(35));
+                        
+                        for (actuation_type, count) in &actuation_events {
+                            println!("{:<20} {:<15}", actuation_type, count);
+                        }
+                    }
+                    
+                    // Show resources with federation compensation policy if available
+                    println!("\nFederation resource compensation policy:");
+                    println!("  CPU: 0.1 tokens per second");
+                    println!("  Memory: 0.05 tokens per MB per hour");
+                    println!("  IO: 0.01 tokens per MB");
+                    println!("  Sensor: 0.25 tokens per event");
+                    println!("  Actuation: 0.5 tokens per trigger");
+                },
+                _ => {
+                    return Err(anyhow::anyhow!("Unknown stats type: {}. Allowed types: tasks, bids, tokens, receipts, resources", type_filter));
+                }
             }
             
             Ok(())

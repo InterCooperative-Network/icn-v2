@@ -19,6 +19,7 @@ This directory contains guides and tutorials for using ICN in various scenarios.
 
 - [Mesh Computation Guide](mesh_compute.md): Publishing, bidding on, and executing distributed tasks across federation nodes.
 - [Compute Economics & Credentials](compute_economics.md): Token compensation system and verifiable credential issuance for computation.
+- [Mesh Observability & Monitoring](mesh_observability.md): Monitoring mesh performance, token economics, and computation with Prometheus and Grafana.
 
 ## Use Cases
 
