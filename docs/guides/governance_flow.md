@@ -20,6 +20,21 @@ The governance flow is implemented with the following components:
 | `VoteCredential`          | ✅ Complete | VC representing an individual vote on a proposal          |
 | `ExecutionReceipt`        | ✅ Complete | VC confirming execution of passed proposal                |
 
+### Quorum Engine
+
+| Component                 | Status      | Description                                                |
+|---------------------------|-------------|------------------------------------------------------------|
+| `QuorumEngine`            | ✅ Complete | Service to evaluate votes against proposal thresholds      |
+| `QuorumTally`             | ✅ Complete | Result of vote counting with detailed statistics           |
+| `QuorumOutcome`           | ✅ Complete | Determination of proposal success (Passed/Failed/etc.)     |
+
+The Quorum Engine supports the following voting threshold types:
+
+- **Majority**: More than 50% of votes must be "yes"
+- **Percentage**: A specified percentage of votes must be "yes" (e.g., 66%)
+- **Unanimous**: All voters must vote "yes"
+- **Weighted**: Voters have different weights, and a threshold of total voting power must be reached
+
 ### CLI Commands
 
 The governance flow can be managed using the following CLI commands:
@@ -102,12 +117,61 @@ Here's a complete example workflow:
    icn receipt show [receipt-id]
    ```
 
+## Quorum Engine Details
+
+The QuorumEngine is responsible for processing votes and determining if a proposal passes. It features:
+
+- **Valid vote filtering**: Ensures only valid votes from eligible members are counted
+- **Vote de-duplication**: Considers only the most recent vote from each member
+- **Flexible threshold support**: Handles majority, percentage, unanimous, and weighted voting
+- **Veto support**: Any veto vote causes proposal to fail regardless of other votes
+- **Voting power**: Supports weighted votes with different power levels
+- **Detailed tallies**: Provides complete statistics about the voting process
+
+### Example usage:
+
+```rust
+// Create a quorum engine
+let engine = QuorumEngine::new();
+
+// Or with a restricted member list
+let engine = QuorumEngine::with_members(vec![member1_did, member2_did]);
+
+// Evaluate votes on a proposal
+let tally = engine.evaluate(&proposal, &votes)?;
+
+// Check the outcome
+match tally.outcome {
+    QuorumOutcome::Passed => {
+        // Handle passed proposal
+    },
+    QuorumOutcome::Failed => {
+        // Handle failed proposal
+    },
+    QuorumOutcome::Inconclusive => {
+        // Voting period not ended yet
+    },
+    QuorumOutcome::Invalid => {
+        // Proposal not in votable state
+    }
+}
+```
+
 ## Next Steps
 
+- ✅ **DAG Anchoring**: Implement real DAG loading logic for proposals and votes
+- ✅ **Runtime Integration**: Enable proposal-triggered execution via `icn proposal execute` 
 - **AgoraNet Integration**: Link proposal threads to ProposalCredentials
-- **Quorum Engine**: Complete implementation of quorum calculation
-- **Runtime Integration**: Enable proposal-triggered execution
 - **Wallet Support**: Add UI for proposal browsing and voting
+
+With the implementation of DAG integration for the `proposal execute` command, the governance flow now enables:
+1. **Proposal Creation** (`proposal submit`) → DAG anchoring
+2. **Voting** (`vote cast`) → DAG anchoring 
+3. **Verifiable Resolution** - Retrieving proposals and votes from the DAG
+4. **Execution** (`proposal execute`) - Using QuorumEngine to validate votes
+5. **Verification** - Anchoring ExecutionReceipt back to the DAG
+
+This creates a complete trust chain from deliberation to execution, with each step cryptographically linked and verifiable.
 
 ## Diagrams
 
@@ -133,4 +197,25 @@ Here's a complete example workflow:
                    │  Credential  │    │   Receipt    │
                    │              │    │              │
                    └──────────────┘    └──────────────┘
+```
+
+### Governance Processing Flow
+
+```
+┌───────────────┐     ┌───────────────┐     ┌────────────────┐
+│ Proposals     │     │ Votes         │     │ Quorum Engine  │
+│ (DAG)         │─────┤ (DAG)         │────▶│                │
+└───────────────┘     └───────────────┘     └───────┬────────┘
+                                                     │
+                                                     ▼
+┌───────────────┐     ┌───────────────┐     ┌────────────────┐
+│ Runtime       │◀────│ Status Update │◀────│ Tally Result   │
+│ Execution     │     │ (if passed)   │     │                │
+└───────────────┘     └───────────────┘     └────────────────┘
+         │
+         ▼
+┌───────────────┐
+│ Execution     │
+│ Receipt       │
+└───────────────┘
 ``` 

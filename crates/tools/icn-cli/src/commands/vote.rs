@@ -8,7 +8,12 @@ use icn_identity_core::{
         VoteCredential,
         VoteSubject,
         VoteDecision,
-    }
+        ProposalCredential,
+        ProposalSubject,
+        ProposalStatus,
+    },
+    QuorumEngine,
+    QuorumOutcome,
 };
 use icn_types::dag::{Cid, DagStore, EventId};
 use std::path::PathBuf;
@@ -205,8 +210,96 @@ pub async fn handle_vote_commands(
             Ok(())
         },
         VoteCommands::Tally { proposal_id, key_file } => {
-            // TODO: Implement vote tallying and proposal status update
-            println!("Vote tallying is not yet implemented");
+            // Load the key from file
+            let key_data = fs::read_to_string(&key_file)
+                .map_err(|e| CliError::IoError(format!("Failed to read key file: {}", e)))?;
+            
+            let admin_key = DidKey::from_jwk(&key_data)
+                .map_err(|e| CliError::IdentityError(format!("Failed to parse key: {}", e)))?;
+            
+            // TODO: In a real implementation, get these from the DAG storage
+            println!("Retrieving proposal and votes from the DAG...");
+            
+            // For now, display a message that this is not fully implemented
+            println!("Vote tallying will use the QuorumEngine to count votes and determine the outcome.");
+            println!("Current implementation is incomplete - needs DAG integration.");
+            
+            // The following would be the implementation once we have DAG retrieval:
+            /*
+            // 1. Retrieve the proposal from DAG storage
+            let proposal = ctx.dag_store.get_proposal(&proposal_id)
+                .await
+                .map_err(|e| CliError::DagError(format!("Failed to retrieve proposal: {}", e)))?;
+                
+            // 2. Retrieve all votes for this proposal from DAG storage
+            let votes = ctx.dag_store.get_votes_for_proposal(&proposal_id)
+                .await
+                .map_err(|e| CliError::DagError(format!("Failed to retrieve votes: {}", e)))?;
+                
+            // 3. Create a quorum engine and evaluate votes
+            let engine = QuorumEngine::new();
+            let tally = engine.evaluate(&proposal, &votes)
+                .map_err(|e| CliError::IdentityError(format!("Quorum evaluation failed: {}", e)))?;
+                
+            // 4. If the proposal passed and is currently in Active state, update its status
+            if tally.outcome == QuorumOutcome::Passed && proposal.credential_subject.status == ProposalStatus::Active {
+                // Clone the proposal and update its status
+                let mut updated_proposal = proposal.clone();
+                updated_proposal.update_status(ProposalStatus::Passed)
+                    .map_err(|e| CliError::IdentityError(format!("Failed to update proposal status: {}", e)))?;
+                    
+                // Sign the updated proposal
+                let updated_proposal = updated_proposal.sign(&admin_key)
+                    .map_err(|e| CliError::IdentityError(format!("Failed to sign updated proposal: {}", e)))?;
+                    
+                // Store the updated proposal in the DAG
+                ctx.dag_store.store_proposal(&updated_proposal)
+                    .await
+                    .map_err(|e| CliError::DagError(format!("Failed to store updated proposal: {}", e)))?;
+                    
+                println!("Proposal status updated to Passed");
+            } else if tally.outcome == QuorumOutcome::Failed && proposal.credential_subject.status == ProposalStatus::Active {
+                // Handle failed proposal
+                let mut updated_proposal = proposal.clone();
+                updated_proposal.update_status(ProposalStatus::Rejected)
+                    .map_err(|e| CliError::IdentityError(format!("Failed to update proposal status: {}", e)))?;
+                    
+                // Sign the updated proposal
+                let updated_proposal = updated_proposal.sign(&admin_key)
+                    .map_err(|e| CliError::IdentityError(format!("Failed to sign updated proposal: {}", e)))?;
+                    
+                // Store the updated proposal in the DAG
+                ctx.dag_store.store_proposal(&updated_proposal)
+                    .await
+                    .map_err(|e| CliError::DagError(format!("Failed to store updated proposal: {}", e)))?;
+                    
+                println!("Proposal status updated to Rejected");
+            }
+            
+            // 5. Print the tally results
+            println!("Vote Tally for Proposal {}:", proposal_id);
+            println!("-------------------------------------------");
+            println!("Title: {}", proposal.credential_subject.title);
+            println!("Total votes: {}", tally.total_votes);
+            println!("Yes votes: {} (power: {})", tally.yes_votes, tally.yes_power);
+            println!("No votes: {} (power: {})", tally.no_votes, tally.no_power);
+            println!("Abstain votes: {} (power: {})", tally.abstain_votes, tally.abstain_power);
+            println!("Veto votes: {} (power: {})", tally.veto_votes, tally.veto_power);
+            println!("Threshold: {}", tally.threshold);
+            println!("Outcome: {:?}", tally.outcome);
+            */
+            
+            println!("\nSimulated tally result:");
+            println!("-------------------------------------------");
+            println!("Proposal: {}", proposal_id);
+            println!("Total votes: 5");
+            println!("Yes votes: 3 (power: 3)");
+            println!("No votes: 2 (power: 2)");
+            println!("Abstain votes: 0");
+            println!("Veto votes: 0");
+            println!("Threshold: Simple majority (>50%)");
+            println!("Outcome: Passed");
+            
             Ok(())
         },
     }

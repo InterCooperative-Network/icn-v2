@@ -12,6 +12,7 @@ pub mod trustbundle;
 // Re-export key structs/functions
 // pub use did::{DidKey, DidKeyError};
 pub use quorum::{QuorumValidator, QuorumError};
+pub use quorum::{QuorumEngine, QuorumTally, QuorumOutcome, QuorumEngineError};
 pub use vc::{VerifiableCredential, VcIssuer};
 pub use trustbundle::{TrustBundle, QuorumConfig, QuorumType, QuorumProof, TrustError};
 pub use trustbundle::storage::{TrustBundleStore, MemoryTrustBundleStore, StorageError};
@@ -27,6 +28,21 @@ pub use vc::execution_receipt::{
     ExecutionStatus,
     Proof as ExecutionReceiptProof,
     ExecutionReceiptError
+};
+
+// Re-export governance VC types
+pub use vc::{
+    ProposalCredential,
+    ProposalSubject,
+    ProposalType,
+    ProposalStatus,
+    VotingThreshold,
+    VotingDuration,
+    ProposalError,
+    VoteCredential,
+    VoteSubject,
+    VoteDecision,
+    VoteError
 };
 
 pub fn placeholder() {}

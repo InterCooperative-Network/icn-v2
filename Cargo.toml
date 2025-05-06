@@ -8,6 +8,7 @@ members = [
     "crates/common/icn-identity-core",
     "crates/common/icn-core-types",
     "crates/tools/icn-cli",
+    "tests",
 ]
 resolver = "2"
 
