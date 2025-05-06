@@ -1,6 +1,6 @@
-use icn_types::{Did, QuorumProof, Cid};
+use icn_core_types::{Did, QuorumProof, Cid};
 use thiserror::Error;
-use ed25519_dalek::{VerifyingKey, Verifier};
+use ed25519_dalek::{VerifyingKey, Verifier, Signature as DalekSignature};
 use std::collections::{HashMap, HashSet};
 // Try importing via icn_types re-export path?
 // This likely won't work as ExternalCid is not a module.
@@ -13,6 +13,8 @@ use std::collections::{HashMap, HashSet};
 pub enum QuorumError {
     #[error("Signature verification failed for DID {did}: {source}")]
     SignatureError { did: Did, source: ed25519_dalek::SignatureError },
+    #[error("Failed to parse signature for DID {did}: {source}")]
+    ParseSignatureError { did: Did, source: ed25519_dalek::SignatureError },
     #[error("Policy evaluation failed: {0}")]
     PolicyError(String),
     #[error("Quorum not met: required {required}, found {found}")]
@@ -63,7 +65,7 @@ impl QuorumValidator {
 
         let mut valid_signers = HashSet::new();
 
-        for (did, signature) in &proof.signatures {
+        for (did, signature_bytes) in &proof.signatures {
             // Prevent duplicate signatures from the same DID
             if !valid_signers.insert(did.clone()) {
                 return Err(QuorumError::DuplicateSignature { did: did.clone() });
@@ -72,7 +74,11 @@ impl QuorumValidator {
             let verifying_key = public_keys.get(did)
                 .ok_or_else(|| QuorumError::PublicKeyNotFound { did: did.clone() })?;
 
-            verifying_key.verify(signed_data, signature)
+            // Convert ByteBuf to ed25519_dalek::Signature
+            let dalek_signature = DalekSignature::try_from(signature_bytes.as_slice())
+                .map_err(|e| QuorumError::ParseSignatureError { did: did.clone(), source: e })?;
+
+            verifying_key.verify(signed_data, &dalek_signature)
                 .map_err(|e| QuorumError::SignatureError { did: did.clone(), source: e })?;
         }
 

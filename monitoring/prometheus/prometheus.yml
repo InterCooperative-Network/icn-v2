@@ -1,0 +1,17 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'icn-mesh'
+    static_configs:
+      - targets: ['host.docker.internal:9090']
+        labels:
+          federation: 'default'
+    
+  # Add more mesh nodes here as needed
+  # - job_name: 'federation-2'
+  #   static_configs:
+  #     - targets: ['host.docker.internal:9091']
+  #       labels:
+  #         federation: 'another-federation'

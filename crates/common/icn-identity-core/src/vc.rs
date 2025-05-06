@@ -1,5 +1,5 @@
 // use icn_types::{Cid, Did}; // Remove unused Cid import
-use icn_types::Did;
+use icn_core_types::Did;
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 use serde_json::Value;

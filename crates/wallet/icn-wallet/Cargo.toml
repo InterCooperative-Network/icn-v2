@@ -2,5 +2,35 @@
 name = "icn-wallet"
 version = "0.1.0"
 edition = "2021"
+description = "ICN Wallet SDK for dispatch credential verification"
+authors = ["ICN Team"]
+license = "MIT"
 
 [dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+hex = "0.4"
+ed25519-dalek = { version = "2.0.0", features = ["serde"] }
+uniffi = { version = "0.24", optional = true }
+thiserror = "1.0"
+log = "0.4"
+uuid = { version = "1.4", features = ["v4"] }
+serde_ipld_dagcbor = "0.5"
+futures = "0.3"
+multibase = "0.9"
+
+# ICN internal crates
+icn-types = { path = "../../common/icn-types" }
+icn-identity-core = { path = "../../common/icn-identity-core" }
+
+[features]
+default = []
+uniffi-bindings = ["uniffi"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[build-dependencies]
+uniffi = { version = "0.24", optional = true, features = ["build"] }

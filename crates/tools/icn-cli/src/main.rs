@@ -1,5 +1,118 @@
 //! Placeholder for icn-cli binary
 
-fn main() {
-    println!("ICN CLI");
-} 
+// Use anyhow temporarily for non-refactored commands
+// use anyhow::{Context, Result};
+
+// New structure imports
+mod error;
+mod context;
+mod commands;
+// mod metrics; // Commented out
+use clap::{Parser, Subcommand};
+use context::CliContext;
+use error::CliError;
+use commands::handle_dag_command; // Import the specific handler
+use commands::handle_mesh_command; // Add handle_mesh_command
+// use icn_types::ExecutionResult; // Needs locating
+use std::path::PathBuf;
+use tokio;
+
+
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+
+    // Global flags moved here
+    #[arg(short, long, global = true, action = clap::ArgAction::Count)]
+    verbose: u8,
+}
+
+// Placeholder structs for non-refactored commands
+// These will be moved to their respective command modules later
+// #[derive(Subcommand, Debug, Clone)] enum BundleCommands { Temp } // REMOVED
+// #[derive(Subcommand, Debug, Clone)] enum ReceiptCommands { Temp } // REMOVED
+// #[derive(Subcommand, Debug, Clone)] enum DagSyncCommands { Temp } // REMOVED
+
+#[derive(Subcommand, Debug)] // Added Debug
+enum Commands {
+    /// Generate a new DID key
+    #[command(name = "key-gen")]
+    KeyGen {
+        /// Output file to save the key (defaults to ~/.icn/key.json)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// DAG commands
+    #[command(subcommand)]
+    Dag(commands::dag::DagCommands), // Use type from commands::dag module
+
+    /// TrustBundle commands
+    #[command(subcommand)]
+    Bundle(commands::bundle::BundleCommands), // Updated path
+
+    /// ExecutionReceipt commands
+    #[command(subcommand)]
+    Receipt(commands::receipt::ReceiptCommands), // Updated path
+    
+    /// Advanced DAG sync commands with libp2p support
+    #[command(subcommand)]
+    SyncP2P(commands::sync_p2p::DagSyncCommands), // Updated path
+
+    /// Interact with the ICN mesh network (libp2p)
+    #[command(subcommand)]
+    Mesh(commands::mesh::MeshCommands),
+
+    /// Manage trust policies
+    Policy,
+}
+
+// Removed DagCommands enum definition from here (moved to commands/dag.rs)
+// Removed BundleCommands, ReceiptCommands, MeshCommands, DagSyncCommands definitions temporarily
+
+
+// Main function using the new structure
+#[tokio::main]
+async fn main() -> Result<(), CliError> {
+    let cli = Cli::parse();
+
+    // Initialize context
+    let mut context = CliContext::new(cli.verbose > 0)?;
+
+    // Match top-level command and dispatch
+    match &cli.command {
+        Commands::Dag(cmd) => {
+            handle_dag_command(&mut context, cmd).await?
+        }
+        Commands::KeyGen { output: _output } => {
+            println!("Executing key-gen...");
+            // TODO: Implement key-gen logic (could also be moved to commands/keygen.rs)
+            unimplemented!("KeyGen handler")
+        }
+        Commands::Bundle(cmd) => {
+            // Call the handler from the bundle module
+            commands::bundle::handle_bundle_command(&mut context, cmd).await?
+        }
+         Commands::Receipt(cmd) => {
+            // Call the handler from the receipt module
+            commands::receipt::handle_receipt_command(&mut context, cmd).await?
+        }
+        Commands::Mesh(cmd) => {
+            handle_mesh_command(&mut context, cmd).await?
+        }
+         Commands::SyncP2P(cmd) => {
+            // Call the handler from the sync_p2p module
+            commands::sync_p2p::handle_dag_sync_command(&mut context, cmd).await?
+        }
+        Commands::Policy => {
+            todo!("Implement Policy commands")
+        }
+    }
+    
+    Ok(())
+}
+
+// Removed old handler functions (handle_dag_command, handle_mesh_command etc.)
+// Removed parse_key_val helper (will be needed inside specific command handlers)
