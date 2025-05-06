@@ -2,12 +2,16 @@
 
 use super::*;
 use crate::dag::memory::MemoryDagStore;
-use crate::identity::Did;
-// use chrono::Utc; // Unused
-use ed25519_dalek::{SigningKey, Signer, VerifyingKey}; // Add Signer, VerifyingKey
+use crate::identity::{Did, DidKey, DidKeyError}; // Import necessary types
+use ed25519_dalek::{SigningKey, Signer, VerifyingKey};
 use rand::rngs::OsRng;
-use icn_identity_core::DidKey; // Import DidKey
-use std::collections::HashMap; // For MockResolver
+use std::collections::HashMap;
+// Import underlying cid types for test_invalid_parent_refs
+use ::cid::Cid as ExternalCid;
+use ::cid::multihash::MultihashDigest;
+use ::cid::multihash::Code as MultihashCode;
+use ::cid::Version;
+use ::cid::Codec;
 
 // Helper function to create a signed node (Sync version)
 fn create_signed_node(
@@ -59,7 +63,7 @@ fn test_dag_node_builder() {
     let mut csprng = OsRng;
     let signing_key = SigningKey::generate(&mut csprng);
     let verifying_key = signing_key.verifying_key();
-    let author = Did::new(&verifying_key); // Correct Did creation
+    let author = Did::new(&verifying_key); // Correct creation
     let payload = DagPayload::Raw(vec![1, 2, 3]);
 
     let node = DagNodeBuilder::new() // Use new() without args
@@ -85,7 +89,7 @@ fn test_memory_dag_store() {
     let mut csprng = OsRng;
     let signing_key = SigningKey::generate(&mut csprng);
     let verifying_key = signing_key.verifying_key();
-    let author = Did::new(&verifying_key); // Correct Did creation
+    let author = Did::new(&verifying_key); // Correct creation
     
     // Resolver needed for verify_branch
     let mut resolver = MockResolverSync::new();
@@ -149,7 +153,7 @@ fn test_dag_payload_types() {
     let mut csprng = OsRng;
     let signing_key = SigningKey::generate(&mut csprng);
     let verifying_key = signing_key.verifying_key();
-    let author = Did::new(&verifying_key); // Correct Did creation
+    let author = Did::new(&verifying_key); // Correct creation
 
     let raw_payload = DagPayload::Raw(b"raw data".to_vec());
     let raw_node = create_signed_node(vec![], &author, raw_payload, &signing_key);
@@ -188,16 +192,17 @@ fn test_invalid_parent_refs() {
     let mut csprng = OsRng;
     let signing_key = SigningKey::generate(&mut csprng);
     let verifying_key = signing_key.verifying_key();
-    let author = Did::new(&verifying_key); // Correct Did creation
+    let author = Did::new(&verifying_key); // Correct creation
 
-    let non_existent_parent_bytes = multihash::Code::Sha2_256.digest(b"non-existent");
-    let fake_cid = Cid::new_v1(0x71, non_existent_parent_bytes);
+    // Fix Cid creation using underlying types
+    let mh = MultihashCode::Sha2_256.digest(b"non-existent");
+    let external_cid = ExternalCid::new(Version::V1, Codec::Raw, mh).unwrap();
+    let fake_cid = Cid::from(external_cid); // Wrap in our Cid type
 
     let payload = DagPayload::Raw(b"invalid parent".to_vec());
     let invalid_node = create_signed_node(vec![fake_cid.clone()], &author, payload, &signing_key);
 
     let result = dag_store.add_node(invalid_node);
     assert!(result.is_err());
-    // Check for correct error variant
     assert!(matches!(result.unwrap_err(), DagError::ParentNotFound { parent, .. } if parent == fake_cid));
 } 

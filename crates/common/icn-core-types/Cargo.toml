@@ -1,0 +1,15 @@
+[package]
+name = "icn-core-types"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "1.0"
+ed25519-dalek = { version = "2.0", features = ["serde", "rand_core"] }
+rand = "0.8" # Needed for DidKey::new
+multibase = "0.9"
+cid = { version = "0.10.1", features = ["serde-codec", "std"] } # Updated to 0.10.1
+multihash = { version = "0.18", features = ["serde-codec", "sha2"] } # For wrapped Cid
+serde_bytes = "0.11" # For QuorumProof
+serde_json = "1.0" # Added for QuorumProof metadata 

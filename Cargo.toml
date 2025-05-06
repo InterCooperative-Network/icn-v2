@@ -6,6 +6,12 @@ members = [
     "crates/mesh/planetary-mesh",
     "crates/common/icn-types",
     "crates/common/icn-identity-core",
-    "crates/tools/icn-cli"
+    "crates/common/icn-core-types",
+    "crates/tools/icn-cli",
 ]
 resolver = "2"
+
+# Optional: Configure profiles for the workspace
+# [profile.release]
+# lto = true
+# codegen-units = 1

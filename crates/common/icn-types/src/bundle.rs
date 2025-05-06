@@ -1,8 +1,7 @@
 use crate::anchor::AnchorRef;
 use crate::cid::{Cid, CidError};
 use crate::dag::{DagError, DagNode, DagNodeBuilder, DagPayload, DagStore, SignedDagNode};
-use crate::identity::{Did, DidKey};
-use icn_identity_core::DidKey as CoreDidKey;
+use crate::identity::Did;
 use crate::quorum::QuorumProof;
 use ed25519_dalek::{SigningKey, Signer};
 use serde::{Deserialize, Serialize};
@@ -113,9 +112,9 @@ impl TrustBundle {
     ) -> Result<Cid, TrustBundleError> {
         
         let trust_bundle_bytes = serde_ipld_dagcbor::to_vec(self)
-            .map_err(|e| TrustBundleError::SerializationError(e.to_string()))?; 
+            .map_err(|e| TrustBundleError::SerializationError(e.to_string()))?;
         let trust_bundle_cid = Cid::from_bytes(&trust_bundle_bytes)
-            .map_err(|e| TrustBundleError::DagError(DagError::CidError(e.to_string())))?; 
+            .map_err(|e| TrustBundleError::DagStoreError(DagError::CidError(e.to_string())))?; 
         
         // 2. Build the DAG node referencing the TrustBundle's CID
         let node = DagNodeBuilder::new() 
@@ -174,7 +173,7 @@ impl TrustBundle {
             match dag_store.get_node(&anchor.cid).await {
                 Ok(_) => {}, // Node exists
                 Err(DagError::NodeNotFound(_)) => return Ok(false),
-                Err(err) => return Err(TrustBundleError::DagError(err)),
+                Err(err) => return Err(TrustBundleError::DagStoreError(err)),
             }
         }
         

@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 /// Resource types that can be metered and compensated in the ICN mesh
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ResourceType {

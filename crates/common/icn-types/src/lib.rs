@@ -15,10 +15,12 @@ pub use anchor::AnchorRef;
 // pub use bundle::TrustBundle; // Commented out due to cfg issues
 pub use cid::Cid;
 pub use dag::{DagError, DagNode, DagStore, SignedDagNode, PublicKeyResolver};
-pub use icn_identity_core::Did; // Re-export Did from core
+pub use identity::{Did, DidKey, DidKeyError}; // Re-export local identity types
 pub use quorum::QuorumProof;
 // pub use receipts::ExecutionReceipt; // Commented out due to cfg issues
-pub use resources::ResourceEnvelope;
 
 // Re-export sync types
 pub use dag::sync::{DAGSyncBundle, DAGSyncService, FederationPeer, SyncError, VerificationResult};
+
+// Re-export from icn-core-types
+pub use icn_core_types::{Cid, CidError, Did, DidKey, DidKeyError, QuorumProof};
