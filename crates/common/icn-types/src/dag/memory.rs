@@ -1,10 +1,8 @@
 use crate::cid::Cid;
-use crate::dag::{DagError, DagNode, DagStore, SignedDagNode, PublicKeyResolver};
+use crate::dag::{DagError, DagStore, SignedDagNode, PublicKeyResolver};
 use crate::identity::Did;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, RwLock};
-use async_trait::async_trait;
-use ed25519_dalek::VerifyingKey;
 
 /// An in-memory implementation of the DagStore trait for testing
 #[derive(Debug, Clone, Default)]

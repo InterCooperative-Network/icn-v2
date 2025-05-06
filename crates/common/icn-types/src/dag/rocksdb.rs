@@ -4,15 +4,14 @@ use crate::cid::Cid;
 use crate::dag::{DagError, DagStore, SignedDagNode, PublicKeyResolver};
 use crate::identity::Did;
 use rocksdb::{ColumnFamily, ColumnFamilyDescriptor, Options, DB, WriteBatch};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashSet, HashMap, VecDeque};
 use std::path::Path;
 use std::sync::{Arc, RwLock};
-use ed25519_dalek::{Verifier, VerifyingKey};
 use async_trait::async_trait;
 
 // --- Prometheus Metrics --- 
 use lazy_static::lazy_static;
-use prometheus::{register_histogram, register_int_counter, register_int_gauge, Histogram, IntCounter, IntGauge, opts, register_histogram_vec, HistogramVec};
+use prometheus::{register_histogram, register_int_counter, register_int_gauge, Histogram, IntCounter, IntGauge};
 
 lazy_static! {
     static ref DAG_ADD_NODE_DURATION: Histogram = register_histogram!(
@@ -570,7 +569,7 @@ impl DagStore for RocksDbDagStore {
             // Return parent keys needed for cache update
             Ok::<_, DagError>(parent_keys)
 
-        }).await.map_err(|e| DagError::JoinError(e.to_string()))??; // Handle join error and inner Result
+        }).await.map_err(DagError::from)??; // Handle join error and inner Result
 
         // --- Update In-Memory Cache (After successful commit) ---
         let parent_keys = batch_result; // Get parent keys from blocking task result
@@ -631,8 +630,8 @@ impl DagStore for RocksDbDagStore {
 
         let mut tips = Vec::new();
         for key in tip_keys {
-            // Use AsRef / slice &[u8] for Cid::try_from 
-            let cid = Cid::try_from(key.as_ref())
+            // Use Cid::from_bytes which expects &[u8] and returns Result<Cid, CidError>
+            let cid = Cid::from_bytes(key.as_ref())
                 .map_err(|e| DagError::CidError(format!("Invalid CID bytes in tips CF: {}", e)))?;
             tips.push(cid);
         }
@@ -673,7 +672,108 @@ impl DagStore for RocksDbDagStore {
     }
 
     async fn get_ordered_nodes(&self) -> Result<Vec<SignedDagNode>, DagError> {
-        unimplemented!("Async get_ordered_nodes is not yet implemented for RocksDbDagStore")
+        let db_clone = self.db.clone();
+        let cf_name_nodes: &'static str = CF_NODES;
+        // let cf_name_children: &'static str = CF_CHILDREN; // Alternative: Could potentially use CF_CHILDREN
+
+        // Spawn blocking task to read all nodes and build graph structure
+        let (nodes_map, adj_list, mut in_degree) = tokio::task::spawn_blocking(move || {
+            let mut nodes = HashMap::<Cid, SignedDagNode>::new();
+            let mut adj = HashMap::<Cid, Vec<Cid>>::new(); // parent -> children
+            let mut in_deg = HashMap::<Cid, usize>::new(); // child -> parent_count
+            let mut all_node_cids = HashSet::<Cid>::new(); // Keep track of all nodes encountered
+
+            let cf_handle_nodes = db_clone.cf_handle(cf_name_nodes)
+                .ok_or_else(|| DagError::StorageError(format!("CF not found: {}", cf_name_nodes)))?; 
+
+            let iter = db_clone.iterator_cf(cf_handle_nodes, rocksdb::IteratorMode::Start);
+            for result in iter {
+                let (_key, value) = result.map_err(DagError::RocksDbError)?;
+                let mut signed_node = Self::deserialize_node(&value)?;
+                let node_cid = signed_node.ensure_cid()?; // Ensure CID is present
+                
+                all_node_cids.insert(node_cid.clone());
+                nodes.insert(node_cid.clone(), signed_node.clone());
+
+                // Initialize in-degree for this node (might be overwritten later if it's a child)
+                in_deg.entry(node_cid.clone()).or_insert(0);
+
+                // Process parents to build adjacency list and in-degrees
+                for parent_cid in &signed_node.node.parents {
+                    // Add edge from parent to current node (child)
+                    adj.entry(parent_cid.clone()).or_default().push(node_cid.clone());
+                    // Increment in-degree of the current node (child)
+                    *in_deg.entry(node_cid.clone()).or_insert(0) += 1;
+                    // Ensure parent is also in the in-degree map (even if it has 0 in-degree itself initially)
+                    in_deg.entry(parent_cid.clone()).or_insert(0);
+                }
+            }
+            
+            // Ensure all nodes are in the in_degree map, even roots discovered only as parents
+            for parent_cid in adj.keys() {
+                 in_deg.entry(parent_cid.clone()).or_insert(0);
+            }
+
+            Ok::<_, DagError>((nodes, adj, in_deg))
+        }).await.map_err(DagError::from)??; // Map JoinError and inner Result
+
+        // --- Kahn's Algorithm for Topological Sort ---
+        let mut sorted_list = Vec::with_capacity(nodes_map.len());
+        let mut queue = VecDeque::new();
+
+        // Initialize queue with nodes having in-degree 0
+        for (cid, degree) in &in_degree {
+            if *degree == 0 {
+                queue.push_back(cid.clone());
+            }
+        }
+        
+        // If the DAG is empty
+        if nodes_map.is_empty() {
+            return Ok(sorted_list); // Return empty list
+        }
+        
+        // If no nodes have in-degree 0 in a non-empty DAG, it implies a cycle or isolated nodes
+        // However, our iteration logic should cover all nodes. If queue is empty here and nodes_map isn't, 
+        // something is wrong, likely a cycle involving all nodes.
+        if queue.is_empty() && !nodes_map.is_empty() {
+             return Err(DagError::StorageError("Cycle detected in DAG or no root nodes found".to_string()));
+        }
+
+        while let Some(cid) = queue.pop_front() {
+            if let Some(node) = nodes_map.get(&cid) {
+                 sorted_list.push(node.clone());
+            } else {
+                 // Should not happen if maps were built correctly
+                 return Err(DagError::StorageError(format!("Node {} found in queue but not in map", cid)));
+            }
+
+            // For each neighbor (child) of the current node
+            if let Some(children) = adj_list.get(&cid) {
+                for child_cid in children {
+                    if let Some(degree) = in_degree.get_mut(child_cid) {
+                        *degree -= 1;
+                        if *degree == 0 {
+                            queue.push_back(child_cid.clone());
+                        }
+                    } else {
+                         // Should not happen if maps were built correctly
+                         return Err(DagError::StorageError(format!("Child node {} of {} not found in in-degree map", child_cid, cid)));
+                    }
+                }
+            }
+        }
+
+        // Check for cycles: if sorted list size is less than total nodes, a cycle exists
+        if sorted_list.len() != nodes_map.len() {
+            Err(DagError::StorageError(format!(
+                "Cycle detected in DAG. Processed {} nodes, expected {}.",
+                sorted_list.len(),
+                nodes_map.len()
+            )))
+        } else {
+            Ok(sorted_list)
+        }
     }
 
     async fn get_nodes_by_author(&self, author: &Did) -> Result<Vec<SignedDagNode>, DagError> {

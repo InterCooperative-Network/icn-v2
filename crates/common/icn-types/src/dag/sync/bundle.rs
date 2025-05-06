@@ -1,5 +1,4 @@
 use crate::dag::DagNode;
-use crate::identity::Did;
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 

@@ -1,9 +1,9 @@
 use crate::anchor::AnchorRef;
 use crate::cid::Cid;
-use crate::dag::{DagError, DagNode, DagNodeBuilder, DagPayload, DagStore, SignedDagNode, PublicKeyResolver};
+use crate::dag::{DagError, DagNode, DagNodeBuilder, DagPayload, DagStore, SignedDagNode};
 use crate::identity::Did;
 use crate::quorum::QuorumProof;
-use ed25519_dalek::{Signature, SigningKey, Signer, Verifier, VerifyingKey};
+use ed25519_dalek::{SigningKey, Signer};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 #[cfg(test)]
@@ -111,7 +111,7 @@ impl TrustBundle {
              .map_err(|e| TrustBundleError::SerializationError(e.to_string()))?;
         let signature = signing_key.sign(&node_bytes_for_signing);
 
-        let mut signed_node = SignedDagNode {
+        let signed_node = SignedDagNode {
             node,
             signature,
             cid: None, // Let the store calculate or calculate explicitly before adding

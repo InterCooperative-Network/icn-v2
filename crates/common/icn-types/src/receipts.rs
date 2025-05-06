@@ -3,8 +3,7 @@ use crate::cid::Cid;
 use crate::dag::{DagError, DagNode, DagNodeBuilder, DagPayload, DagStore, SignedDagNode};
 use crate::identity::Did;
 // use crate::quorum::QuorumProof; // Comment out unused import for now
-use chrono::{DateTime, Utc};
-use ed25519_dalek::{Signature, SigningKey, Signer, Verifier};
+use ed25519_dalek::{SigningKey, Signer};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 #[cfg(test)]
