@@ -18,6 +18,14 @@ sys-info = "0.9"
 icn-core-types = { path = "../icn-core-types" }
 sha2 = "0.10"
 icn-types = { path = "../icn-types" }
+async-trait = "0.1"
+tokio = { version = "1", features = ["sync", "time", "macros", "rt-multi-thread"] }
+# Optional dependencies
+rocksdb = { version = "0.21", optional = true }
+
+[features]
+default = []
+persistence = ["rocksdb"]
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt", "time"] }
+tokio = { version = "1", features = ["macros", "rt", "time", "full"] }

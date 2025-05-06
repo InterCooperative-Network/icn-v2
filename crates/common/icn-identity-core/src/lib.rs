@@ -14,6 +14,7 @@ pub mod trustbundle;
 pub use quorum::{QuorumValidator, QuorumError};
 pub use vc::{VerifiableCredential, VcIssuer};
 pub use trustbundle::{TrustBundle, QuorumConfig, QuorumType, QuorumProof, TrustError};
+pub use trustbundle::storage::{TrustBundleStore, MemoryTrustBundleStore, StorageError};
 // pub use signature::Signature;
 // pub use manifest::{AgentManifest, ManifestError};
 // pub use did_type::Did;
