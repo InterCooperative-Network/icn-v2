@@ -1378,18 +1378,13 @@ name = "icn-identity-core"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
- "chrono",
- "cid 0.10.1",
  "ed25519-dalek",
- "hex",
- "icn-types",
  "multibase",
- "num_cpus",
  "rand",
  "serde",
  "serde_json",
- "sys-info",
  "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]
@@ -3033,16 +3028,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.101",
-]
-
-[[package]]
-name = "sys-info"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b3a0d0aba8bf96a0e1ddfdc352fc53b3df7f39318c71854910c3c4b024ae52c"
-dependencies = [
- "cc",
- "libc",
 ]
 
 [[package]]

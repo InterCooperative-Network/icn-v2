@@ -1,258 +1,219 @@
-use super::*;
 use crate::dag::memory::MemoryDagStore;
 use crate::dag::sync::memory::MemoryDAGSyncService;
-use crate::dag::{DagNodeBuilder, DagPayload, SignedDagNode};
+use crate::dag::sync::network::{DAGSyncService, FederationPeer, VerificationResult, SyncError};
+use crate::dag::{DagNode, DagStore, SignedDagNode, DagPayload};
 use crate::identity::Did;
-use ed25519_dalek::{SigningKey, Signature};
-use rand::rngs::OsRng;
+use icn_identity_core::DidKey;
+use crate::cid::Cid;
+use ed25519_dalek::{SigningKey, Signer};
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use crate::dag::DagNodeBuilder;
 
-// Helper function to create a signed node
-fn create_signed_node(
-    parents: Vec<crate::cid::Cid>,
-    author: Did,
-    payload: DagPayload,
-    federation_id: Option<String>,
-    signing_key: &SigningKey,
-) -> SignedDagNode {
-    // Create a node with a builder
-    let mut builder = DagNodeBuilder::new()
-        .with_payload(payload)
+// Helper to create a simple test node
+fn create_test_signed_node(parents: Vec<Cid>, author: &Did, signing_key: &SigningKey) -> SignedDagNode {
+    let node = DagNodeBuilder::new()
+        .with_payload(DagPayload::Raw(b"test".to_vec()))
+        .with_author(author.clone())
         .with_parents(parents)
-        .with_author(author)
-        .with_sequence(1);
+        .build()
+        .expect("Failed to build node");
         
-    if let Some(fed_id) = federation_id {
-        builder = builder.with_federation_id(fed_id);
-    }
-    
-    let node = builder.build().unwrap();
-
-    // Serialize for signing
-    let node_bytes = serde_json::to_vec(&node).unwrap();
-
-    // Sign the node
+    let node_bytes = serde_ipld_dagcbor::to_vec(&node).unwrap();
     let signature = signing_key.sign(&node_bytes);
-
-    // Create a signed node
     SignedDagNode {
         node,
         signature,
-        cid: None, // Will be computed when added to the DAG
+        cid: None,
     }
 }
 
-#[test]
-fn test_memory_dag_sync_service_basics() {
-    // Create DAG stores for two peers
-    let store1 = MemoryDagStore::new();
-    let store2 = MemoryDagStore::new();
-    
-    // Create sync services for two peers
-    let mut service1 = MemoryDAGSyncService::new(
-        store1, 
+#[tokio::test]
+async fn test_memory_dag_sync_service_peer_management() {
+    let store1 = Arc::new(RwLock::new(MemoryDagStore::new()));
+    let store2 = Arc::new(RwLock::new(MemoryDagStore::new()));
+
+    // Correct instantiation using Arc<RwLock<MemoryDagStore>>
+    let service1 = MemoryDAGSyncService::new(
+        "peer1".to_string(), 
         "test-federation".to_string(), 
-        "peer1".to_string()
+        store1.clone() // Pass Arc<RwLock<Store>>
     );
-    
-    let mut service2 = MemoryDAGSyncService::new(
-        store2, 
+    let service2 = MemoryDAGSyncService::new(
+        "peer2".to_string(), 
         "test-federation".to_string(), 
-        "peer2".to_string()
+        store2.clone() // Pass Arc<RwLock<Store>>
     );
-    
-    // Add each peer to the other's known peers
-    let peer1 = FederationPeer {
-        id: "peer1".to_string(),
-        endpoint: "http://peer1.test".to_string(),
-        federation_id: "test-federation".to_string(),
-        metadata: None,
+
+    // Create FederationPeer instances with correct fields
+    let peer1_info = FederationPeer {
+        peer_id: "peer1".to_string(),
+        addresses: vec!["/memory/1".to_string()],
+        last_seen: None,
+        metadata: HashMap::new(), // Correct type
     };
-    
-    let peer2 = FederationPeer {
-        id: "peer2".to_string(),
-        endpoint: "http://peer2.test".to_string(),
-        federation_id: "test-federation".to_string(),
-        metadata: None,
+    let peer2_info = FederationPeer {
+        peer_id: "peer2".to_string(),
+        addresses: vec!["/memory/2".to_string()],
+        last_seen: None,
+        metadata: HashMap::new(), // Correct type
     };
-    
-    service1.add_peer(peer2.clone(), 100);
-    service2.add_peer(peer1.clone(), 100);
-    
-    // Verify the peers were added
-    assert_eq!(service1.get_peer("peer2").unwrap().endpoint, "http://peer2.test");
-    assert_eq!(service2.get_peer("peer1").unwrap().endpoint, "http://peer1.test");
-    
-    // Test trust levels
-    assert_eq!(service1.get_peer_trust("peer2").unwrap(), 100);
-    assert_eq!(service2.get_peer_trust("peer1").unwrap(), 100);
+
+    // Use connect_peer from the DAGSyncService trait
+    service1.connect_peer(&peer2_info).await.unwrap();
+    service2.connect_peer(&peer1_info).await.unwrap();
+
+    // Use discover_peers from the trait
+    let discovered1 = service1.discover_peers().await.unwrap();
+    assert_eq!(discovered1.len(), 1);
+    assert_eq!(discovered1[0], peer2_info);
+
+    let discovered2 = service2.discover_peers().await.unwrap();
+    assert_eq!(discovered2.len(), 1);
+    assert_eq!(discovered2[0], peer1_info);
+
+    // Use disconnect_peer from the trait
+    service1.disconnect_peer("peer2").await.unwrap();
+    let discovered1_after_disconnect = service1.discover_peers().await.unwrap();
+    assert!(discovered1_after_disconnect.is_empty());
+
+     // Check peer2 still sees peer1 initially
+     let discovered2_still_connected = service2.discover_peers().await.unwrap();
+     assert_eq!(discovered2_still_connected.len(), 1); 
 }
 
-#[test]
-fn test_dag_sync_bundle_verification() {
-    // Create a DAG store
-    let store = MemoryDagStore::new();
-    
-    // Create a sync service
+#[tokio::test]
+async fn test_memory_dag_sync_service_verify_nodes() {
+    let store = Arc::new(RwLock::new(MemoryDagStore::new()));
     let service = MemoryDAGSyncService::new(
-        store, 
+        "peer1".to_string(), 
         "test-federation".to_string(), 
-        "peer1".to_string()
+        store.clone()
     );
     
-    // Create a signing key
-    let mut rng = OsRng;
-    let signing_key = SigningKey::generate(&mut rng);
+    // Need a DID and key to create a node
+    let mut csprng = rand::thread_rng();
+    let signing_key = SigningKey::generate(&mut csprng);
+    let did_key = DidKey::Ed25519(signing_key.verifying_key());
+    // Correct Did creation
+    let author = Did::parse(&did_key.to_string()).unwrap(); 
+
+    let node = DagNodeBuilder::new(DagPayload::Raw(b"test".to_vec()))
+        .author(author.clone())
+        .parents(Vec::new())
+        .federation("test-federation".to_string()) // Add matching federation id
+        .build();
     
-    // Create a DID
-    let author = Did::from("did:example:123".to_string());
+    let node_wrong_fed = DagNodeBuilder::new(DagPayload::Raw(b"wrong".to_vec()))
+        .author(author.clone())
+        .parents(Vec::new())
+        .federation("wrong-federation".to_string()) // Add mismatching federation id
+        .build();
+
+    // Call verify_nodes with a slice of DagNode
+    let result_ok = service.verify_nodes(&[node.clone()]).await;
+    assert_eq!(result_ok, VerificationResult::Verified);
+
+    let result_rejected = service.verify_nodes(&[node_wrong_fed.clone()]).await;
+    assert!(matches!(result_rejected, VerificationResult::Rejected { .. }));
     
-    // Create a node
-    let node = create_signed_node(
-        vec![],
-        author,
-        DagPayload::Raw(b"test data".to_vec()),
-        Some("test-federation".to_string()),
-        &signing_key,
-    );
-    
-    // Create a bundle
-    let bundle = DAGSyncBundle {
-        nodes: vec![node],
-        federation_id: "test-federation".to_string(),
-        source_peer: Some("peer1".to_string()),
-        timestamp: chrono::Utc::now(),
-    };
-    
-    // Verify the bundle
-    let result = service.verify_bundle(&bundle).unwrap();
-    
-    // The verification should pass for basic checks, but the node will be rejected
-    // because the parents don't exist yet (there are none in this case)
-    assert!(result.rejected_nodes.is_empty());
-    assert!(!result.accepted_nodes.is_empty());
+    let result_mixed = service.verify_nodes(&[node, node_wrong_fed]).await;
+    assert!(matches!(result_mixed, VerificationResult::Rejected { .. }));
 }
 
-#[test]
-fn test_dag_sync_with_different_federation() {
-    // Create a DAG store
-    let store = MemoryDagStore::new();
+#[tokio::test]
+async fn test_memory_dag_sync_service_sync_flow() {
+    let store1_arc = Arc::new(RwLock::new(MemoryDagStore::new()));
+    let store2_arc = Arc::new(RwLock::new(MemoryDagStore::new()));
+
+    let service1 = MemoryDAGSyncService::new("peer1".to_string(), "test-federation".to_string(), store1_arc.clone());
+    let service2 = MemoryDAGSyncService::new("peer2".to_string(), "test-federation".to_string(), store2_arc.clone());
+
+    // Connect peers (though MemoryDAGSyncService doesn't strictly use this internally)
+    let peer1_info = FederationPeer { peer_id: "peer1".to_string(), addresses: vec![], last_seen: None, metadata: HashMap::new() };
+    let peer2_info = FederationPeer { peer_id: "peer2".to_string(), addresses: vec![], last_seen: None, metadata: HashMap::new() };
+    service1.connect_peer(&peer2_info).await.unwrap();
+    service2.connect_peer(&peer1_info).await.unwrap();
+
+    // Create a node in store1
+    let mut csprng = rand::thread_rng();
+    let signing_key = SigningKey::generate(&mut csprng);
+    let did_key = DidKey::Ed25519(signing_key.verifying_key());
+    let author = Did::parse(&did_key.to_string()).unwrap();
     
-    // Create a sync service
-    let service = MemoryDAGSyncService::new(
-        store, 
-        "test-federation".to_string(), 
-        "peer1".to_string()
-    );
+    let genesis_node = create_test_signed_node(Vec::new(), &author, &signing_key);
+    let genesis_cid = store1_arc.write().await.add_node(genesis_node.clone()).await.unwrap();
+
+    // --- Offer ---
+    // Service 2 offers the genesis CID to Service 1 (who already has it)
+    let needed_by_1 = service1.offer_nodes("peer2", &[genesis_cid.clone()]).await.unwrap();
+    assert!(needed_by_1.is_empty()); // Service 1 doesn't need it
+
+    // Service 1 offers the genesis CID to Service 2 (who needs it)
+    let needed_by_2 = service2.offer_nodes("peer1", &[genesis_cid.clone()]).await.unwrap();
+    assert!(needed_by_2.contains(&genesis_cid));
+    assert_eq!(needed_by_2.len(), 1);
+
+    // --- Accept Offer (implicitly done by offer_nodes in this impl) & Fetch ---
+    // Service 2 fetches the needed CID from Service 1
+    let fetched_bundle = service1.fetch_nodes("peer2", &vec![genesis_cid.clone()]).await.unwrap();
     
-    // Create a signing key
-    let mut rng = OsRng;
-    let signing_key = SigningKey::generate(&mut rng);
-    
-    // Create a DID
-    let author = Did::from("did:example:123".to_string());
-    
-    // Create a node with a different federation ID
-    let node = create_signed_node(
-        vec![],
-        author,
-        DagPayload::Raw(b"test data".to_vec()),
-        Some("other-federation".to_string()),
-        &signing_key,
-    );
-    
-    // Create a bundle
-    let bundle = DAGSyncBundle {
-        nodes: vec![node],
-        federation_id: "test-federation".to_string(), // Bundle federation is correct
-        source_peer: Some("peer1".to_string()),
-        timestamp: chrono::Utc::now(),
+    // Verify fetched bundle
+    assert_eq!(fetched_bundle.nodes.len(), 1);
+    assert_eq!(fetched_bundle.nodes[0], genesis_node.node); // Compare DagNode
+    assert_eq!(fetched_bundle.federation_id, "test-federation");
+    assert_eq!(fetched_bundle.source_peer, Some("peer1".to_string()));
+
+    // --- Store fetched node ---
+    // Simulate Service 2 receiving and verifying the bundle (using verify_nodes)
+    let verification_result = service2.verify_nodes(&fetched_bundle.nodes).await;
+    assert_eq!(verification_result, VerificationResult::Verified);
+
+    // If verified, Service 2 would store the nodes. Need to manually create SignedDagNode again for storing.
+    // In a real scenario, the bundle might contain SignedDagNodes or enough info to reconstruct them.
+    // For this test, we'll just reconstruct the one we know.
+    let fetched_signed_node = SignedDagNode {
+        node: fetched_bundle.nodes[0].clone(),
+        auth: genesis_node.auth, // Re-use auth info from original node
+        cid_cache: None,
     };
-    
-    // Verify the bundle
-    let result = service.verify_bundle(&bundle).unwrap();
-    
-    // The node should be rejected because of federation ID mismatch
-    assert_eq!(result.rejected_nodes.len(), 1);
-    assert!(result.accepted_nodes.is_empty());
-    assert!(result.rejected_nodes[0].1.contains("federation ID"));
+    store2_arc.write().await.add_node(fetched_signed_node).await.unwrap();
+
+    // --- Verify Store 2 has the node ---
+    let node_in_store2 = store2_arc.read().await.get_node(&genesis_cid).await;
+    assert!(node_in_store2.is_ok());
+    assert_eq!(node_in_store2.unwrap().node, genesis_node.node);
 }
 
-#[test]
-fn test_accept_bundle() {
-    // Create DAG stores
-    let store1 = MemoryDagStore::new();
-    let store2 = MemoryDagStore::new();
+
+#[tokio::test]
+async fn test_memory_dag_sync_service_offer_multiple_nodes() {
+    let store1_arc = Arc::new(RwLock::new(MemoryDagStore::new()));
+    let store2_arc = Arc::new(RwLock::new(MemoryDagStore::new()));
+
+    let service1 = MemoryDAGSyncService::new("peer1".to_string(), "test-federation".to_string(), store1_arc.clone());
+    let service2 = MemoryDAGSyncService::new("peer2".to_string(), "test-federation".to_string(), store2_arc.clone());
     
-    // Create sync services
-    let mut service1 = MemoryDAGSyncService::new(
-        store1, 
-        "test-federation".to_string(), 
-        "peer1".to_string()
-    );
+    let mut csprng = rand::thread_rng();
+    let signing_key = SigningKey::generate(&mut csprng);
+    let did_key = DidKey::Ed25519(signing_key.verifying_key());
+    let author = Did::parse(&did_key.to_string()).unwrap();
+
+    // Store 1 has node A and B
+    let node_a = create_test_signed_node(Vec::new(), &author, &signing_key);
+    let cid_a = store1_arc.write().await.add_node(node_a.clone()).await.unwrap();
+    let node_b = create_test_signed_node(vec![cid_a.clone()], &author, &signing_key);
+    let cid_b = store1_arc.write().await.add_node(node_b.clone()).await.unwrap();
+
+    // Store 2 has node A
+    store2_arc.write().await.add_node(node_a.clone()).await.unwrap();
     
-    let mut service2 = MemoryDAGSyncService::new(
-        store2, 
-        "test-federation".to_string(), 
-        "peer2".to_string()
-    );
+    // Service 1 offers A and B to Service 2
+    let needed_by_2 = service2.offer_nodes("peer1", &[cid_a.clone(), cid_b.clone()]).await.unwrap();
     
-    // Add each peer to the other's known peers
-    let peer1 = FederationPeer {
-        id: "peer1".to_string(),
-        endpoint: "http://peer1.test".to_string(),
-        federation_id: "test-federation".to_string(),
-        metadata: None,
-    };
-    
-    let peer2 = FederationPeer {
-        id: "peer2".to_string(),
-        endpoint: "http://peer2.test".to_string(),
-        federation_id: "test-federation".to_string(),
-        metadata: None,
-    };
-    
-    service1.add_peer(peer2.clone(), 100);
-    service2.add_peer(peer1.clone(), 100);
-    
-    // Create a signing key
-    let mut rng = OsRng;
-    let signing_key = SigningKey::generate(&mut rng);
-    
-    // Create a DID
-    let author = Did::from("did:example:123".to_string());
-    
-    // Create and add a genesis node to service1
-    let genesis_node = create_signed_node(
-        vec![],
-        author.clone(),
-        DagPayload::Raw(b"genesis".to_vec()),
-        Some("test-federation".to_string()),
-        &signing_key,
-    );
-    
-    // Add the node to service1's store
-    let dag_store1 = service1.dag_store.write().unwrap();
-    let genesis_cid = dag_store1.add_node(genesis_node.clone()).unwrap();
-    drop(dag_store1);
-    
-    // Create a bundle from service1 to send to service2
-    let bundle = DAGSyncBundle {
-        nodes: vec![genesis_node],
-        federation_id: "test-federation".to_string(),
-        source_peer: Some("peer1".to_string()),
-        timestamp: chrono::Utc::now(),
-    };
-    
-    // Service2 accepts the bundle
-    let result = service2.accept_bundle(bundle).unwrap();
-    
-    // The node should be accepted
-    assert_eq!(result.accepted_nodes.len(), 1);
-    assert_eq!(result.accepted_nodes[0], genesis_cid);
-    assert!(result.rejected_nodes.is_empty());
-    
-    // Verify the node was added to service2's store
-    let dag_store2 = service2.dag_store.read().unwrap();
-    let retrieved_node = dag_store2.get_node(&genesis_cid).unwrap();
-    assert_eq!(retrieved_node.node.author, author);
-} 
+    // Service 2 should only need B
+    assert!(needed_by_2.contains(&cid_b));
+    assert!(!needed_by_2.contains(&cid_a));
+    assert_eq!(needed_by_2.len(), 1);
+}

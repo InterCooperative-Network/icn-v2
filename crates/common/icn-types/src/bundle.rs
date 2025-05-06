@@ -1,13 +1,12 @@
 use crate::anchor::AnchorRef;
-use crate::cid::Cid;
+use crate::cid::{Cid, CidError};
 use crate::dag::{DagError, DagNode, DagNodeBuilder, DagPayload, DagStore, SignedDagNode};
-use crate::identity::Did;
+use crate::identity::{Did, DidKey};
+use icn_identity_core::DidKey as CoreDidKey;
 use crate::quorum::QuorumProof;
 use ed25519_dalek::{SigningKey, Signer};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-#[cfg(test)]
-use icn_identity_core::did::DidKey;
 
 /// A core data structure in ICN, representing a stateful object anchored to the DAG
 /// and secured by a quorum proof.
@@ -26,10 +25,20 @@ pub struct TrustBundle {
 /// Errors specific to TrustBundle operations
 #[derive(Error, Debug)]
 pub enum TrustBundleError {
-    #[error("Failed to serialize/deserialize: {0}")]
+    #[error("Serialization error: {0}")]
     SerializationError(String),
-    #[error("DAG error: {0}")]
-    DagError(#[from] DagError),
+    #[error("Signing error: {0}")]
+    SigningError(String),
+    #[error("DAG store error: {0}")]
+    DagStoreError(#[from] DagError),
+    #[error("DID Key error: {0}")]
+    DidKeyError(String),
+    #[error("CID error: {0}")]
+    CidError(#[from] CidError),
+    #[error("Node build error: {0}")]
+    NodeBuildError(String),
+    #[error("Failed to serialize/deserialize: {0}")]
+    SerializationErrorFromOther(String),
     #[error("Invalid previous anchors")]
     InvalidPreviousAnchors,
     #[error("Invalid quorum proof")]
@@ -38,6 +47,17 @@ pub enum TrustBundleError {
     BundleNotFound(Cid),
     #[error("Invalid payload type")]
     InvalidPayloadType,
+}
+
+// Helper function to abstract the add_node call
+#[cfg(feature = "async")]
+async fn add_node_helper(dag_store: &mut (impl DagStore + Send), node: SignedDagNode) -> Result<Cid, DagError> {
+    dag_store.add_node(node).await
+}
+
+#[cfg(not(feature = "async"))]
+fn add_node_helper(dag_store: &mut impl DagStore, node: SignedDagNode) -> Result<Cid, DagError> {
+    dag_store.add_node(node)
 }
 
 impl TrustBundle {
@@ -125,37 +145,6 @@ impl TrustBundle {
         let final_cid = dag_store.add_node(signed_node).await?;
 
         Ok(final_cid)
-    }
-    
-    /// Anchor this TrustBundle to the DAG using a DidKey
-    #[cfg(test)]
-    pub fn anchor_to_dag_with_key(
-        &self,
-        author: Did,
-        key: &DidKey,
-        dag_store: &mut impl DagStore,
-    ) -> Result<Cid, TrustBundleError> {
-        // Create a DAG node for this bundle
-        let node = self.to_dag_node(author)?;
-        
-        // Serialize the node for signing
-        let node_bytes = serde_json::to_vec(&node)
-            .map_err(|e| TrustBundleError::SerializationError(e.to_string()))?;
-        
-        // Sign the node
-        let signature = key.sign(&node_bytes);
-        
-        // Create a signed node
-        let signed_node = SignedDagNode {
-            node,
-            signature,
-            cid: None, // Will be computed when added to the DAG
-        };
-        
-        // Add to the DAG store
-        let cid = dag_store.add_node(signed_node)?;
-        
-        Ok(cid)
     }
     
     /// Retrieve a TrustBundle from the DAG

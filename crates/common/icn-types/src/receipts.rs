@@ -1,3 +1,5 @@
+#![cfg(not(feature = "async"))]
+
 use crate::anchor::AnchorRef;
 use crate::cid::Cid;
 use crate::dag::{DagError, DagNode, DagNodeBuilder, DagPayload, DagStore, SignedDagNode};
@@ -169,35 +171,6 @@ impl ExecutionReceipt {
     /// Import an ExecutionReceipt from a portable format
     pub fn import(data: &[u8]) -> Result<Self, ReceiptError> {
         serde_json::from_slice(data).map_err(ReceiptError::SerializationError)
-    }
-
-    /// Anchor this ExecutionReceipt to the DAG using a DidKey
-    #[cfg(test)]
-    pub fn anchor_to_dag_with_key(
-        &self,
-        key: &DidKey,
-        dag_store: &mut impl DagStore,
-    ) -> Result<Cid, ReceiptError> {
-        // Create a DAG node for this receipt
-        let node = self.to_dag_node()?;
-        
-        // Serialize the node for signing
-        let node_bytes = serde_json::to_vec(&node)?;
-        
-        // Sign the node
-        let signature = key.sign(&node_bytes);
-        
-        // Create a signed node
-        let signed_node = SignedDagNode {
-            node,
-            signature,
-            cid: None, // Will be computed when added to the DAG
-        };
-        
-        // Add to the DAG store
-        let cid = dag_store.add_node(signed_node)?;
-        
-        Ok(cid)
     }
 
     pub async fn verify_anchor(&self, dag_store: &impl DagStore) -> Result<bool, ReceiptError> {

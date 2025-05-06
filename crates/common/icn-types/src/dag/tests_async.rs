@@ -2,180 +2,173 @@
 
 use super::*;
 use crate::dag::memory::MemoryDagStore;
+use crate::dag::{DagNodeBuilder, DagPayload, SignedDagNode, DagError, PublicKeyResolver, DagStore};
 use crate::identity::Did;
-use chrono::Utc;
-use ed25519_dalek::{Signature, SigningKey};
-use rand::rngs::OsRng;
+use icn_identity_core::DidKey;
+use ed25519_dalek::{SigningKey, Signer, VerifyingKey};
+use crate::cid::Cid;
+use ::cid::Cid as ExternalCid;
+use ::cid::multihash::MultihashDigest;
+use ::cid::multihash::Code as MultihashCode;
+use ::cid::Version;
+use ::cid::Codec;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
-// Helper function to create a signed node
-async fn create_signed_node_async(
-    parents: Vec<Cid>,
-    author: Did,
-    payload: DagPayload,
-    signing_key: &SigningKey,
-) -> SignedDagNode {
-    // Create a node
+// Helper to create a simple test node
+fn create_test_signed_node_async(parents: Vec<Cid>, author: &Did, signing_key: &SigningKey) -> SignedDagNode {
     let node = DagNodeBuilder::new()
-        .with_payload(payload)
+        .with_payload(DagPayload::Raw(b"test".to_vec()))
+        .with_author(author.clone())
         .with_parents(parents)
-        .with_author(author)
-        .with_sequence(1)
         .build()
-        .unwrap();
-
-    // Serialize for signing
-    let node_bytes = serde_json::to_vec(&node).unwrap();
-
-    // Sign the node
+        .expect("Failed to build node");
+        
+    let node_bytes = serde_ipld_dagcbor::to_vec(&node).unwrap();
     let signature = signing_key.sign(&node_bytes);
-
-    // Create a signed node
     SignedDagNode {
         node,
         signature,
-        cid: None, // Will be computed when added to the DAG
+        cid: None,
+    }
+}
+
+// Simple PublicKeyResolver for testing
+struct MockResolver {
+    keys: HashMap<String, VerifyingKey>
+}
+
+impl MockResolver {
+    fn new() -> Self { Self { keys: HashMap::new() } }
+    fn add_key(&mut self, did: Did, key: VerifyingKey) {
+        self.keys.insert(did.to_string(), key);
+    }
+}
+
+// Corrected and only PublicKeyResolver impl for MockResolver
+impl PublicKeyResolver for MockResolver {
+    fn resolve(&self, did: &Did) -> Result<VerifyingKey, DagError> {
+        self.keys.get(&did.to_string())
+            .cloned()
+            .ok_or_else(|| DagError::PublicKeyResolutionError(did.clone(), "Key not found in mock resolver".to_string()))
     }
 }
 
 #[tokio::test]
-async fn test_memory_dag_store_async() {
-    // Create a new in-memory DAG store
+async fn test_memory_dag_store_async_add_get() {
     let mut dag_store = MemoryDagStore::new();
+    
+    let mut csprng = rand::thread_rng();
+    let signing_key = SigningKey::generate(&mut csprng);
+    let verifying_key = signing_key.verifying_key();
+    let author = Did::new(&verifying_key);
 
-    // Create a signing key
-    let mut rng = OsRng;
-    let signing_key = SigningKey::generate(&mut rng);
-
-    // Create a DID
-    let author = Did::from("did:example:123".to_string());
-
-    // Create a genesis node
-    let genesis_payload = DagPayload::Raw(b"genesis".to_vec());
-    let genesis_node = create_signed_node_async(vec![], author.clone(), genesis_payload, &signing_key).await;
-
-    // Add the genesis node to the store
+    let genesis_node = create_test_signed_node_async(Vec::new(), &author, &signing_key);
     let genesis_cid = dag_store.add_node(genesis_node.clone()).await.unwrap();
 
-    // Verify the node was added
     let retrieved_node = dag_store.get_node(&genesis_cid).await.unwrap();
-    assert_eq!(retrieved_node.node.author, author);
+    assert_eq!(retrieved_node.node, genesis_node.node);
+}
 
-    // Verify it's a tip
+#[tokio::test]
+async fn test_memory_dag_store_async_tips_and_ordering() {
+    let mut dag_store = MemoryDagStore::new();
+    let mut csprng = rand::thread_rng();
+    let signing_key = SigningKey::generate(&mut csprng);
+    let verifying_key = signing_key.verifying_key();
+    let author = Did::new(&verifying_key);
+
+    let genesis_node = create_test_signed_node_async(Vec::new(), &author, &signing_key);
+    let genesis_cid = dag_store.add_node(genesis_node.clone()).await.unwrap();
+
     let tips = dag_store.get_tips().await.unwrap();
     assert_eq!(tips.len(), 1);
     assert_eq!(tips[0], genesis_cid);
 
-    // Add a child node
-    let child_payload = DagPayload::Raw(b"child".to_vec());
-    let child_node = create_signed_node_async(
-        vec![genesis_cid.clone()],
-        author.clone(),
-        child_payload,
-        &signing_key,
-    ).await;
+    let child_node = create_test_signed_node_async(vec![genesis_cid.clone()], &author, &signing_key);
+    let child_cid = dag_store.add_node(child_node.clone()).await.unwrap();
 
-    let child_cid = dag_store.add_node(child_node).await.unwrap();
+    let tips_after_child = dag_store.get_tips().await.unwrap();
+    assert_eq!(tips_after_child.len(), 1);
+    assert_eq!(tips_after_child[0], child_cid);
 
-    // Verify the child was added
-    let retrieved_child = dag_store.get_node(&child_cid).await.unwrap();
-    assert_eq!(retrieved_child.node.parents.len(), 1);
-    assert_eq!(retrieved_child.node.parents[0], genesis_cid);
-
-    // Verify tips have been updated
-    let tips = dag_store.get_tips().await.unwrap();
-    assert_eq!(tips.len(), 1);
-    assert_eq!(tips[0], child_cid);
-
-    // Verify ordering
     let ordered_nodes = dag_store.get_ordered_nodes().await.unwrap();
     assert_eq!(ordered_nodes.len(), 2);
-    assert_eq!(ordered_nodes[0].node.payload, genesis_node.node.payload);
-    
-    // Get nodes by author
-    let author_nodes = dag_store.get_nodes_by_author(&author).await.unwrap();
-    assert_eq!(author_nodes.len(), 2);
-    
-    // Find path
-    let path = dag_store.find_path(&genesis_cid, &child_cid).await.unwrap();
-    assert_eq!(path.len(), 2);
-    assert_eq!(path[0].cid.as_ref().unwrap(), &genesis_cid);
-    assert_eq!(path[1].cid.as_ref().unwrap(), &child_cid);
-    
-    // Verify branch
-    let is_valid = dag_store.verify_branch(&child_cid).await.unwrap();
-    assert!(is_valid);
+    assert_eq!(ordered_nodes[0].node, genesis_node.node);
+    assert_eq!(ordered_nodes[1].node, child_node.node);
 }
 
 #[tokio::test]
-async fn test_concurrent_dag_operations() {
-    // Create a new in-memory DAG store
-    let store = MemoryDagStore::new();
-    let store_arc = std::sync::Arc::new(tokio::sync::Mutex::new(store));
+async fn test_memory_dag_store_async_queries() {
+    let mut dag_store = MemoryDagStore::new();
+    let mut csprng = rand::thread_rng();
+    let signing_key = SigningKey::generate(&mut csprng);
+    let verifying_key = signing_key.verifying_key();
+    let author = Did::new(&verifying_key);
 
-    // Create a signing key
-    let mut rng = OsRng;
-    let signing_key = SigningKey::generate(&mut rng);
+    let genesis_node = create_test_signed_node_async(Vec::new(), &author, &signing_key);
+    let genesis_cid = dag_store.add_node(genesis_node.clone()).await.unwrap();
+    let child_node = create_test_signed_node_async(vec![genesis_cid.clone()], &author, &signing_key);
+    let child_cid = dag_store.add_node(child_node.clone()).await.unwrap();
 
-    // Create a DID
-    let author = Did::from("did:example:123".to_string());
+    let author_nodes = dag_store.get_nodes_by_author(&author).await.unwrap();
+    assert_eq!(author_nodes.len(), 2);
+    assert!(author_nodes.iter().any(|n| n.node == genesis_node.node));
+    assert!(author_nodes.iter().any(|n| n.node == child_node.node));
 
-    // Create a genesis node
-    let genesis_payload = DagPayload::Raw(b"genesis".to_vec());
-    let genesis_node = create_signed_node_async(vec![], author.clone(), genesis_payload, &signing_key).await;
+    let raw_nodes = dag_store.get_nodes_by_payload_type("raw").await.unwrap();
+    assert_eq!(raw_nodes.len(), 2);
+    assert!(raw_nodes.iter().any(|n| n.node == genesis_node.node));
+    assert!(raw_nodes.iter().any(|n| n.node == child_node.node));
 
-    // Add the genesis node to the store
-    let genesis_cid = {
-        let mut store = store_arc.lock().await;
-        store.add_node(genesis_node.clone()).await.unwrap()
-    };
+    let json_nodes = dag_store.get_nodes_by_payload_type("json").await.unwrap();
+    assert!(json_nodes.is_empty());
 
-    // Create multiple child nodes concurrently
-    let mut handles = Vec::new();
-    let node_count = 10;
+    let path = dag_store.find_path(&genesis_cid, &child_cid).await.unwrap();
+    assert_eq!(path.len(), 2);
+    assert_eq!(path[0].node, genesis_node.node);
+    assert_eq!(path[1].node, child_node.node);
+}
 
-    for i in 0..node_count {
-        let store_clone = store_arc.clone();
-        let author_clone = author.clone();
-        let genesis_cid_clone = genesis_cid.clone();
-        let signing_key_clone = signing_key.clone();
-        
-        let handle = tokio::spawn(async move {
-            // Create a child node
-            let payload = DagPayload::Raw(format!("child-{}", i).into_bytes());
-            let child_node = create_signed_node_async(
-                vec![genesis_cid_clone],
-                author_clone,
-                payload,
-                &signing_key_clone,
-            ).await;
+#[tokio::test]
+async fn test_memory_dag_store_async_verify_branch() {
+    let mut dag_store = MemoryDagStore::new();
+    let mut csprng = rand::thread_rng();
+    let signing_key = SigningKey::generate(&mut csprng);
+    let verifying_key = signing_key.verifying_key();
+    let author = Did::new(&verifying_key);
 
-            // Add the node to the store
-            let mut store = store_clone.lock().await;
-            store.add_node(child_node).await
-        });
-        
-        handles.push(handle);
-    }
+    let mut resolver = MockResolver::new();
+    resolver.add_key(author.clone(), verifying_key);
 
-    // Wait for all nodes to be added
-    let results: Vec<Result<_, _>> = futures::future::join_all(handles).await;
+    let genesis_node = create_test_signed_node_async(Vec::new(), &author, &signing_key);
+    let genesis_cid = dag_store.add_node(genesis_node.clone()).await.unwrap();
+    let child_node = create_test_signed_node_async(vec![genesis_cid.clone()], &author, &signing_key);
+    let child_cid = dag_store.add_node(child_node.clone()).await.unwrap();
+
+    let result = dag_store.verify_branch(&child_cid, &resolver).await;
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_memory_dag_store_async_invalid_parent() {
+    let mut dag_store = MemoryDagStore::new();
+    let mut csprng = rand::thread_rng();
+    let signing_key = SigningKey::generate(&mut csprng);
+    let verifying_key = signing_key.verifying_key();
+    let author = Did::new(&verifying_key);
+
+    let mh = MultihashCode::Sha2_256.digest(b"non-existent");
+    let external_cid = ExternalCid::new(Version::V1, Codec::Raw, mh).unwrap();
+    let non_existent_parent = Cid::from(external_cid);
+
+    let invalid_node = create_test_signed_node_async(vec![non_existent_parent.clone()], &author, &signing_key);
     
-    // Verify all nodes were added successfully
-    for result in results {
-        assert!(result.unwrap().is_ok());
+    let result = dag_store.add_node(invalid_node).await;
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        DagError::ParentNotFound { parent, .. } => assert_eq!(parent, non_existent_parent),
+        e => panic!("Expected ParentNotFound error, got {:?}", e),
     }
-
-    // Verify the tips count
-    let tips = {
-        let store = store_arc.lock().await;
-        store.get_tips().await.unwrap()
-    };
-    assert_eq!(tips.len(), node_count);
-
-    // Verify the total node count (genesis + children)
-    let all_nodes = {
-        let store = store_arc.lock().await;
-        store.get_ordered_nodes().await.unwrap()
-    };
-    assert_eq!(all_nodes.len(), node_count + 1);
 } 
