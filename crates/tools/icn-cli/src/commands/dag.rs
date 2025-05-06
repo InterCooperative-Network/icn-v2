@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use icn_types::cid::Cid;
 use std::str::FromStr;
 use icn_types::dag::PublicKeyResolver;
+use std::sync::Arc;
 
 // Define the DagCommands enum here (or move it from main.rs)
 #[derive(Subcommand, Debug)]
@@ -151,11 +152,15 @@ pub async fn handle_dag_command(
             let dag_store = context.get_dag_store(dag_dir.as_ref())?;
             
             // 2. Load Resolver (ensure key is loaded if needed by resolver)
-            // Force key loading if the simple resolver relies on it.
-            // A more sophisticated resolver might not need a specific key loaded here.
-            // Assuming SimpleKeyResolver might need it:
-            let _ = context.get_key(None); // Load default key, ignore result if already loaded
-            let resolver = context.get_resolver_dyn(); // Get Arc<dyn ...>
+            // Load default key to potentially populate the SimpleKeyResolver
+            // We ignore the key result itself, only caring about the resolver update side-effect.
+            let _ = context.get_key(None).map_err(|e| {
+                // Make key loading optional for replay if resolver can work without it?
+                // For now, treat missing key as an error if needed by the simple resolver.
+                eprintln!("Warning: Failed to load default key, DID resolution might fail: {}", e);
+                CliError::Config("Failed to load default key needed for DID resolution".to_string())
+            }); 
+            let resolver: Arc<dyn PublicKeyResolver + Send + Sync> = context.get_resolver_dyn(); // Get Arc<dyn ...>
 
             // 3. Parse CID
             let start_cid = Cid::from_str(cid)
@@ -164,12 +169,19 @@ pub async fn handle_dag_command(
             println!("Verifying branch from tip: {}", start_cid);
 
             // 4. Call verify_branch
-            // Pass the Arc<dyn PublicKeyResolver> directly
-            dag_store.verify_branch(&start_cid, resolver.as_ref()).await?;
-
-            println!("✅ Branch verification successful starting from {}", start_cid);
-            // TODO: Add more details? e.g., print number of nodes verified?
-            Ok(())
+            // Wrap the call in a block to potentially add more details later
+            match dag_store.verify_branch(&start_cid, resolver.as_ref()).await {
+                Ok(()) => {
+                    println!("✅ Branch verification successful starting from {}", start_cid);
+                    // TODO: Add more details? e.g., print number of nodes verified?
+                    Ok(())
+                }
+                Err(e) => {
+                     // The error from verify_branch is already a CliError::Dag variant
+                     eprintln!("❌ Branch verification failed: {}", e);
+                     Err(CliError::Dag(e))
+                }
+            }
         }
         DagCommands::VerifyBundle { cid, dag_dir } => {
             println!("Executing dag verify-bundle...");
@@ -208,6 +220,11 @@ pub async fn handle_dag_command(
              // - Limit to max_nodes
              // - Generate DOT format output
              unimplemented!("Visualize handler")
+        }
+        _ => {
+            // Temporary catch-all for unimplemented commands in this handler
+             println!("Command handler not yet implemented.");
+             unimplemented!("Handler for this DAG command")
         }
     }
     // Ok(()) // Only needed if match arms don't return
