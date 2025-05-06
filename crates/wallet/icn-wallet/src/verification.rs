@@ -47,6 +47,7 @@ pub struct VerificationReport {
 
 /// Dispatch credential data structure based on W3C Verifiable Credentials
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(non_snake_case)] // Allow camelCase fields to match VC spec
 pub struct DispatchCredential {
     /// Credential context for JSON-LD
     #[serde(rename = "@context")]
@@ -74,6 +75,7 @@ pub struct DispatchCredential {
 
 /// Subject of the dispatch credential
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(non_snake_case)] // Allow camelCase fields to match VC spec
 pub struct DispatchCredentialSubject {
     /// Requestor DID
     pub id: String,
@@ -152,6 +154,7 @@ pub struct CapabilitySelector {
 
 /// Bid details for the credential
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(non_snake_case)] // Allow camelCase fields to match VC spec
 pub struct BidDetails {
     /// Bid CID in the DAG
     pub bidCid: String,
@@ -174,6 +177,7 @@ pub struct BidDetails {
 
 /// Cryptographic proof for the credential
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(non_snake_case)] // Allow camelCase fields to match VC spec
 pub struct DispatchCredentialProof {
     /// Proof type (e.g., Ed25519Signature2020)
     #[serde(rename = "type")]
@@ -517,8 +521,9 @@ fn verify_policy_lineage(dag_store: &impl DagStore, policy_cid_str: &str) -> Res
     Ok(false)
 }
 
-/// Credential subject data for trust policy
+/// Credential structure for Trust Policies (internal representation)
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(non_snake_case)] // Allow camelCase fields
 struct TrustPolicyCredential {
     /// Credential context for JSON-LD
     #[serde(rename = "@context")]
@@ -544,8 +549,9 @@ struct TrustPolicyCredential {
     pub proof: Option<TrustPolicyProof>,
 }
 
-/// Subject of the trust policy credential
+/// Subject of the trust policy credential (internal representation)
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(non_snake_case)] // Allow camelCase fields
 struct TrustPolicySubject {
     /// Federation ID this policy applies to
     pub federationId: String,
@@ -558,8 +564,9 @@ struct TrustPolicySubject {
     pub other: serde_json::Value,
 }
 
-/// Cryptographic proof for the trust policy
+/// Proof for the trust policy credential (internal representation)
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(non_snake_case)] // Allow camelCase fields
 struct TrustPolicyProof {
     /// Proof type (e.g., Ed25519Signature2020)
     #[serde(rename = "type")]
