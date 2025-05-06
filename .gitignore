@@ -1,0 +1,15 @@
+# Rust artifacts
+target/
+
+# IDE files
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Environment files
+.env
+
+# MacOS files
+.DS_Store 
