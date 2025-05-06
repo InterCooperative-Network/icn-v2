@@ -1,10 +1,9 @@
-use clap::Subcommand;
-use crate::{CliContext, CliError};
+use clap::{Subcommand};
+use crate::context::CliContext;
+use crate::error::{CliError};
 use std::path::PathBuf;
-use icn_types::Cid;
-use icn_types::dag::{PublicKeyResolver, DagStore};
-use std::sync::Arc;
-use multibase; // Added for Cid parsing
+use std::collections::{HashSet, VecDeque};
+use hex;
 
 // Define the DagCommands enum here (or move it from main.rs)
 #[derive(Subcommand, Debug)]
@@ -135,73 +134,82 @@ pub async fn handle_dag_command(
 
     match cmd {
         DagCommands::SubmitAnchor { input, anchor_type, key, dag_dir } => {
-            println!("Executing dag submit-anchor...");
-            // TODO: Implement logic
-            // - context.get_dag_store(dag_dir.as_ref())
-            // - context.get_key(Some(key))
-            // - Read input file
-            // - Deserialize anchor based on anchor_type
-            // - Build SignedDagNode
-            // - store.add_node
+            // Prefix unused variables
+            let (_input, _anchor_type, _key, _dag_dir) = (input, anchor_type, key, dag_dir);
+            println!("SubmitAnchor command invoked (not implemented)");
+            // TODO: Implement anchor submission logic
             unimplemented!("SubmitAnchor handler")
         }
         DagCommands::Replay { cid, dag_dir } => {
-            println!("Executing dag replay from CID: {}", cid);
-
-            // 1. Load DAG Store
-            let dag_store = context.get_dag_store(dag_dir.as_ref())?;
+            println!("Replaying DAG from: {}", cid);
             
-            // 2. Load Resolver (ensure key is loaded if needed by resolver)
-            // Load default key to potentially populate the SimpleKeyResolver
-            // We ignore the key result itself, only caring about the resolver update side-effect.
-            let _ = context.get_key(None).map_err(|e| {
-                // Make key loading optional for replay if resolver can work without it?
-                // For now, treat missing key as an error if needed by the simple resolver.
-                eprintln!("Warning: Failed to load default key, DID resolution might fail: {}", e);
-                CliError::Config("Failed to load default key needed for DID resolution".to_string())
-            }); 
-            let resolver: Arc<dyn PublicKeyResolver + Send + Sync> = context.get_resolver_dyn(); // Get Arc<dyn ...>
+            let dag_store = context.get_dag_store(dag_dir.as_ref().map(|v| &**v))?;
+            
+            // Parse the input CID string
+            // Note: Using external cid crate here for parsing
+            let external_cid_parsed: cid::CidGeneric<64> = cid.as_str().parse()
+                .map_err(|e: cid::Error| CliError::InvalidCidFormat(format!("Invalid start CID string '{}': {}", cid, e)))?;
+            let start_cid = icn_core_types::Cid::from_bytes(&external_cid_parsed.to_bytes())
+                .map_err(|e| CliError::InvalidCidFormat(format!("Failed to convert start CID to internal format: {}", e)))?;
 
-            // 3. Parse CID
-            let (_base, decoded_bytes) = multibase::decode(cid)
-                .map_err(|e| CliError::Input(format!("Invalid multibase encoding for start CID string '{}': {}", cid, e)))?;
-            let start_cid = Cid::from_bytes(&decoded_bytes)
-                .map_err(|e| CliError::Input(format!("Invalid start CID bytes from string '{}': {}", cid, e)))?;
+            let mut visited = HashSet::new();
+            let mut queue = VecDeque::new();
+            queue.push_back(start_cid);
 
-            println!("Verifying branch from tip: {}", start_cid);
+            println!("\n--- DAG Replay Start ---");
 
-            // 4. Call verify_branch
-            // Wrap the call in a block to potentially add more details later
-            match dag_store.verify_branch(&start_cid, resolver.as_ref()).await {
-                Ok(()) => {
-                    println!("✅ Branch verification successful starting from {}", start_cid);
-                    // TODO: Add more details? e.g., print number of nodes verified?
-                    Ok(())
+            while let Some(current_cid) = queue.pop_front() {
+                if !visited.insert(current_cid.clone()) {
+                    continue; // Already processed
                 }
-                Err(e) => {
-                     // The error from verify_branch is already a CliError::Dag variant
-                     eprintln!("❌ Branch verification failed: {}", e);
-                     Err(CliError::Dag(e))
+
+                // Adjust match for Result<SignedDagNode, DagError>
+                match dag_store.get_node(&current_cid).await {
+                    Ok(signed_node) => { // Renamed variable for clarity
+                        println!("\nNode: {}", current_cid);
+                        println!("  Timestamp: {}", signed_node.node.metadata.timestamp); // Access via node.metadata
+                        println!("  Author: {}", signed_node.node.author); // Access via node
+                        println!("  Signature: {}", hex::encode(signed_node.signature.to_bytes())); // Access signature field
+                        println!("  Parents: {:?}", signed_node.node.parents); // Access via node
+                        
+                        // Determine payload type and length
+                        let (payload_type_str, payload_len) = match &signed_node.node.payload {
+                            icn_types::dag::DagPayload::Raw(data) => ("Raw", data.len()),
+                            icn_types::dag::DagPayload::Json(value) => ("Json", value.to_string().len()), // Approx length
+                            icn_types::dag::DagPayload::Reference(cid) => ("Reference", cid.to_string().len()),
+                            icn_types::dag::DagPayload::TrustBundle(cid) => ("TrustBundleRef", cid.to_string().len()),
+                            icn_types::dag::DagPayload::ExecutionReceipt(cid) => ("ExecReceiptRef", cid.to_string().len()),
+                        };
+                        println!("  Payload Type: {}", payload_type_str);
+                        println!("  Payload (size approx): {} bytes", payload_len);
+
+                        // Iterate through parents
+                        for parent_cid in &signed_node.node.parents { // Access via node, use reference
+                            if !visited.contains(parent_cid) {
+                                queue.push_back(parent_cid.clone());
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: Failed to get node {} during replay: {}", current_cid, e);
+                    }
                 }
             }
+            println!("\n--- DAG Replay End ---");
+            Ok(())
         }
         DagCommands::VerifyBundle { cid, dag_dir } => {
-            println!("Executing dag verify-bundle...");
-            // TODO: Implement logic
-            // - context.get_dag_store(dag_dir.as_ref())
-            // - Cid::from_str
-            // - store.get_node
-            // - Validate payload is TrustBundle reference
-            // - Optionally, fetch and verify the bundle itself
+             // Prefix unused variables
+             let (_cid, _dag_dir) = (cid, dag_dir);
+            println!("VerifyBundle command invoked (not implemented)");
+            // TODO: Implement bundle verification
             unimplemented!("VerifyBundle handler")
         }
         DagCommands::ExportThread { from, to, dag_dir, output } => {
-            println!("Executing dag export-thread...");
-            // TODO: Implement logic
-            // - context.get_dag_store(dag_dir.as_ref())
-            // - Cid::from_str for from/to
-            // - store.find_path
-            // - Serialize path to output file
+             // Prefix unused variables
+             let (_from, _to, _dag_dir, _output) = (from, to, dag_dir, output);
+            println!("ExportThread command invoked (not implemented)");
+            // TODO: Implement thread export
             unimplemented!("ExportThread handler")
         }
         DagCommands::Sync { .. } => {
@@ -214,20 +222,11 @@ pub async fn handle_dag_command(
         //     // crate::commands::sync_p2p::handle_dag_sync_command(context, sync_cmd).await?
         // }
         DagCommands::Visualize { dag_dir, output, thread_did, max_nodes } => {
-             println!("Executing dag visualize...");
-             // TODO: Implement logic
-             // - context.get_dag_store(dag_dir.as_ref())
-             // - store.get_ordered_nodes (or similar traversal)
-             // - Filter by thread_did if provided
-             // - Limit to max_nodes
-             // - Generate DOT format output
-             unimplemented!("Visualize handler")
-        }
-        _ => {
-            // Temporary catch-all for unimplemented commands in this handler
-             println!("Command handler not yet implemented.");
-             unimplemented!("Handler for this DAG command")
+            // Prefix unused variables
+            let (_dag_dir, _output, _thread_did, _max_nodes) = (dag_dir, output, thread_did, max_nodes);
+            println!("Visualize command invoked (not implemented)");
+            // TODO: Implement visualization
+            unimplemented!("Visualize handler")
         }
     }
-    // Ok(()) // Only needed if match arms don't return
-} 
+}

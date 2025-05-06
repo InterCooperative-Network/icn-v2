@@ -2,10 +2,10 @@ use clap::Subcommand;
 use crate::{CliContext, error::{CliError, CliResult}};
 use icn_types::mesh::{JobManifest, NodeCapability, Bid, ResourceType, JobStatus};
 use std::path::PathBuf;
-use std::str::FromStr;
 use serde_json;
-use icn_core_types::{Did, Cid};
+use icn_core_types::Did;
 use cid;
+use chrono::Utc;
 
 /// Commands for interacting with the ICN Mesh
 #[derive(Subcommand, Debug, Clone)]
@@ -170,13 +170,98 @@ pub async fn handle_mesh_command(context: &mut CliContext, cmd: &MeshCommands) -
             Ok(())
         }
         MeshCommands::GetBids { job_cid } => {
-            println!("Getting bids for job: {}", job_cid);
-            // TODO: Query bids from scheduler/store
-            // let cid = Cid::try_from(job_cid.as_str()).map_err(|e| CliError::InvalidCid(e.to_string()))?;
-            // let scheduler = context.get_scheduler()?;
-            let bids: Vec<Bid> = unimplemented!("Get bids for {}", job_cid);
-            println!("{:#?}", bids);
-            unimplemented!("GetBids handler")
+            // Attempt to parse the job_cid string into a Cid
+            let external_cid_parsed: cid::CidGeneric<64> = job_cid.as_str().parse()
+                .map_err(|e: cid::Error| CliError::InvalidCidFormat(format!("Invalid Job CID string '{}': {}", job_cid, e)))?;
+            
+            let parsed_job_cid = icn_core_types::Cid::from_bytes(&external_cid_parsed.to_bytes())
+                .map_err(|e| CliError::InvalidCidFormat(format!("Failed to convert parsed Job CID to internal format: {}", e)))?;
+
+            println!("Getting bids for job: {}\n", parsed_job_cid);
+
+            // TODO: Query actual bids from scheduler/store based on parsed_job_cid
+            // For now, returning a mock list of bids.
+
+            // Mock CIDs and DIDs for bids
+            let mock_job_manifest_cid_str = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi";
+            let mock_job_manifest_cid_external = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi".parse::<cid::CidGeneric<64>>().unwrap();
+            let mock_job_manifest_cid = icn_core_types::Cid::from_bytes(&mock_job_manifest_cid_external.to_bytes()).unwrap();
+            
+            let bidder_alpha_did = Did::from_string("did:icn:node:bidder_alpha").expect("Mock DID alpha failed");
+            let bidder_beta_did = Did::from_string("did:icn:node:bidder_beta").expect("Mock DID beta failed");
+
+            let mock_bids: Vec<Bid> = vec![
+                Bid {
+                    job_manifest_cid: mock_job_manifest_cid.clone(), // Assuming the bids are for the parsed_job_cid or a known mock
+                    bidder_node_id: bidder_alpha_did.clone(),
+                    price: 150, // Example price units
+                    confidence: 0.95,
+                    offered_capabilities: vec![
+                        ResourceType::CpuCores(4),
+                        ResourceType::RamMb(16 * 1024),
+                        ResourceType::Gpu("NVIDIA_RTX_A4000".to_string()),
+                    ],
+                    expires_at: Some(Utc::now() + chrono::Duration::hours(24)),
+                },
+                Bid {
+                    job_manifest_cid: mock_job_manifest_cid.clone(),
+                    bidder_node_id: bidder_beta_did.clone(),
+                    price: 120,
+                    confidence: 0.88,
+                    offered_capabilities: vec![
+                        ResourceType::CpuCores(2),
+                        ResourceType::RamMb(8 * 1024),
+                        ResourceType::StorageGb(500),
+                    ],
+                    expires_at: Some(Utc::now() + chrono::Duration::hours(48)),
+                },
+                // Add a bid for a different job CID to show filtering (if we were actually filtering)
+                // For now, all mock bids will be for the same mock_job_manifest_cid
+            ];
+            
+            // Simulate filtering bids for the requested job_cid (even though all mocks are for one job here)
+            let bids_for_job: Vec<&Bid> = mock_bids.iter()
+                                            .filter(|b| b.job_manifest_cid == parsed_job_cid || b.job_manifest_cid == mock_job_manifest_cid) // Simple mock filter
+                                            .collect();
+
+            if bids_for_job.is_empty() {
+                println!("No bids found for job ID: {}", parsed_job_cid);
+                if parsed_job_cid.to_string() != mock_job_manifest_cid_str {
+                    println!("(Note: Mock data currently only has bids for job ID {})", mock_job_manifest_cid_str);
+                }
+            } else {
+                println!("Bids Found:");
+                println!("-----------");
+                for (index, bid) in bids_for_job.iter().enumerate() {
+                    println!("Bid #{}", index + 1);
+                    println!("  Bidder Node ID:   {}", bid.bidder_node_id);
+                    println!("  Price:            {}", bid.price);
+                    println!("  Confidence:       {:.2}", bid.confidence);
+                    println!("  Job Manifest CID: {}", bid.job_manifest_cid); // Usually same as parsed_job_cid
+                    println!("  Offered Resources:");
+                    if bid.offered_capabilities.is_empty() {
+                        println!("    - None specified");
+                    } else {
+                        for resource in &bid.offered_capabilities {
+                            match resource {
+                                ResourceType::CpuCores(val) => println!("    - CPU Cores: {}", val),
+                                ResourceType::RamMb(val) => println!("    - RAM (MB): {}", val),
+                                ResourceType::StorageGb(val) => println!("    - Storage (GB): {}", val),
+                                ResourceType::Gpu(val) => println!("    - GPU: {}", val),
+                                ResourceType::NetworkBandwidthMbps(val) => println!("    - Network (Mbps): {}", val),
+                            }
+                        }
+                    }
+                    if let Some(expires) = bid.expires_at {
+                        println!("  Expires At:       {}", expires.to_rfc3339());
+                    }
+                    println!("-----------");
+                }
+            }
+            
+            // The context parameter is unused for now in this arm.
+            let _ = context;
+            Ok(())
         }
     }
     // Ok(())

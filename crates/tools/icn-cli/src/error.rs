@@ -18,21 +18,26 @@ pub enum CliError {
     // #[error("DID Key Error: {0}")]
     // DidKey(#[from] DidKeyError), // Uncomment when DidKeyError is importable/defined
     #[error("DID Key Error: {0}")]
+    #[allow(dead_code)]
     DidKey(String),
 
     #[error("CBOR Serialization/Deserialization Error: {0}")]
+    #[allow(dead_code)]
     Cbor(String), // Can refine this based on cbor error types
 
     #[error("Configuration Error: {0}")]
     Config(String),
 
     #[error("Invalid Input: {0}")]
+    #[allow(dead_code)]
     Input(String),
 
     #[error("Network Error: {0}")]
+    #[allow(dead_code)]
     Network(String), // For sync/libp2p errors
 
     #[error("Verification Error: {0}")]
+    #[allow(dead_code)]
     Verification(String),
 
     #[error("Invalid CID Format: {0}")]

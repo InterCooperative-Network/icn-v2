@@ -1,49 +1,60 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use icn_types::dag::{DagStore, rocksdb::RocksDbDagStore, DagError, PublicKeyResolver};
+use icn_types::dag::{DagStore, PublicKeyResolver};
 use icn_types::Did;
 use icn_identity_core::did::DidKey;
 use crate::error::CliError;
 use ed25519_dalek::{VerifyingKey, SigningKey};
 use hex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use icn_types::dag::memory::MemoryDagStore;
+use thiserror::Error;
+use std::collections::HashMap;
 
-// Simple resolver using only the loaded key (if applicable)
-#[derive(Clone)] // Clone needed for Arc
+// A simple in-memory resolver for keys loaded via context
+#[derive(Debug, Error)]
+#[error("Key not found for DID: {0}")]
+#[allow(dead_code)] // Allow unused struct for now
+struct SimpleResolverError(Did);
+
+// Make this pub(crate) if get_resolver is pub(crate), or keep private if get_resolver is removed/private
 struct SimpleKeyResolver {
-    key: Option<VerifyingKey>, 
+    keys: std::sync::RwLock<HashMap<Did, VerifyingKey>>,
 }
 
-impl PublicKeyResolver for SimpleKeyResolver {
-    fn resolve(&self, did: &Did) -> Result<VerifyingKey, DagError> {
-        // TODO: Implement actual DID resolution logic.
-        // This placeholder only returns the key if one is loaded.
-        // It doesn't validate if the DID actually matches the key.
-        // A real implementation would likely involve did:key parsing 
-        // (e.g., using did_key crate) or registry lookup.
-        if let Some(ref key) = self.key {
-            // Placeholder check: Assume the loaded key is the one being asked for.
-            // This is NOT safe in general.
-            println!("Warning: Using placeholder DID resolution. Resolving {} to loaded key.", did);
-             Ok(key.clone())
-        } else {
-             Err(DagError::PublicKeyResolutionError(did.clone(), "No key loaded in context for resolution".to_string()))
-        }
+impl SimpleKeyResolver {
+    fn new() -> Self {
+        SimpleKeyResolver { keys: std::sync::RwLock::new(HashMap::new()) }
+    }
+    fn add_key(&self, did: Did, key: VerifyingKey) {
+        let mut keys = self.keys.write().unwrap();
+        keys.insert(did, key);
     }
 }
 
-// Define a struct for deserializing the key file
-#[derive(Deserialize)]
+impl PublicKeyResolver for SimpleKeyResolver {
+    fn resolve(&self, did: &Did) -> Result<VerifyingKey, icn_types::dag::DagError> {
+        let keys = self.keys.read().unwrap();
+        keys.get(did)
+            .cloned()
+            .ok_or_else(|| icn_types::dag::DagError::PublicKeyResolutionError(did.clone(), "Key not found in SimpleKeyResolver".to_string()))
+    }
+}
+
+// Structure to deserialize the key file JSON
+#[derive(Serialize, Deserialize)]
 struct KeyFileJson {
-    secret_key_hex: String,
+    did: String,
+    #[allow(dead_code)] // Silence warning for unused field
+    secret_key_hex: String, 
 }
 
 pub struct CliContext {
-    config_dir: PathBuf,
-    default_key_path: PathBuf,
+    _config_dir: PathBuf,
+    _default_key_path: PathBuf,
     dag_store: Option<Arc<dyn DagStore + Send + Sync>>,
-    loaded_key: Option<Arc<DidKey>>,
-    key_resolver: Arc<SimpleKeyResolver>,
+    _loaded_key: Option<Arc<DidKey>>,
+    _key_resolver: Arc<SimpleKeyResolver>,
     verbose: bool,
 }
 
@@ -55,14 +66,14 @@ impl CliContext {
         let default_key_path = config_dir.join("key.json");
 
         // Initialize with an empty resolver
-        let key_resolver = Arc::new(SimpleKeyResolver { key: None });
+        let key_resolver = Arc::new(SimpleKeyResolver::new());
 
         Ok(Self {
-            config_dir,
-            default_key_path,
+            _config_dir: config_dir,
+            _default_key_path: default_key_path,
             dag_store: None,
-            loaded_key: None,
-            key_resolver,
+            _loaded_key: None,
+            _key_resolver: key_resolver,
             verbose,
         })
     }
@@ -71,65 +82,96 @@ impl CliContext {
     // If context needs to be shared immutably across threads while loading,
     // internal RwLocks or RefCells might be needed for dag_store/loaded_key.
 
-    pub fn get_dag_store(&mut self, dag_path: Option<&PathBuf>) -> Result<Arc<dyn DagStore + Send + Sync>, CliError> {
+    pub fn get_dag_store(&mut self, path_opt: Option<&Path>) -> Result<Arc<dyn DagStore + Send + Sync>, CliError> {
         if self.dag_store.is_none() {
-            let path = dag_path.cloned().unwrap_or_else(|| self.config_dir.join("dag"));
-            if self.verbose { println!("Loading DAG store from: {}", path.display()); }
+            let store_path = path_opt.map(|p| p.to_path_buf()).unwrap_or_else(|| {
+                self._config_dir.join("dag_store")
+            });
             
-            if let Some(parent) = path.parent() {
-                 std::fs::create_dir_all(parent)?;
+             if !store_path.exists() {
+                 std::fs::create_dir_all(&store_path).map_err(|e| CliError::Io(e))?;
+             }
+
+            if self.verbose {
+                println!("Initializing DAG store at: {:?}", store_path);
             }
-            
-            // TODO: Add option for MemoryDagStore based on flag/path? ("memory" or similar)
-            let store = RocksDbDagStore::open(&path)
-                .map_err(|e| CliError::Dag(e))?;
-            self.dag_store = Some(Arc::new(store));
+
+            // Correct usage of RocksDbDagStore
+            #[cfg(feature = "persistence")]
+            {
+                // Need to import RocksDbDagStore when used
+                use icn_types::dag::rocksdb::RocksDbDagStore;
+                let store = RocksDbDagStore::new(store_path).map_err(CliError::Dag)?;
+                self.dag_store = Some(Arc::new(store));
+            }
+            #[cfg(not(feature = "persistence"))]
+            {
+                 eprintln!("Warning: Persistence feature not enabled, using in-memory DAG store.");
+                 let store = MemoryDagStore::new(); // Use correct name
+                 self.dag_store = Some(Arc::new(store));
+            }
         }
         Ok(self.dag_store.as_ref().unwrap().clone())
     }
 
-    pub fn get_key(&mut self, key_path_opt: Option<&PathBuf>) -> Result<Arc<DidKey>, CliError> {
-         if self.loaded_key.is_none() {
-            let key_path = key_path_opt.unwrap_or(&self.default_key_path);
-            if self.verbose { println!("Loading key from: {}", key_path.display()); }
-             
-            // Read and parse JSON
-            let key_json_str = std::fs::read_to_string(key_path)
-                .map_err(|e| CliError::Io(e))?; 
-            let key_file: KeyFileJson = serde_json::from_str(&key_json_str)
-                .map_err(|e| CliError::Json(e))?; 
+    #[allow(dead_code)] 
+    pub fn _get_key(&mut self, key_path_opt: Option<&Path>) -> Result<Arc<DidKey>, CliError> {
+        let key_path = key_path_opt.map(|p| p.to_path_buf()).unwrap_or_else(|| self._default_key_path.clone()); // Use prefixed field & clone
+        
+        // Check if key already loaded (avoid redundant loading/parsing)
+        if let Some(key) = &self._loaded_key {
+            // Optional: Check if the requested path matches the loaded key's assumed path?
+            // For now, just return the cached key if any key is loaded.
+            if self.verbose { println!("Returning cached key for DID: {}", key.did()); }
+            return Ok(key.clone());
+        }
+        
+        if self.verbose {
+            println!("Loading key from: {:?}", key_path);
+        }
+        
+        let key_json_str = std::fs::read_to_string(&key_path) // Borrow key_path
+            .map_err(|e| CliError::Config(format!("Failed to read key file {:?}: {}", key_path, e)))?;
             
-            // Decode hex secret key
-            let secret_bytes = hex::decode(&key_file.secret_key_hex)
-                .map_err(|e| CliError::Config(format!("Invalid hex in key file: {}", e)))?;
-            let secret_array: &[u8; 32] = secret_bytes.as_slice().try_into()
-                 .map_err(|_| CliError::Config("Invalid secret key length, expected 32 bytes".to_string()))?;
+        let key_file_data: KeyFileJson = serde_json::from_str(&key_json_str)
+            .map_err(|e| CliError::Config(format!("Failed to parse key file JSON {:?}: {}", key_path, e)))?;
             
-            // Construct keys
-            let signing_key = SigningKey::from_bytes(secret_array);
-            let verifying_key = signing_key.verifying_key(); // Get verifying key before moving signing_key
-            let did_key = DidKey::from_signing_key(signing_key); // Use new constructor
+        let secret_bytes = hex::decode(&key_file_data.secret_key_hex) 
+             .map_err(|e| CliError::Config(format!("Invalid hex in secret key {:?}: {}", key_path, e)))?;
+        
+        let signing_key = SigningKey::from_bytes(secret_bytes.as_slice().try_into()
+            .map_err(|_| CliError::Config(format!("Invalid secret key length in {:?}", key_path)))?) ;
+            
+        let did_key = DidKey::from_signing_key(signing_key); 
              
-            let arc_did_key = Arc::new(did_key);
-            self.loaded_key = Some(arc_did_key.clone());
-
-            // Update the resolver 
-             self.key_resolver = Arc::new(SimpleKeyResolver { key: Some(verifying_key) });
-
-             Ok(arc_did_key)
-         } else {
-            // Return the cached Arc
-            Ok(self.loaded_key.as_ref().unwrap().clone())
-         }
+        // Check if the derived DID matches the one in the file
+        if did_key.did().to_string() != key_file_data.did {
+             return Err(CliError::Config(format!("DID mismatch in key file {:?}: expected {}, found {}", key_path, key_file_data.did, did_key.did())));
+        }
+        
+        let arc_did_key = Arc::new(did_key);
+        self._loaded_key = Some(arc_did_key.clone());
+        
+        // Add the loaded key to the simple resolver - Use the Arc
+        let verifying_key = arc_did_key.verifying_key().clone();
+        self._key_resolver.add_key(arc_did_key.did().clone(), verifying_key); 
+            
+        if self.verbose {
+            println!("Loaded key for DID: {}", arc_did_key.did()); // Use Arc here too
+        }
+        Ok(arc_did_key)
     }
 
-    // Returns the specific resolver implementation wrapped in Arc
-    pub fn get_resolver(&self) -> Arc<SimpleKeyResolver> {
-        self.key_resolver.clone()
+    /// Get the simple in-memory key resolver (intended for internal use)
+    #[allow(dead_code)] // Silence warning for unused method
+    #[allow(private_interfaces)] // Silence warning for returning private type
+    fn _get_resolver(&self) -> Arc<SimpleKeyResolver> {
+        self._key_resolver.clone()
     }
-
-    // Helper to get a dyn trait object if needed by some functions
-    pub fn get_resolver_dyn(&self) -> Arc<dyn PublicKeyResolver + Send + Sync> {
-        self.key_resolver.clone() as Arc<dyn PublicKeyResolver + Send + Sync>
+    
+    /// Get the key resolver as a dynamic trait object
+    #[allow(dead_code)] // Silence warning for unused method
+    pub fn _get_resolver_dyn(&self) -> Arc<dyn PublicKeyResolver + Send + Sync> {
+         self._key_resolver.clone() as Arc<dyn PublicKeyResolver + Send + Sync>
     }
 } 
