@@ -1,0 +1,5 @@
+[book]
+authors = ["Matt Faherty"]
+language = "en"
+src = "src"
+title = "InterCooperative Network"
