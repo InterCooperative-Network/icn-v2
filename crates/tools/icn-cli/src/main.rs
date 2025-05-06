@@ -63,7 +63,7 @@ enum Commands {
     /// Mesh computation commands
     #[command(subcommand)]
     Mesh(MeshCommands), // Keep placeholder for now
-    
+
     /// Advanced DAG sync commands with libp2p support
     #[command(subcommand)]
     SyncP2P(DagSyncCommands), // Moved SyncP2P to top level?
@@ -110,10 +110,10 @@ async fn main() -> Result<(), CliError> {
             println!("SyncP2P command placeholder...");
             // TODO: Refactor SyncP2P commands (into commands/sync_p2p.rs?)
             unimplemented!("SyncP2P handler placeholder")
-        }
-    }
-
-    Ok(())
+                        }
+                    }
+                    
+                    Ok(())
 }
 
 // Removed old handler functions (handle_dag_command, handle_mesh_command etc.)
