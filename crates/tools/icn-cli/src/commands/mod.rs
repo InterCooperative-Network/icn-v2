@@ -4,6 +4,7 @@ pub mod bundle;
 pub mod receipt;
 pub mod sync_p2p;
 pub mod federation;
+pub mod runtime;
 
 // Re-export handlers for main.rs
 pub use dag::handle_dag_command;

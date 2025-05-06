@@ -14,6 +14,7 @@ use error::CliError;
 use commands::handle_dag_command; // Import the specific handler
 use commands::handle_mesh_command; // Add handle_mesh_command
 use commands::handle_federation_command; // Add federation handler
+use commands::runtime::handle_runtime_command; // 👈 NEW
 // use icn_types::ExecutionResult; // Needs locating
 use std::path::PathBuf;
 use tokio;
@@ -72,6 +73,10 @@ enum Commands {
 
     /// Manage trust policies
     Policy,
+
+    /// Runtime commands
+    #[command(subcommand)]
+    Runtime(commands::runtime::RuntimeCommands),
 }
 
 // Removed DagCommands enum definition from here (moved to commands/dag.rs)
@@ -113,6 +118,9 @@ async fn main() -> Result<(), CliError> {
         }
         Commands::Federation(cmd) => {
             handle_federation_command(&mut context, cmd).await?
+        }
+        Commands::Runtime(cmd) => {
+            handle_runtime_command(&mut context, cmd).await?
         }
         Commands::Policy => {
             todo!("Implement Policy commands")

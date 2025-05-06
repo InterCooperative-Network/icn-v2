@@ -1,18 +1,26 @@
 use crate::did::DidKey;
 use icn_types::dag::EventId;
+use icn_types::Cid;
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 use ed25519_dalek::{Signer, Verifier, Signature};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
 use thiserror::Error;
+use multihash::{MultihashDigest, Code as MultihashCode};
+use serde_ipld_dagcbor;
+
+const DAG_CBOR_CODEC: u64 = 0x71;
 
 /// Errors related to ExecutionReceipt operations
 #[derive(Error, Debug)]
 pub enum ExecutionReceiptError {
-    #[error("Serialization error: {0}")]
-    Serialization(#[from] serde_json::Error),
+    #[error("JSON Serialization error: {0}")]
+    JsonSerialization(#[from] serde_json::Error),
     
+    #[error("CBOR Serialization error: {0}")]
+    CborSerialization(#[from] serde_ipld_dagcbor::Error),
+
     #[error("Signature error: {0}")]
     Signature(String),
     
@@ -24,6 +32,9 @@ pub enum ExecutionReceiptError {
     
     #[error("Decoding error: {0}")]
     Decoding(#[from] base64::DecodeError),
+
+    #[error("Multihash error: {0}")]
+    Multihash(#[from] multihash::Error),
 }
 
 /// The W3C‐style Proof object for cryptographic verification
@@ -191,29 +202,19 @@ impl ExecutionReceipt {
     
     /// Sign the ExecutionReceipt with the provided DID key
     pub fn sign(mut self, did_key: &DidKey) -> Result<Self, ExecutionReceiptError> {
-        // Create a copy without the proof for signing
         let mut temp = self.clone();
         temp.proof = None;
-        
-        // Serialize the credential without proof
         let to_sign = serde_json::to_vec(&temp)
-            .map_err(ExecutionReceiptError::Serialization)?;
-        
-        // Sign using the provided key
-        let signature = did_key.sign(&to_sign);
-        
-        // Create the proof
+            .map_err(ExecutionReceiptError::JsonSerialization)?;
+        let signature_bytes = did_key.sign(&to_sign).to_bytes();
         let proof = Proof {
             type_: "Ed25519Signature2020".to_string(),
             created: Utc::now(),
             proof_purpose: "assertionMethod".to_string(),
-            verification_method: did_key.to_did_string(), // Use the DID URL as verification method
-            proof_value: BASE64_ENGINE.encode(signature.to_bytes()),
+            verification_method: did_key.to_did_string(),
+            proof_value: BASE64_ENGINE.encode(signature_bytes),
         };
-        
-        // Add the proof to the credential
         self.proof = Some(proof);
-        
         Ok(self)
     }
     
@@ -222,42 +223,52 @@ impl ExecutionReceipt {
         let proof = self.proof.as_ref().ok_or(
             ExecutionReceiptError::MissingField("proof".to_string())
         )?;
-        
-        // Create a temporary copy without the proof for verification
         let mut temp = self.clone();
         temp.proof = None;
-        
-        // Serialize the credential without proof
         let data = serde_json::to_vec(&temp)
-            .map_err(ExecutionReceiptError::Serialization)?;
-        
-        // Extract the public key from the verification method DID
+            .map_err(ExecutionReceiptError::JsonSerialization)?;
         let verifying_key = DidKey::verifying_key_from_did(&proof.verification_method)
             .map_err(|e| ExecutionReceiptError::Signature(e.to_string()))?;
-        
-        // Decode the proof value
         let sig_bytes = BASE64_ENGINE.decode(&proof.proof_value)?;
-        
-        // Parse the signature
-        let signature = Signature::from_bytes(&sig_bytes)
-            .map_err(|e| ExecutionReceiptError::Signature(e.to_string()))?;
-        
-        // Verify the signature
+        if sig_bytes.len() != ed25519_dalek::SIGNATURE_LENGTH {
+            return Err(ExecutionReceiptError::Signature(format!(
+                "Invalid signature length: expected {}, got {}",
+                ed25519_dalek::SIGNATURE_LENGTH,
+                sig_bytes.len()
+            )));
+        }
+        let mut sig_array = [0u8; ed25519_dalek::SIGNATURE_LENGTH];
+        sig_array.copy_from_slice(&sig_bytes);
+        let signature = Signature::from_bytes(&sig_array);
         verifying_key.verify(&data, &signature)
             .map_err(|e| ExecutionReceiptError::ProofValidation(e.to_string()))?;
-        
         Ok(true)
     }
     
-    /// Export the ExecutionReceipt to JSON
+    /// Export the ExecutionReceipt to JSON string
     pub fn to_json(&self) -> Result<String, ExecutionReceiptError> {
         serde_json::to_string_pretty(self)
-            .map_err(ExecutionReceiptError::Serialization)
+            .map_err(ExecutionReceiptError::JsonSerialization)
     }
     
-    /// Import an ExecutionReceipt from JSON
+    /// Import an ExecutionReceipt from JSON string
     pub fn from_json(json: &str) -> Result<Self, ExecutionReceiptError> {
         serde_json::from_str(json)
-            .map_err(ExecutionReceiptError::Serialization)
+            .map_err(ExecutionReceiptError::JsonSerialization)
+    }
+
+    /// Calculate a CID for the ExecutionReceipt (content-addressed, typically excluding proof).
+    /// The CID is generated from the DAG-CBOR representation of the receipt.
+    pub fn to_cid(&self) -> Result<Cid, ExecutionReceiptError> {
+        let mut temp_receipt = self.clone();
+        // For content addressing, proof is usually excluded or handled differently.
+        // If the `id` field itself is intended to be a CID of the content after issuance,
+        // this method might be used to generate that ID, or verify it.
+        // Here, we generate a CID of the receipt *content* (proof excluded).
+        temp_receipt.proof = None; 
+
+        let bytes = serde_ipld_dagcbor::to_vec(&temp_receipt)?;
+        let hash = MultihashCode::Sha2_256.digest(&bytes);
+        Ok(Cid::new_v1(DAG_CBOR_CODEC, hash))
     }
 } 

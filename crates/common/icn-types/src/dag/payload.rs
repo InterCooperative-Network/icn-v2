@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use crate::Cid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "data")]
@@ -7,7 +8,7 @@ pub enum EventPayload {
     Proposal { proposal_id: String, content_cid: String },
     Vote { proposal_id: String, choice: String },
     Execution { receipt_cid: String },
-    Receipt { receipt_data: String },
+    Receipt { receipt_cid: Cid },
     Custom { fields: serde_json::Value },
 }
 
@@ -43,10 +44,8 @@ impl EventPayload {
     }
     
     /// Create a Receipt payload
-    pub fn receipt(receipt_data: impl Into<String>) -> Self {
-        EventPayload::Receipt {
-            receipt_data: receipt_data.into(),
-        }
+    pub fn receipt(receipt_cid: Cid) -> Self {
+        EventPayload::Receipt { receipt_cid }
     }
     
     /// Create a Custom payload
