@@ -55,7 +55,7 @@ pub struct CliContext {
     dag_store: Option<Arc<dyn DagStore + Send + Sync>>,
     _loaded_key: Option<Arc<DidKey>>,
     _key_resolver: Arc<SimpleKeyResolver>,
-    verbose: bool,
+    pub verbose: bool,
 }
 
 impl CliContext {

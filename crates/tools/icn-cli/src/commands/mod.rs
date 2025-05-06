@@ -15,6 +15,6 @@ pub use federation::handle_federation_command;
 pub use proposal::handle_proposal_commands;
 pub use vote::handle_vote_commands;
 // Add pub use for other handlers when created
-// pub use bundle::handle_bundle_command;
-// pub use receipt::handle_receipt_command;
-// pub use sync_p2p::handle_dag_sync_command; 
+pub use bundle::handle_bundle_command;
+pub use receipt::handle_receipt_command;
+pub use sync_p2p::handle_dag_sync_command; 

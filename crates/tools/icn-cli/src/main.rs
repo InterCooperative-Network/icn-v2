@@ -17,6 +17,7 @@ use commands::handle_federation_command; // Add federation handler
 use commands::runtime::handle_runtime_command; // 👈 NEW
 use commands::handle_proposal_commands; // Add proposal handler
 use commands::handle_vote_commands; // Add vote handler
+use commands::{handle_bundle_command, handle_receipt_command, handle_dag_sync_command}; // ADDED
 // use icn_types::ExecutionResult; // Needs locating
 use std::path::PathBuf;
 use tokio;
@@ -112,19 +113,16 @@ async fn main() -> Result<(), CliError> {
             unimplemented!("KeyGen handler")
         }
         Commands::Bundle(cmd) => {
-            // Call the handler from the bundle module
-            commands::bundle::handle_bundle_command(&mut context, cmd).await?
+            handle_bundle_command(&mut context, cmd).await?
         }
          Commands::Receipt(cmd) => {
-            // Call the handler from the receipt module
-            commands::receipt::handle_receipt_command(&mut context, cmd).await?
+            handle_receipt_command(&mut context, cmd).await?
         }
         Commands::Mesh(cmd) => {
             handle_mesh_command(&mut context, cmd).await?
         }
          Commands::SyncP2P(cmd) => {
-            // Call the handler from the sync_p2p module
-            commands::sync_p2p::handle_dag_sync_command(&mut context, cmd).await?
+            handle_dag_sync_command(&mut context, cmd).await?
         }
         Commands::Federation(cmd) => {
             handle_federation_command(&mut context, cmd).await?
