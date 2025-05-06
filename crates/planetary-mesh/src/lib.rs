@@ -9,8 +9,12 @@
 pub mod node;
 pub mod cap_index;
 pub mod scheduler;
+pub mod manifest_verifier;
+pub mod dispatch_credential;
+pub mod trusted_did_policy;
 
 // Re-export common types
 pub use node::MeshNode;
 pub use scheduler::{Scheduler, TaskRequest, TaskBid, MatchResult, CapabilityIndex};
-pub use cap_index::CapabilitySelector; 
+pub use cap_index::CapabilitySelector;
+pub use manifest_verifier::{ManifestVerifier, ManifestVerificationError}; 

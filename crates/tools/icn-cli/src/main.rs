@@ -590,6 +590,54 @@ enum MeshCommands {
         #[arg(long)]
         firmware_hash: Option<String>,
     },
+    
+    /// Verify capability-based scheduling and view audit records
+    #[command(name = "audit")]
+    Audit {
+        /// The type of audit to perform (dispatch, manifest, requirements)
+        #[arg(long, default_value = "dispatch")]
+        audit_type: String,
+        
+        /// CID of the specific record to show (optional)
+        #[arg(long)]
+        cid: Option<String>,
+        
+        /// Show audit records for tasks dispatched by a specific scheduler DID
+        #[arg(long)]
+        scheduler: Option<String>,
+        
+        /// Show audit records for a specific task CID
+        #[arg(long)]
+        task: Option<String>,
+        
+        /// Show audit records with specific capability requirements
+        #[arg(long)]
+        requirement: Option<Vec<String>>,
+        
+        /// Maximum number of records to show
+        #[arg(long, default_value = "10")]
+        limit: usize,
+        
+        /// Path to DAG storage
+        #[arg(long)]
+        dag_dir: PathBuf,
+        
+        /// Federation ID
+        #[arg(long)]
+        federation: String,
+
+        /// Enable credential verification
+        #[arg(long)]
+        verify: bool,
+        
+        /// Path to trusted DIDs policy file (TOML)
+        #[arg(long)]
+        trusted_dids_path: Option<PathBuf>,
+        
+        /// Export verification results to JSON file
+        #[arg(long)]
+        export_results: Option<PathBuf>,
+    },
 }
 
 /// Parse a key=value pair
@@ -1307,7 +1355,7 @@ async fn handle_mesh_command(cmd: &MeshCommands) -> Result<()> {
                 .context("Key file missing 'did' field")?;
             
             // Get the DID from the key file
-            let author_did = Did::from(did_str.to_string());
+            let did = Did::from(did_str.to_string());
             
             // Create DAG store
             let store = Arc::new(icn_types::dag::rocksdb::RocksDbDagStore::new(dag_dir)?);
@@ -1316,7 +1364,7 @@ async fn handle_mesh_command(cmd: &MeshCommands) -> Result<()> {
             let transport_config = TransportConfig {
                 peer_id: uuid::Uuid::new_v4().to_string(),
                 federation_id: federation.clone(),
-                local_did: Some(author_did.clone()),
+                local_did: Some(did.clone()),
                 listen_addresses: vec![listen.clone()],
                 bootstrap_peers: vec![],
                 enable_mdns: *mdns,
@@ -1344,15 +1392,29 @@ async fn handle_mesh_command(cmd: &MeshCommands) -> Result<()> {
                 capability_selector = Some(selector);
             }
             
-            // Create the capability index
-            let cap_index = Arc::new(icn_planetary_mesh::scheduler::CapabilityIndex::new(store.clone()));
+            // Configure capability index with signature verification
+            let cap_index_config = icn_planetary_mesh::scheduler::CapabilityIndexConfig {
+                verify_signatures: true,
+                require_valid_signatures: true, // Require valid signatures for security
+                trusted_dids: None, // You could add a list of trusted DIDs here
+            };
             
-            // Create the scheduler
-            let scheduler = icn_planetary_mesh::scheduler::Scheduler::new(
+            // Create the capability index with verification config
+            let cap_index = Arc::new(icn_planetary_mesh::scheduler::CapabilityIndex::with_config(
+                store.clone(), 
+                cap_index_config
+            ));
+            
+            // Create a DID key for signing (in a real implementation, this would be loaded from the key file)
+            // For demonstration, we'll create a new key
+            let did_key = icn_identity_core::did::DidKey::new();
+            
+            // Create the scheduler with the signing key
+            let scheduler = icn_planetary_mesh::scheduler::Scheduler::new_with_key(
                 federation.clone(),
                 cap_index.clone(),
                 store.clone(),
-                author_did.clone(),
+                did_key,
             );
             
             // Start the transport
@@ -1363,12 +1425,24 @@ async fn handle_mesh_command(cmd: &MeshCommands) -> Result<()> {
                 transport,
                 store.clone(),
                 federation.clone(),
-                Some(author_did.clone()),
+                Some(did.clone()),
             );
             
             // Start background sync to publish the task
             println!("Starting mesh network synchronization...");
             sync_service.start_background_sync().await?;
+            
+            // Set up metrics for verification failures
+            let metrics_context = init_metrics(&federation, None)?;
+            let failure_counter = counter!("icn_manifest_verification_failures", 
+                "Number of manifest verification failures");
+            
+            // Hook up the verification failure handler
+            cap_index.set_verification_failure_handler(Box::new(move |did, error| {
+                failure_counter.inc();
+                error!("Manifest verification failed for DID {}: {:?}", did, error);
+                metrics_context.record_manifest_verification_failure(&did.to_string(), &format!("{:?}", error));
+            }));
             
             // In a real implementation, this would be a long-running process
             // that listens for new task requests, collects bids, and matches them
@@ -2883,6 +2957,413 @@ async fn handle_mesh_command(cmd: &MeshCommands) -> Result<()> {
             
             Ok(())
         },
+        MeshCommands::Audit { 
+            audit_type,
+            cid,
+            scheduler,
+            task,
+            requirement,
+            limit,
+            dag_dir,
+            federation,
+            verify,
+            trusted_dids_path,
+            export_results
+        } => {
+            // Create DAG store
+            let store = Arc::new(icn_types::dag::rocksdb::RocksDbDagStore::new(dag_dir)?);
+            
+            // Get all nodes
+            let all_nodes = store.get_ordered_nodes().await?;
+            
+            // Filter for dispatch audit records in this federation
+            let mut dispatch_records = Vec::new();
+            let mut total_records = 0;
+            
+            for node in all_nodes {
+                if node.node.federation_id != *federation {
+                    continue;
+                }
+                
+                if let Some(cid_ref) = &node.cid {
+                    let cid_str = cid_ref.to_string();
+                    
+                    // Check if we're looking for a specific CID
+                    if let Some(target_cid) = cid {
+                        if cid_str != *target_cid {
+                            continue;
+                        }
+                    }
+                    
+                    // Check payload type
+                    if let icn_types::dag::DagPayload::Json(payload) = &node.node.payload {
+                        let record_type = payload.get("type").and_then(|t| t.as_str()).unwrap_or("unknown");
+                        
+                        match audit_type.as_str() {
+                            "dispatch" => {
+                                // Filter for dispatch records
+                                if record_type == "DispatchAuditRecord" {
+                                    // Apply task filter if specified
+                                    if let Some(task_cid) = task {
+                                        if let Some(t) = payload.get("task_cid").and_then(|t| t.as_str()) {
+                                            if t != task_cid {
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                    
+                                    // Apply scheduler filter if specified
+                                    if let Some(scheduler_did) = scheduler {
+                                        if let Some(s) = payload.get("scheduler").and_then(|s| s.as_str()) {
+                                            if s != scheduler_did {
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                    
+                                    // Add to our list
+                                    dispatch_records.push((cid_ref.clone(), node.node, payload.clone()));
+                                    total_records += 1;
+                                }
+                            },
+                            "manifest" => {
+                                // Filter for node manifest records
+                                if record_type == "NodeManifest" {
+                                    // You can implement additional filters for manifests here
+                                    total_records += 1;
+                                }
+                            },
+                            "requirements" => {
+                                // Filter for capability requirement records
+                                if record_type == "CapabilityRequirement" || record_type == "TaskTicket" {
+                                    // You can implement additional filters for capability requirements here
+                                    total_records += 1;
+                                }
+                            },
+                            _ => {
+                                return Err(anyhow::anyhow!("Unknown audit type: {}. Expected 'dispatch', 'manifest', or 'requirements'", audit_type));
+                            }
+                        }
+                    }
+                }
+                
+                // Break if we've hit our limit
+                if *limit > 0 && total_records >= *limit {
+                    break;
+                }
+            }
+            
+            // If doing verification, load the trusted DIDs policy
+            let mut policy_opt = None;
+            if *verify {
+                if let Some(policy_path) = trusted_dids_path {
+                    println!("Loading trusted DIDs policy from: {}", policy_path.display());
+                    let factory = planetary_mesh::trusted_did_policy::TrustPolicyFactory::new();
+                    match factory.from_file(policy_path) {
+                        Ok(policy) => {
+                            println!("Loaded trusted DIDs policy for federation: {}", federation);
+                            policy_opt = Some(policy);
+                        },
+                        Err(e) => {
+                            return Err(anyhow::anyhow!("Failed to load trusted DIDs policy: {}", e));
+                        }
+                    }
+                } else {
+                    println!("Warning: --verify specified but no --trusted-dids-path provided");
+                    println!("Verification will check signatures but not trusted DIDs");
+                }
+            }
+            
+            // Get verification results
+            let mut verification_results = Vec::new();
+            
+            // Process the dispatch records
+            match audit_type.as_str() {
+                "dispatch" => {
+                    println!("\nDispatch Audit Records for Federation: {}", federation);
+                    println!("{} records found", dispatch_records.len());
+                    
+                    if dispatch_records.is_empty() {
+                        println!("No dispatch records found matching the criteria");
+                    } else {
+                        for (idx, (record_cid, node, payload)) in dispatch_records.iter().enumerate() {
+                            println!("\n{}: {}", idx + 1, record_cid);
+                            
+                            // Print basic info
+                            let scheduler = payload.get("scheduler").and_then(|s| s.as_str()).unwrap_or("unknown");
+                            let task_cid = payload.get("task_cid").and_then(|t| t.as_str()).unwrap_or("unknown");
+                            let task_type = payload.get("task_type").and_then(|t| t.as_str()).unwrap_or("unknown");
+                            let timestamp = payload.get("timestamp").and_then(|t| t.as_str()).unwrap_or("unknown");
+                            
+                            println!("  Scheduler: {}", scheduler);
+                            println!("  Task CID: {}", task_cid);
+                            println!("  Task Type: {}", task_type);
+                            println!("  Timestamp: {}", timestamp);
+                            
+                            // Show capabilities if available
+                            if let Some(capabilities) = payload.get("capabilities") {
+                                println!("  Capability Requirements:");
+                                if let Some(cap_obj) = capabilities.as_object() {
+                                    for (k, v) in cap_obj {
+                                        println!("    {} = {}", k, v);
+                                    }
+                                }
+                            }
+                            
+                            // Show selected node
+                            if let Some(selected) = payload.get("selected_node").and_then(|s| s.as_str()) {
+                                println!("  Selected Node: {}", selected);
+                            }
+                            
+                            // Print score for selected node
+                            if let Some(score) = payload.get("score").and_then(|s| s.as_f64()) {
+                                println!("  Score: {:.4}", score);
+                            }
+                            
+                            // Perform verification if requested
+                            if *verify {
+                                if let Some(credential) = payload.get("credential") {
+                                    println!("  Verifying dispatch credential...");
+                                    
+                                    // Parse the credential
+                                    match serde_json::from_value::<planetary_mesh::dispatch_credential::DispatchCredential>(credential.clone()) {
+                                        Ok(cred) => {
+                                            // Verify the credential signature
+                                            match cred.verify() {
+                                                Ok(status) => {
+                                                    match status {
+                                                        planetary_mesh::dispatch_credential::VerificationStatus::Valid => {
+                                                            println!("  ✓ Signature: Valid");
+                                                            
+                                                            // Verify against DAG record
+                                                            match cred.verify_against_dag(&store, record_cid).await {
+                                                                Ok(dag_status) => {
+                                                                    match dag_status {
+                                                                        planetary_mesh::dispatch_credential::VerificationStatus::MatchesDag => {
+                                                                            println!("  ✓ DAG Match: Valid");
+                                                                            
+                                                                            // Check if the issuer is trusted
+                                                                            let issuer_did = Did::from(cred.issuer.clone());
+                                                                            let mut is_trusted = true;
+                                                                            
+                                                                            if let Some(policy) = &policy_opt {
+                                                                                if policy.is_trusted_for(&issuer_did, planetary_mesh::trusted_did_policy::TrustLevel::Full) {
+                                                                                    println!("  ✓ Issuer Trust: Trusted");
+                                                                                } else {
+                                                                                    println!("  ✗ Issuer Trust: Not trusted");
+                                                                                    is_trusted = false;
+                                                                                }
+                                                                                
+                                                                                // Check if selected node is trusted
+                                                                                let selected_node_did = Did::from(cred.credentialSubject.selectedNode.clone());
+                                                                                if policy.is_trusted_for(&selected_node_did, planetary_mesh::trusted_did_policy::TrustLevel::Worker) {
+                                                                                    println!("  ✓ Worker Trust: Trusted");
+                                                                                } else {
+                                                                                    println!("  ✗ Worker Trust: Not trusted");
+                                                                                    is_trusted = false;
+                                                                                }
+                                                                                
+                                                                                // Check if requestor is trusted
+                                                                                let requestor_did = Did::from(cred.credentialSubject.id.clone());
+                                                                                if policy.is_trusted_for(&requestor_did, planetary_mesh::trusted_did_policy::TrustLevel::Requestor) {
+                                                                                    println!("  ✓ Requestor Trust: Trusted");
+                                                                                } else {
+                                                                                    println!("  ✗ Requestor Trust: Not trusted");
+                                                                                    is_trusted = false;
+                                                                                }
+                                                                            } else {
+                                                                                println!("  ! Trust Policy: Not checked (no policy provided)");
+                                                                            }
+                                                                            
+                                                                            // Add to verification results
+                                                                            verification_results.push(serde_json::json!({
+                                                                                "cid": record_cid.to_string(),
+                                                                                "issuer": cred.issuer,
+                                                                                "task_cid": task_cid,
+                                                                                "selected_node": cred.credentialSubject.selectedNode,
+                                                                                "requestor": cred.credentialSubject.id,
+                                                                                "signature_valid": true,
+                                                                                "dag_match": true,
+                                                                                "trusted": is_trusted,
+                                                                                "timestamp": timestamp
+                                                                            }));
+                                                                        },
+                                                                        _ => {
+                                                                            println!("  ✗ DAG Match: Invalid (credential doesn't match DAG record)");
+                                                                            
+                                                                            // Add to verification results
+                                                                            verification_results.push(serde_json::json!({
+                                                                                "cid": record_cid.to_string(),
+                                                                                "issuer": cred.issuer,
+                                                                                "task_cid": task_cid,
+                                                                                "selected_node": cred.credentialSubject.selectedNode,
+                                                                                "requestor": cred.credentialSubject.id,
+                                                                                "signature_valid": true,
+                                                                                "dag_match": false,
+                                                                                "trusted": false,
+                                                                                "timestamp": timestamp
+                                                                            }));
+                                                                        }
+                                                                    }
+                                                                },
+                                                                Err(e) => {
+                                                                    println!("  ✗ DAG Verification Error: {}", e);
+                                                                    
+                                                                    // Add to verification results
+                                                                    verification_results.push(serde_json::json!({
+                                                                        "cid": record_cid.to_string(),
+                                                                        "issuer": cred.issuer,
+                                                                        "task_cid": task_cid,
+                                                                        "error": format!("DAG verification error: {}", e),
+                                                                        "signature_valid": true,
+                                                                        "dag_match": false,
+                                                                        "trusted": false,
+                                                                        "timestamp": timestamp
+                                                                    }));
+                                                                }
+                                                            }
+                                                        },
+                                                        planetary_mesh::dispatch_credential::VerificationStatus::Unsigned => {
+                                                            println!("  ✗ Signature: Missing (unsigned credential)");
+                                                            
+                                                            // Add to verification results
+                                                            verification_results.push(serde_json::json!({
+                                                                "cid": record_cid.to_string(),
+                                                                "task_cid": task_cid,
+                                                                "error": "Unsigned credential",
+                                                                "signature_valid": false,
+                                                                "dag_match": false,
+                                                                "trusted": false,
+                                                                "timestamp": timestamp
+                                                            }));
+                                                        },
+                                                        planetary_mesh::dispatch_credential::VerificationStatus::Invalid => {
+                                                            println!("  ✗ Signature: Invalid");
+                                                            
+                                                            // Add to verification results
+                                                            verification_results.push(serde_json::json!({
+                                                                "cid": record_cid.to_string(),
+                                                                "issuer": cred.issuer,
+                                                                "task_cid": task_cid,
+                                                                "selected_node": cred.credentialSubject.selectedNode,
+                                                                "requestor": cred.credentialSubject.id,
+                                                                "error": "Invalid signature",
+                                                                "signature_valid": false,
+                                                                "dag_match": false,
+                                                                "trusted": false,
+                                                                "timestamp": timestamp
+                                                            }));
+                                                        },
+                                                        _ => {
+                                                            println!("  ? Signature: Unknown verification status");
+                                                            
+                                                            // Add to verification results
+                                                            verification_results.push(serde_json::json!({
+                                                                "cid": record_cid.to_string(),
+                                                                "task_cid": task_cid,
+                                                                "error": "Unknown verification status",
+                                                                "signature_valid": false,
+                                                                "dag_match": false,
+                                                                "trusted": false,
+                                                                "timestamp": timestamp
+                                                            }));
+                                                        }
+                                                    }
+                                                },
+                                                Err(e) => {
+                                                    println!("  ✗ Verification Error: {}", e);
+                                                    
+                                                    // Add to verification results
+                                                    verification_results.push(serde_json::json!({
+                                                        "cid": record_cid.to_string(),
+                                                        "task_cid": task_cid,
+                                                        "error": format!("Verification error: {}", e),
+                                                        "signature_valid": false,
+                                                        "dag_match": false,
+                                                        "trusted": false,
+                                                        "timestamp": timestamp
+                                                    }));
+                                                }
+                                            }
+                                        },
+                                        Err(e) => {
+                                            println!("  ✗ Credential Parse Error: {}", e);
+                                            
+                                            // Add to verification results
+                                            verification_results.push(serde_json::json!({
+                                                "cid": record_cid.to_string(),
+                                                "task_cid": task_cid,
+                                                "error": format!("Credential parse error: {}", e),
+                                                "signature_valid": false,
+                                                "dag_match": false,
+                                                "trusted": false,
+                                                "timestamp": timestamp
+                                            }));
+                                        }
+                                    }
+                                } else {
+                                    println!("  ✗ No credential found in dispatch record");
+                                    
+                                    // Add to verification results
+                                    verification_results.push(serde_json::json!({
+                                        "cid": record_cid.to_string(),
+                                        "task_cid": task_cid,
+                                        "error": "No credential found in dispatch record",
+                                        "signature_valid": false,
+                                        "dag_match": false,
+                                        "trusted": false,
+                                        "timestamp": timestamp
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Export verification results if requested
+                    if *verify && verification_results.len() > 0 {
+                        if let Some(export_path) = export_results {
+                            let export_data = serde_json::json!({
+                                "federation": federation,
+                                "timestamp": chrono::Utc::now().to_rfc3339(),
+                                "verification_results": verification_results
+                            });
+                            
+                            fs::write(export_path, serde_json::to_string_pretty(&export_data)?)
+                                .context("Failed to write verification results file")?;
+                                
+                            println!("\nVerification results exported to: {}", export_path.display());
+                        }
+                        
+                        // Show summary
+                        let valid_count = verification_results.iter()
+                            .filter(|r| r["signature_valid"].as_bool().unwrap_or(false) && 
+                                   r["dag_match"].as_bool().unwrap_or(false) && 
+                                   r["trusted"].as_bool().unwrap_or(false))
+                            .count();
+                            
+                        println!("\nVerification Summary:");
+                        println!("  Total Credentials: {}", verification_results.len());
+                        println!("  Valid & Trusted: {}", valid_count);
+                        println!("  Invalid or Untrusted: {}", verification_results.len() - valid_count);
+                    }
+                },
+                "manifest" => {
+                    println!("\nNode Manifest Audit for Federation: {}", federation);
+                    println!("Feature not fully implemented yet");
+                    // TODO: Implement manifest audit display similar to dispatch
+                },
+                "requirements" => {
+                    println!("\nCapability Requirements Audit for Federation: {}", federation);
+                    println!("Feature not fully implemented yet");
+                    // TODO: Implement requirements audit display
+                },
+                _ => {
+                    return Err(anyhow::anyhow!("Unknown audit type: {}. Expected 'dispatch', 'manifest', or 'requirements'", audit_type));
+                }
+            }
+            
+            Ok(())
+        },
     }
 }
 
@@ -3085,32 +3566,30 @@ async fn handle_dag_sync_command(cmd: &DagSyncCommands) -> Result<()> {
                 }, 50);
             }
             
-            if let Some(peers) = founding_dids {
-                for peer in peers {
-                    sync_service.add_peer(icn_types::dag::FederationPeer {
-                        id: peer.clone(),
-                        endpoint: peer.clone(),
-                        federation_id: federation.clone(),
-                        metadata: None,
-                    }, 50);
-                }
+            // Add founding_dids as peers
+            let founding_dids = founding_dids.clone();
+            for peer in &founding_dids {
+                sync_service.add_peer(icn_types::dag::FederationPeer {
+                    id: peer.clone(),
+                    endpoint: peer.clone(),
+                    federation_id: federation.clone(),
+                    metadata: None,
+                }, 50);
             }
             
             // Set minimum quorum
-            sync_service.set_min_quorum(peers.len() + 1);
+            sync_service.set_min_quorum(founding_dids.len() + 1);
             
             // Start the genesis DAG state
             println!("Creating genesis DAG state for federation: {}", federation);
             println!("Trust level: 50");
-            println!("Minimum quorum: {}", peers.len() + 1);
+            println!("Minimum quorum: {}", founding_dids.len() + 1);
             
             if *mdns {
                 println!("mDNS discovery enabled");
             }
             
-            if let Some(peers) = founding_dids {
-                println!("Founding members: {}", peers.join(", "));
-            }
+            println!("Founding members: {}", founding_dids.join(", "));
             
             match sync_service.create_genesis_dag_state().await {
                 Ok(result) => {
@@ -3154,10 +3633,10 @@ async fn handle_dag_sync_command(cmd: &DagSyncCommands) -> Result<()> {
                     // Record metrics for genesis state creation
                     if let Ok(metrics_context) = init_metrics(&federation, None) {
                         metrics_context.record_genesis_state_created(
-                            &result.state_cid,
+                            &result.state_cid.to_string(),
                             &result.policy_id,
-                            result.state_proof.signatures.len() as u64,
-                            result.state_proof.previous_anchors.len() as u64
+                            result.signatures.len() as u64,
+                            result.previous_anchors.len() as u64
                         );
                     }
                     

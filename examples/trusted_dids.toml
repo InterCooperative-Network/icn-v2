@@ -1,0 +1,40 @@
+# Sample Trusted DIDs Policy for ICN Mesh Federation
+# This file defines which DIDs are authorized to participate in the federation
+
+# Basic configuration
+federation_id = "test-federation"
+allow_dag_updates = true
+
+# Fully trusted entities (can perform all actions)
+[[trusted_dids]]
+did = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
+level = "Full"
+notes = "Federation coordinator"
+
+# Manifest providers (can submit node manifests)
+[[trusted_dids]]
+did = "did:key:z6MkjchhfUsD6mmvni8mCdXHw216Xrm9bQe2mBH1P5RDjVJG"
+level = "ManifestProvider"
+notes = "Cloud compute provider"
+
+# Requestors (can submit task requests)
+[[trusted_dids]]
+did = "did:key:z6MknGc3ocHs3zdPiJbnaaqDi58WdZaL3X6jpo4FpDcVgW9x"
+level = "Requestor"
+notes = "Research organization"
+
+# Workers (can execute tasks)
+[[trusted_dids]]
+did = "did:key:z6MkhyDx5DjrfudJDK9oYM1rhxRtPPphPGQRbwk6jgr9dVRQ"
+level = "Worker"
+notes = "Edge compute node"
+
+[[trusted_dids]]
+did = "did:key:z6MkgYAZjnMQQNrR7xz5wKBkjEqemgydPnS9umwBNFZb8uLG"
+level = "Worker"
+notes = "Volunteer compute node"
+
+# Admin DIDs for policy management
+policy_admins = [
+  "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
+] 
