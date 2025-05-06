@@ -45,13 +45,13 @@ impl Deref for Cid {
 }
 
 // --- Conversions ---
-impl From<ExternalCid> for Cid {
-    fn from(cid: ExternalCid) -> Self {
+impl From<cid::CidGeneric<64>> for Cid {
+    fn from(cid: cid::CidGeneric<64>) -> Self {
         Cid(cid)
     }
 }
 
-impl From<Cid> for ExternalCid {
+impl From<Cid> for cid::CidGeneric<64> {
     fn from(cid: Cid) -> Self {
         cid.0
     }

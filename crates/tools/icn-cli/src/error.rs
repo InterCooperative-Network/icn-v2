@@ -35,6 +35,9 @@ pub enum CliError {
     #[error("Verification Error: {0}")]
     Verification(String),
 
+    #[error("Invalid CID Format: {0}")]
+    InvalidCidFormat(String),
+
     // #[error("Prometheus Metric Error: {0}")]
     // Metrics(#[from] prometheus::Error), // Commented out
 

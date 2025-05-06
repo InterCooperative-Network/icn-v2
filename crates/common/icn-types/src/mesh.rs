@@ -42,4 +42,15 @@ pub struct Bid {
     pub confidence: f32, // Placeholder for scoring metric (0.0 - 1.0)
     pub offered_capabilities: Vec<ResourceType>, // What the node *offers* for this bid
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>, // Bid expiration
+}
+
+/// Represents the status of a job in the mesh network.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum JobStatus {
+    Pending,
+    Scheduled,
+    Running { progress_percent: u8 },
+    Completed { result_cid: Option<Cid> }, // Cid from icn_core_types (imported at top of file)
+    Failed { error_message: String },
+    NotFound, // Used if the job_cid doesn't correspond to a known job
 } 
