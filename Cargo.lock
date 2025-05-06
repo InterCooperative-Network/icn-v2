@@ -1556,6 +1556,7 @@ dependencies = [
  "serde_bytes",
  "serde_ipld_dagcbor 0.2.2",
  "serde_json",
+ "sha2",
  "thiserror 1.0.69",
  "tokio",
  "tracing",

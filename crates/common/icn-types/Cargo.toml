@@ -38,6 +38,8 @@ libp2p-swarm = { version = "0.44", optional = true }
 # Add tracing
 tracing = { version = "0.1", optional = true }
 
+sha2 = "0.10.9"
+
 [dev-dependencies]
 tokio = { version = "1.27", features = ["full", "test-util"] }
 icn-core-types = { path = "../icn-core-types" } # ADDED

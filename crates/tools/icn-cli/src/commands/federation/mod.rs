@@ -4,6 +4,7 @@ use crate::error::CliError;
 pub mod bootstrap;
 pub mod verify;
 pub mod export;
+pub mod import;
 
 #[derive(clap::Subcommand, Debug)]
 pub enum FederationCommands {
@@ -80,6 +81,29 @@ pub enum FederationCommands {
         #[clap(long = "include", value_name = "PATH")]
         include_paths: Vec<String>,
     },
+
+    /// Import a federation from a CAR archive
+    Import {
+        /// Path to the CAR archive file
+        #[clap(long)]
+        archive_path: String,
+
+        /// Directory to output the imported federation files
+        #[clap(long)]
+        output_dir: Option<String>,
+
+        /// Perform verification only without writing files
+        #[clap(long, default_value = "false")]
+        verify_only: bool,
+
+        /// Override existing federation with the same name
+        #[clap(long, default_value = "false")]
+        override_existing: bool,
+        
+        /// Skip importing federation keys
+        #[clap(long, default_value = "false")]
+        no_keys: bool,
+    },
 }
 
 pub async fn handle_federation_command(
@@ -133,6 +157,22 @@ pub async fn handle_federation_command(
                 output.as_deref(),
                 *include_keys,
                 include_paths,
+            ).await?;
+        }
+        FederationCommands::Import {
+            archive_path,
+            output_dir,
+            verify_only,
+            override_existing,
+            no_keys,
+        } => {
+            import::run_import(
+                context,
+                archive_path,
+                output_dir.as_deref(),
+                *verify_only,
+                *override_existing,
+                *no_keys,
             ).await?;
         }
     }
