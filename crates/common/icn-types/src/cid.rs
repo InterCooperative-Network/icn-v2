@@ -4,6 +4,7 @@ pub use cid::Cid as ExternalCid;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::convert::TryFrom;
 use std::ops::Deref;
+use std::fmt;
 
 /// A wrapper around the `cid::Cid` type to provide Serialize/Deserialize implementations.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -52,5 +53,12 @@ impl<'de> Deserialize<'de> for Cid {
         ExternalCid::try_from(bytes)
             .map(Cid)
             .map_err(serde::de::Error::custom)
+    }
+}
+
+// Implement Display to format the CID as a string
+impl fmt::Display for Cid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0.to_string())
     }
 } 

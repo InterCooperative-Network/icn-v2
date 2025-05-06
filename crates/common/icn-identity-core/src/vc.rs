@@ -1,10 +1,12 @@
-use icn_types::{Cid, Did};
+// use icn_types::{Cid, Did}; // Remove unused Cid import
+use icn_types::Did;
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use ed25519_dalek::Signature; // Import Signature
+use ed25519_dalek::{Signature, Verifier}; // Import Verifier
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD_NO_PAD as BASE64_ENGINE;
+use std::convert::{TryFrom, TryInto}; // Import TryInto and TryFrom
 
 // Basic structure mirroring W3C VC Data Model concepts
 // Needs refinement with proper context, proof types etc.
@@ -106,16 +108,19 @@ impl VcVerifier {
     ) -> Result<(), String> {
         let proof = vc.proof.as_ref().ok_or("Credential has no proof")?;
 
-        // 1. Resolve proof.verification_method (DID) to PublicKey
-        //    let public_key = DidKey::public_key_from_did(&proof.verification_method)?;
-        let public_key = super::did::DidKey::public_key_from_did(&proof.verification_method)
+        let verifying_key = super::did::DidKey::verifying_key_from_did(&proof.verification_method)
             .map_err(|e| format!("Failed to get public key from DID: {}", e))?;
 
         // 2. Decode the signature from proof.proof_value (base64)
         let signature_bytes = BASE64_ENGINE.decode(&proof.proof_value)
              .map_err(|e| format!("Failed to decode proof signature: {}", e))?;
-        let signature = Signature::from_bytes(&signature_bytes)
-            .map_err(|e| format!("Invalid signature format: {}", e))?;
+
+        // Convert to fixed-size array and then try_from
+        let signature_array: &[u8; ed25519_dalek::SIGNATURE_LENGTH] = signature_bytes.as_slice()
+            .try_into()
+            .map_err(|_| format!("Invalid signature length: expected {}, got {}", ed25519_dalek::SIGNATURE_LENGTH, signature_bytes.len()))?;
+        let signature = Signature::try_from(signature_array) // Use try_from
+            .map_err(|e| format!("Invalid signature format: {}", e))?; // Now map_err works on Result
 
         // 3. Create the signing input by removing the proof and canonicalizing
         let mut vc_data_to_verify = vc.clone();
@@ -123,9 +128,9 @@ impl VcVerifier {
         let verification_input_bytes = serde_json::to_vec_pretty(&vc_data_to_verify)
             .map_err(|e| format!("Failed to serialize VC for verification: {}", e))?;
 
-        // 4. Verify the signature
-        public_key.verify(&verification_input_bytes, &signature)
-            .map_err(|e| format!("Signature verification failed: {}", e))?; // Use ? directly
+        // 4. Verify the signature using the Verifier trait
+        verifying_key.verify(&verification_input_bytes, &signature)
+            .map_err(|e| format!("Signature verification failed: {}", e))?;
 
         Ok(())
     }

@@ -1,8 +1,9 @@
-use ed25519_dalek::PublicKey; // Restore direct import
+use ed25519_dalek::VerifyingKey; // Use VerifyingKey instead of PublicKey
 use serde::{Deserialize, Serialize};
-use base64::engine::general_purpose::STANDARD_NO_PAD as BASE64_ENGINE; // Use Engine API
-use base64::Engine;
+// use base64::engine::general_purpose::STANDARD_NO_PAD as BASE64_ENGINE; // Removed unused
+// use base64::Engine; // Removed unused
 use std::fmt; // Import fmt
+use std::convert::TryInto; // Import TryInto
 
 /// Represents a Decentralized Identifier, currently supporting did:key with Ed25519.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
@@ -14,9 +15,9 @@ pub struct Did {
 }
 
 impl Did {
-    pub fn new(public_key: &PublicKey) -> Self {
+    pub fn new(verifying_key: &VerifyingKey) -> Self {
         Did {
-            public_key_bytes: public_key.to_bytes().to_vec(),
+            public_key_bytes: verifying_key.to_bytes().to_vec(),
         }
     }
 
@@ -32,6 +33,14 @@ impl Did {
     // Method to get the raw public key bytes
     pub fn public_key_bytes(&self) -> &[u8] {
         &self.public_key_bytes
+    }
+
+    // Add a method to attempt conversion back to VerifyingKey
+    pub fn to_verifying_key(&self) -> Result<VerifyingKey, ed25519_dalek::SignatureError> {
+        let key_bytes: &[u8; 32] = self.public_key_bytes[..]
+            .try_into()
+            .map_err(|_| ed25519_dalek::SignatureError::new())?; // Convert slice to array, handle potential length error
+        VerifyingKey::from_bytes(key_bytes)
     }
 }
 

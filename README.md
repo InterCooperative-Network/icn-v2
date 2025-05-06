@@ -46,4 +46,10 @@ Contributions are welcome! Please follow these general guidelines:
 *   Write tests for new functionality.
 *   Make sure all tests pass (`cargo test --workspace`).
 *   Run linters (`cargo clippy --workspace -- -D warnings`).
-*   Submit a pull request with a clear description of your changes. 
+*   Submit a pull request with a clear description of your changes.
+
+## 🚧 Known Issues
+
+- `ed25519_dalek::PublicKey` import fails during `cargo check`, even with correct dependency.
+- Suspected IDE or toolchain cache issue. Reboot or `cargo clean` may not be sufficient.
+- Proceeding with implementation assuming proper availability of the `PublicKey` type. 

@@ -4,3 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+wasmtime = { version = "12", features = ["wat", "async"] }
+anyhow = "1.0"
+async-trait = "0.1"
+tokio = { version = "1", features = ["full"] }
+icn-types = { path = "../../common/icn-types" }
+icn-identity-core = { path = "../../common/icn-identity-core" }
+
+[dev-dependencies]
+wat = "1.0"

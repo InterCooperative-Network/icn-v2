@@ -1,8 +1,10 @@
-use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signer, Signature, Verifier, SIGNATURE_LENGTH, PUBLIC_KEY_LENGTH};
+use ed25519_dalek::{
+    Signature, Signer, SigningKey, Verifier, VerifyingKey, PUBLIC_KEY_LENGTH
+};
 use icn_types::Did;
 use rand::rngs::OsRng;
 use thiserror::Error;
-use multibase;
+use multibase::Base;
 
 #[derive(Error, Debug)]
 pub enum DidKeyError {
@@ -20,10 +22,11 @@ pub enum DidKeyError {
     InvalidMulticodecPrefix(Vec<u8>),
 }
 
-/// Manages an Ed25519 keypair associated with a DID.
-#[derive(Debug)] // Avoid Clone for keypairs
+/// Manages an Ed25519 keypair (SigningKey + VerifyingKey) associated with a DID.
+#[derive(Debug)]
 pub struct DidKey {
-    keypair: Keypair,
+    signing_key: SigningKey,
+    verifying_key: VerifyingKey,
     did: Did,
 }
 
@@ -34,9 +37,10 @@ impl DidKey {
     /// Generate a new DidKey using OS randomness.
     pub fn new() -> Self {
         let mut csprng = OsRng;
-        let keypair = Keypair::generate(&mut csprng);
-        let did = Did::new(&keypair.public);
-        DidKey { keypair, did }
+        let signing_key = SigningKey::generate(&mut csprng);
+        let verifying_key = signing_key.verifying_key();
+        let did = Did::new(&verifying_key);
+        DidKey { signing_key, verifying_key: verifying_key.clone(), did }
     }
 
     /// Get the DID associated with this keypair.
@@ -44,20 +48,19 @@ impl DidKey {
         &self.did
     }
 
-    /// Get the public key.
-    pub fn public_key(&self) -> &PublicKey {
-        &self.keypair.public
+    /// Get the verifying key (public key).
+    pub fn verifying_key(&self) -> &VerifyingKey {
+        &self.verifying_key
     }
 
     /// Sign a message using the secret key.
     pub fn sign(&self, message: &[u8]) -> Signature {
-        // Use sign_prehashed for larger messages if needed
-        self.keypair.sign(message)
+        self.signing_key.sign(message)
     }
 
     /// Verify a signature against the public key.
     pub fn verify(&self, message: &[u8], signature: &Signature) -> Result<(), DidKeyError> {
-        self.keypair.public.verify(message, signature).map_err(DidKeyError::VerificationError)
+        self.verifying_key.verify(message, signature).map_err(DidKeyError::VerificationError)
     }
 
     /// Get the DID string representation (did:key:z...).
@@ -65,26 +68,31 @@ impl DidKey {
        self.did.to_string() // Use the implementation from icn-types
     }
 
-    /// Create a verifier (PublicKey) from a did:key string.
-    pub fn public_key_from_did(did_str: &str) -> Result<PublicKey, DidKeyError> {
+    /// Create a verifier (VerifyingKey) from a did:key string.
+    pub fn verifying_key_from_did(did_str: &str) -> Result<VerifyingKey, DidKeyError> {
         if !did_str.starts_with("did:key:") {
             return Err(DidKeyError::UnsupportedDidMethod(did_str.to_string()));
         }
-        let encoded_key = &did_str[8..]; // Skip "did:key:"
-        if !encoded_key.starts_with('z') { // Check for base58btc encoding
-             return Err(DidKeyError::InvalidDidString("Expected base58btc encoding (prefix 'z')".to_string()));
-        }
+        let encoded_key = &did_str[8..];
 
-        let decoded_bytes = multibase::decode(encoded_key)?;
+        let (base, decoded_bytes) = multibase::decode(encoded_key)?;
+        if base != Base::Base58Btc {
+            return Err(DidKeyError::InvalidDidString("Expected base58btc encoding (prefix 'z')".to_string()));
+        }
 
         if !decoded_bytes.starts_with(Self::ED25519_MULTICODEC_PREFIX) {
-            return Err(DidKeyError::InvalidMulticodecPrefix(decoded_bytes[..2].to_vec()));
+            return Err(DidKeyError::InvalidMulticodecPrefix(decoded_bytes.get(..2).unwrap_or_default().to_vec()));
         }
 
-        let key_bytes = &decoded_bytes[Self::ED25519_MULTICODEC_PREFIX.len()..];
+        let prefix_len = Self::ED25519_MULTICODEC_PREFIX.len();
+        let key_bytes = decoded_bytes.get(prefix_len..)
+            .ok_or(DidKeyError::InvalidKeyBytesLength { expected: PUBLIC_KEY_LENGTH + prefix_len, got: decoded_bytes.len() })?;
 
-        PublicKey::from_bytes(key_bytes).map_err(|e| DidKeyError::VerificationError(e))
+        let key_array: &[u8; PUBLIC_KEY_LENGTH] = key_bytes
+            .try_into()
+            .map_err(|_| DidKeyError::InvalidKeyBytesLength { expected: PUBLIC_KEY_LENGTH, got: key_bytes.len()})?;
 
+        VerifyingKey::from_bytes(key_array).map_err(DidKeyError::VerificationError)
     }
 
     // TODO: Add methods for secure serialization/deserialization of the Keypair
@@ -100,7 +108,10 @@ mod tests {
         let did_key = DidKey::new();
         let message = b"Test message for signing";
         let signature = did_key.sign(message);
+        // Verify using the key itself
         assert!(did_key.verify(message, &signature).is_ok());
+        // Verify using the verifying key directly
+        assert!(did_key.verifying_key().verify(message, &signature).is_ok());
     }
 
     #[test]
@@ -110,21 +121,19 @@ mod tests {
 
         assert!(did_string.starts_with("did:key:z"));
 
-        let recovered_pk = DidKey::public_key_from_did(&did_string).expect("Failed to recover public key from DID");
-        assert_eq!(did_key.public_key(), &recovered_pk);
+        let recovered_vk = DidKey::verifying_key_from_did(&did_string).expect("Failed to recover public key from DID");
+        assert_eq!(did_key.verifying_key(), &recovered_vk);
 
-        // Verify a signature using the recovered key
         let message = b"Another test";
         let signature = did_key.sign(message);
-        assert!(recovered_pk.verify(message, &signature).is_ok());
+        assert!(recovered_vk.verify(message, &signature).is_ok());
     }
 
      #[test]
     fn test_invalid_did_parsing() {
-        assert!(DidKey::public_key_from_did("did:example:123").is_err());
-        assert!(DidKey::public_key_from_did("did:key:abc").is_err()); // Invalid multibase prefix
-        // Invalid multicodec (needs correct length + prefix)
+        assert!(DidKey::verifying_key_from_did("did:example:123").is_err());
+        assert!(DidKey::verifying_key_from_did("did:key:abc").is_err()); // Invalid multibase prefix
         let invalid_encoded = "z" .to_string() + &multibase::encode(multibase::Base::Base58Btc, &[0x01, 0x02]);
-        assert!(DidKey::public_key_from_did(&format!("did:key:{}", invalid_encoded)).is_err());
+        assert!(DidKey::verifying_key_from_did(&format!("did:key:{}", invalid_encoded)).is_err());
     }
 } 

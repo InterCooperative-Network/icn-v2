@@ -1,6 +1,6 @@
 use crate::cid::Cid;
 use crate::identity::Did;
-use crate::quorum::QuorumProof;
+// use crate::quorum::QuorumProof; // Comment out unused import for now
 use chrono::{DateTime, Utc};
 use ed25519_dalek::Signature;
 use serde::{Deserialize, Serialize};
