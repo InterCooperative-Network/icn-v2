@@ -1,0 +1,1 @@
+//! agoranet-core placeholder
