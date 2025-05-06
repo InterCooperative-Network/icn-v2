@@ -3,7 +3,7 @@
 use crate::cid::Cid;
 use crate::dag::{DagError, DagStore, SignedDagNode};
 use crate::identity::Did;
-use rocksdb::{ColumnFamily, ColumnFamilyDescriptor, Options, DB};
+use rocksdb::{ColumnFamily, ColumnFamilyDescriptor, Options, DB, WriteBatch};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::sync::{Arc, RwLock};
@@ -83,14 +83,28 @@ impl RocksDbDagStore {
             .ok_or_else(|| DagError::StorageError(format!("Column family not found: {}", name)))
     }
 
-    /// Serialize a DAG node to bytes
+    /// Serialize a DAG node to bytes using DAG-CBOR
     fn serialize_node(node: &SignedDagNode) -> Result<Vec<u8>, DagError> {
-        serde_json::to_vec(node).map_err(DagError::SerializationError)
+        serde_ipld_dagcbor::to_vec(node)
+             .map_err(|e| DagError::SerializationError(format!("DAG-CBOR serialization error (node): {}", e)))
     }
 
-    /// Deserialize a DAG node from bytes
+    /// Deserialize a DAG node from DAG-CBOR bytes
     fn deserialize_node(bytes: &[u8]) -> Result<SignedDagNode, DagError> {
-        serde_json::from_slice(bytes).map_err(DagError::SerializationError)
+        serde_ipld_dagcbor::from_slice(bytes)
+            .map_err(|e| DagError::SerializationError(format!("DAG-CBOR deserialization error (node): {}", e)))
+    }
+    
+    /// Serialize a list of CID bytes using DAG-CBOR
+    fn serialize_cid_list(list: &Vec<Vec<u8>>) -> Result<Vec<u8>, DagError> {
+        serde_ipld_dagcbor::to_vec(list)
+            .map_err(|e| DagError::SerializationError(format!("DAG-CBOR serialization error (CID list): {}", e)))
+    }
+    
+    /// Deserialize a list of CID bytes from DAG-CBOR bytes
+    fn deserialize_cid_list(bytes: &[u8]) -> Result<Vec<Vec<u8>>, DagError> {
+        serde_ipld_dagcbor::from_slice(bytes)
+            .map_err(|e| DagError::SerializationError(format!("DAG-CBOR deserialization error (CID list): {}", e)))
     }
 
     /// Serialize a CID to use as a key
@@ -142,8 +156,7 @@ impl RocksDbDagStore {
                 .map_err(|e| DagError::StorageError(format!("Failed to get children: {}", e)))?;
             
             let mut children: Vec<Vec<u8>> = match existing {
-                Some(bytes) => serde_json::from_slice(&bytes)
-                    .map_err(|e| DagError::StorageError(format!("Failed to deserialize children: {}", e)))?,
+                Some(bytes) => Self::deserialize_cid_list(&bytes)?,
                 None => Vec::new(),
             };
             
@@ -151,8 +164,7 @@ impl RocksDbDagStore {
             children.push(node_key.clone());
             
             // Store updated children list
-            let serialized = serde_json::to_vec(&children)
-                .map_err(|e| DagError::StorageError(format!("Failed to serialize children: {}", e)))?;
+            let serialized = Self::serialize_cid_list(&children)?;
                 
             self.db.put_cf(cf_children, &parent_key, &serialized)
                 .map_err(|e| DagError::StorageError(format!("Failed to update children: {}", e)))?;
@@ -173,8 +185,7 @@ impl RocksDbDagStore {
             .map_err(|e| DagError::StorageError(format!("Failed to get author nodes: {}", e)))?;
         
         let mut author_nodes: Vec<Vec<u8>> = match existing {
-            Some(bytes) => serde_json::from_slice(&bytes)
-                .map_err(|e| DagError::StorageError(format!("Failed to deserialize author nodes: {}", e)))?,
+            Some(bytes) => Self::deserialize_cid_list(&bytes)?,
             None => Vec::new(),
         };
         
@@ -182,8 +193,7 @@ impl RocksDbDagStore {
         author_nodes.push(node_key);
         
         // Store updated author nodes list
-        let serialized = serde_json::to_vec(&author_nodes)
-            .map_err(|e| DagError::StorageError(format!("Failed to serialize author nodes: {}", e)))?;
+        let serialized = Self::serialize_cid_list(&author_nodes)?;
             
         self.db.put_cf(cf_authors, &author_key, &serialized)
             .map_err(|e| DagError::StorageError(format!("Failed to update author nodes: {}", e)))?;
@@ -210,8 +220,7 @@ impl RocksDbDagStore {
             .map_err(|e| DagError::StorageError(format!("Failed to get payload type nodes: {}", e)))?;
         
         let mut payload_nodes: Vec<Vec<u8>> = match existing {
-            Some(bytes) => serde_json::from_slice(&bytes)
-                .map_err(|e| DagError::StorageError(format!("Failed to deserialize payload type nodes: {}", e)))?,
+            Some(bytes) => Self::deserialize_cid_list(&bytes)?,
             None => Vec::new(),
         };
         
@@ -219,8 +228,7 @@ impl RocksDbDagStore {
         payload_nodes.push(node_key);
         
         // Store updated payload type nodes list
-        let serialized = serde_json::to_vec(&payload_nodes)
-            .map_err(|e| DagError::StorageError(format!("Failed to serialize payload type nodes: {}", e)))?;
+        let serialized = Self::serialize_cid_list(&payload_nodes)?;
             
         self.db.put_cf(cf_payload_types, payload_key, &serialized)
             .map_err(|e| DagError::StorageError(format!("Failed to update payload type nodes: {}", e)))?;
@@ -233,37 +241,113 @@ impl RocksDbDagStore {
 #[cfg(not(feature = "async"))]
 impl DagStore for RocksDbDagStore {
     fn add_node(&mut self, mut node: SignedDagNode) -> Result<Cid, DagError> {
-        // Ensure the node has a CID
-        let cid = node.ensure_cid()?;
-        let node_key = Self::cid_to_key(&cid);
-        
-        // Check if the node already exists
+        let node_cid = node.ensure_cid()?; // Ensure CID is computed before serialization
+        let node_key = Self::cid_to_key(&node_cid);
+        let node_bytes = Self::serialize_node(&node)?;
+
+        // --- Start Atomic Write Batch ---
+        let mut batch = WriteBatch::default();
+
+        // 1. Add node data
         let cf_nodes = self.cf_handle(CF_NODES)?;
-        if self.db.get_cf(cf_nodes, &node_key)?.is_some() {
-            return Ok(cid); // Node already exists, return the CID
-        }
-        
-        // Validate parent references
+        batch.put_cf(cf_nodes, &node_key, &node_bytes);
+
+        // 2. Update tips
+        let cf_tips = self.cf_handle(CF_TIPS)?;
+        // Add this node as a potential tip
+        batch.put_cf(cf_tips, &node_key, &[1]);
+        // Remove parents from tips
         for parent_cid in &node.node.parents {
             let parent_key = Self::cid_to_key(parent_cid);
-            if self.db.get_cf(cf_nodes, &parent_key)?.is_none() {
-                return Err(DagError::InvalidParentRefs);
-            }
+            batch.delete_cf(cf_tips, &parent_key);
         }
 
-        // Serialize and store the node
-        let node_data = Self::serialize_node(&node)?;
-        self.db
-            .put_cf(cf_nodes, &node_key, &node_data)
-            .map_err(|e| DagError::StorageError(format!("Failed to store node: {}", e)))?;
-        
-        // Update indexes
-        self.update_tips(&node)?;
-        self.update_children(&node)?;
-        self.update_authors(&node)?;
-        self.update_payload_types(&node)?;
-        
-        Ok(cid)
+        // 3. Update children index
+        let cf_children = self.cf_handle(CF_CHILDREN)?;
+        for parent_cid in &node.node.parents {
+            let parent_key = Self::cid_to_key(parent_cid);
+            // Get existing children list (Read operation, outside batch)
+            let existing = self.db.get_cf(cf_children, &parent_key)
+                .map_err(|e| DagError::StorageError(format!("Failed to get children: {}", e)))?;
+
+            let mut children: Vec<Vec<u8>> = match existing {
+                Some(bytes) => Self::deserialize_cid_list(&bytes)?,
+                None => Vec::new(),
+            };
+            // Add new child
+            if !children.contains(&node_key) { // Avoid duplicates if node added multiple times?
+                children.push(node_key.clone());
+            }
+            // Store updated children list in batch (using DAG-CBOR)
+            let serialized_children = Self::serialize_cid_list(&children)?;
+            batch.put_cf(cf_children, &parent_key, &serialized_children);
+        }
+
+        // 4. Update author index
+        let cf_authors = self.cf_handle(CF_AUTHORS)?;
+        let author_key = node.node.author.to_string().into_bytes();
+        // Get existing nodes list (Read operation, outside batch)
+        let existing_author_nodes = self.db.get_cf(cf_authors, &author_key)
+            .map_err(|e| DagError::StorageError(format!("Failed to get author nodes: {}", e)))?;
+
+        let mut author_nodes: Vec<Vec<u8>> = match existing_author_nodes {
+            Some(bytes) => Self::deserialize_cid_list(&bytes)?,
+            None => Vec::new(),
+        };
+        // Add new node
+        if !author_nodes.contains(&node_key) { // Avoid duplicates
+            author_nodes.push(node_key.clone());
+        }
+        // Store updated author nodes list in batch (using DAG-CBOR)
+        let serialized_author_nodes = Self::serialize_cid_list(&author_nodes)?;
+        batch.put_cf(cf_authors, &author_key, &serialized_author_nodes);
+
+
+        // 5. Update payload type index
+        let cf_payload_types = self.cf_handle(CF_PAYLOAD_TYPES)?;
+        let payload_type_str = match &node.node.payload {
+            crate::dag::DagPayload::Raw(_) => "raw",
+            crate::dag::DagPayload::Json(_) => "json",
+            crate::dag::DagPayload::Reference(_) => "reference",
+            crate::dag::DagPayload::TrustBundle(_) => "TrustBundle",
+            crate::dag::DagPayload::ExecutionReceipt(_) => "ExecutionReceipt",
+            // Add other types as needed
+        };
+        let payload_type_key = payload_type_str.as_bytes().to_vec();
+        // Get existing nodes list (Read operation, outside batch)
+        let existing_payload_nodes = self.db.get_cf(cf_payload_types, &payload_type_key)
+             .map_err(|e| DagError::StorageError(format!("Failed to get payload type nodes: {}", e)))?;
+
+        let mut payload_nodes: Vec<Vec<u8>> = match existing_payload_nodes {
+            Some(bytes) => Self::deserialize_cid_list(&bytes)?,
+            None => Vec::new(),
+        };
+        // Add new node
+        if !payload_nodes.contains(&node_key) { // Avoid duplicates
+             payload_nodes.push(node_key.clone());
+        }
+         // Store updated payload nodes list in batch (using DAG-CBOR)
+        let serialized_payload_nodes = Self::serialize_cid_list(&payload_nodes)?;
+        batch.put_cf(cf_payload_types, &payload_type_key, &serialized_payload_nodes);
+
+        // --- Commit the Atomic Write Batch ---
+        self.db.write(batch).map_err(|e| {
+            DagError::StorageError(format!("Atomic batch write failed: {}", e))
+        })?;
+
+        // --- Update In-Memory Cache (After successful commit) ---
+        // Add parents to non-tips cache
+        { // Scope the lock guard
+            let mut non_tips = self
+                .non_tips
+                .write()
+                .map_err(|e| DagError::StorageError(format!("Failed to acquire write lock for cache: {}", e)))?;
+            for parent_cid in &node.node.parents {
+                 non_tips.insert(Self::cid_to_key(parent_cid));
+            }
+        } // Lock guard dropped here
+
+        Ok(node_cid)
     }
 
     fn get_node(&self, cid: &Cid) -> Result<SignedDagNode, DagError> {
@@ -341,8 +425,7 @@ impl DagStore for RocksDbDagStore {
             
             // Get children of the current node
             if let Ok(Some(children_data)) = self.db.get_cf(cf_children, &current) {
-                let children: Vec<Vec<u8>> = serde_json::from_slice(&children_data)
-                    .map_err(|e| DagError::StorageError(format!("Failed to deserialize children: {}", e)))?;
+                let children: Vec<Vec<u8>> = Self::deserialize_cid_list(&children_data)?;
                 
                 // Decrease incoming count for each child and add to queue if no more incoming edges
                 for child in children {
@@ -371,17 +454,25 @@ impl DagStore for RocksDbDagStore {
         
         match self.db.get_cf(cf_authors, &author_key)? {
             Some(data) => {
-                let node_keys: Vec<Vec<u8>> = serde_json::from_slice(&data)
-                    .map_err(|e| DagError::StorageError(format!("Failed to deserialize author nodes: {}", e)))?;
+                // Deserialize list using DAG-CBOR
+                let node_keys: Vec<Vec<u8>> = Self::deserialize_cid_list(&data)?;
                 
-                let mut nodes = Vec::new();
+                let mut nodes = Vec::with_capacity(node_keys.len());
                 for key in node_keys {
-                    if let Some(node_data) = self.db.get_cf(cf_nodes, &key)? {
-                        let node = Self::deserialize_node(&node_data)?;
-                        nodes.push(node);
+                    // Using multi_get_cf for potential performance improvement
+                    // Although error handling becomes slightly more complex
+                    match self.db.get_cf(cf_nodes, &key)? {
+                        Some(node_data) => {
+                            let node = Self::deserialize_node(&node_data)?;
+                            nodes.push(node);
+                        },
+                        None => {
+                             // Log or handle missing node referenced in index? Maybe continue?
+                             eprintln!("Warning: Node key {:?} found in author index but not in nodes CF.", key);
+                        }
                     }
                 }
-                
+                // Consider using multi_get_cf if performance is critical and error handling adjusted
                 Ok(nodes)
             },
             None => Ok(Vec::new()),
@@ -395,17 +486,21 @@ impl DagStore for RocksDbDagStore {
         
         match self.db.get_cf(cf_payload_types, payload_key)? {
             Some(data) => {
-                let node_keys: Vec<Vec<u8>> = serde_json::from_slice(&data)
-                    .map_err(|e| DagError::StorageError(format!("Failed to deserialize payload type nodes: {}", e)))?;
+                // Deserialize list using DAG-CBOR
+                let node_keys: Vec<Vec<u8>> = Self::deserialize_cid_list(&data)?;
                 
-                let mut nodes = Vec::new();
+                let mut nodes = Vec::with_capacity(node_keys.len());
                 for key in node_keys {
-                    if let Some(node_data) = self.db.get_cf(cf_nodes, &key)? {
-                        let node = Self::deserialize_node(&node_data)?;
-                        nodes.push(node);
+                     match self.db.get_cf(cf_nodes, &key)? {
+                        Some(node_data) => {
+                            let node = Self::deserialize_node(&node_data)?;
+                            nodes.push(node);
+                        },
+                        None => {
+                             eprintln!("Warning: Node key {:?} found in payload index but not in nodes CF.", key);
+                        }
                     }
                 }
-                
                 Ok(nodes)
             },
             None => Ok(Vec::new()),
@@ -452,10 +547,9 @@ impl DagStore for RocksDbDagStore {
                 break;
             }
             
-            // Get children of the current node
+            // Get children of the current node using DAG-CBOR for list
             if let Ok(Some(children_data)) = self.db.get_cf(cf_children, &current_key) {
-                let children: Vec<Vec<u8>> = serde_json::from_slice(&children_data)
-                    .map_err(|e| DagError::StorageError(format!("Failed to deserialize children: {}", e)))?;
+                let children: Vec<Vec<u8>> = Self::deserialize_cid_list(&children_data)?;
                 
                 for child in children {
                     if !visited.contains(&child) {
@@ -551,146 +645,122 @@ impl DagStore for RocksDbDagStore {
 #[async_trait::async_trait]
 impl DagStore for RocksDbDagStore {
     async fn add_node(&mut self, mut node: SignedDagNode) -> Result<Cid, DagError> {
-        // Ensure the node has a CID before passing to the blocking task
-        let cid = node.ensure_cid()?;
+        let node_cid = node.ensure_cid()?; // Ensure CID is computed before serialization
+        let node_key = Self::cid_to_key(&node_cid);
         
-        // Clone the necessary variables to move into the task
-        let db = self.db.clone();
-        let non_tips = self.non_tips.clone();
+        // Serialize node using DAG-CBOR outside of spawn_blocking if possible
+        let node_bytes = Self::serialize_node(&node)?;
         
-        // Use tokio's spawn_blocking to avoid blocking the async runtime
-        tokio::task::spawn_blocking(move || {
-            let node_key = Self::cid_to_key(&cid);
-            
-            // Check if the node already exists
-            let cf_nodes = db.cf_handle(CF_NODES)
-                .ok_or_else(|| DagError::StorageError(format!("Column family not found: {}", CF_NODES)))?;
-                
-            if db.get_cf(cf_nodes, &node_key)?.is_some() {
-                return Ok(cid); // Node already exists, return the CID
-            }
-            
-            // Validate parent references
-            for parent_cid in &node.node.parents {
+        // Prepare data needed for the batch outside spawn_blocking
+        let parent_cids = node.node.parents.clone();
+        let author_key = node.node.author.to_string().into_bytes();
+        let payload_type_str = match &node.node.payload {
+             crate::dag::DagPayload::Raw(_) => "raw",
+             crate::dag::DagPayload::Json(_) => "json",
+             crate::dag::DagPayload::Reference(_) => "reference",
+             crate::dag::DagPayload::TrustBundle(_) => "TrustBundle",
+             crate::dag::DagPayload::ExecutionReceipt(_) => "ExecutionReceipt",
+        };
+        let payload_type_key = payload_type_str.as_bytes().to_vec(); // Clone for sending to task
+
+
+        // Clone necessary Arcs for sending to the blocking task
+        let db_clone = Arc::clone(&self.db);
+        
+        // --- Perform DB Reads and Batch Construction in blocking task ---
+        let batch_result = tokio::task::spawn_blocking(move || {
+            let mut batch = WriteBatch::default();
+
+            // Get handles (assuming cf_handle is cheap or cached internally by rocksdb crate)
+            let cf_nodes = db_clone.cf_handle(CF_NODES)
+                 .ok_or_else(|| DagError::StorageError("Nodes CF not found".to_string()))?;
+            let cf_tips = db_clone.cf_handle(CF_TIPS)
+                .ok_or_else(|| DagError::StorageError("Tips CF not found".to_string()))?;
+            let cf_children = db_clone.cf_handle(CF_CHILDREN)
+                 .ok_or_else(|| DagError::StorageError("Children CF not found".to_string()))?;
+            let cf_authors = db_clone.cf_handle(CF_AUTHORS)
+                 .ok_or_else(|| DagError::StorageError("Authors CF not found".to_string()))?;
+            let cf_payload_types = db_clone.cf_handle(CF_PAYLOAD_TYPES)
+                 .ok_or_else(|| DagError::StorageError("PayloadTypes CF not found".to_string()))?;
+
+            // 1. Add node data
+            batch.put_cf(cf_nodes, &node_key, &node_bytes);
+
+            // 2. Update tips
+            batch.put_cf(cf_tips, &node_key, &[1]);
+            let mut parent_keys = Vec::new(); // Collect parent keys for cache update later
+            for parent_cid in &parent_cids {
                 let parent_key = Self::cid_to_key(parent_cid);
-                if db.get_cf(cf_nodes, &parent_key)?.is_none() {
-                    return Err(DagError::InvalidParentRefs);
-                }
+                batch.delete_cf(cf_tips, &parent_key);
+                parent_keys.push(parent_key);
             }
 
-            // Serialize and store the node
-            let node_data = Self::serialize_node(&node)?;
-            db.put_cf(cf_nodes, &node_key, &node_data)
-                .map_err(|e| DagError::StorageError(format!("Failed to store node: {}", e)))?;
-            
-            // Update indexes (using helper functions)
-            // Update tips
-            let cf_tips = db.cf_handle(CF_TIPS)
-                .ok_or_else(|| DagError::StorageError(format!("Column family not found: {}", CF_TIPS)))?;
-                
-            // Add this node as a tip
-            db.put_cf(cf_tips, &node_key, &[1])
-                .map_err(|e| DagError::StorageError(format!("Failed to add tip: {}", e)))?;
-
-            // Remove all parent nodes from tips, as they now have a child
-            let mut non_tips_guard = non_tips
-                .write()
-                .map_err(|e| DagError::StorageError(format!("Failed to acquire write lock: {}", e)))?;
-
-            for parent_cid in &node.node.parents {
-                let parent_key = Self::cid_to_key(parent_cid);
-                db.delete_cf(cf_tips, &parent_key)
-                    .map_err(|e| DagError::StorageError(format!("Failed to remove tip: {}", e)))?;
-
-                // Add to non-tips cache
-                non_tips_guard.insert(parent_key.clone());
-                
-                // Update children
-                let cf_children = db.cf_handle(CF_CHILDREN)
-                    .ok_or_else(|| DagError::StorageError(format!("Column family not found: {}", CF_CHILDREN)))?;
-                
-                // Get existing children list
-                let existing = db.get_cf(cf_children, &parent_key)
-                    .map_err(|e| DagError::StorageError(format!("Failed to get children: {}", e)))?;
-                
-                let mut children: Vec<Vec<u8>> = match existing {
-                    Some(bytes) => serde_json::from_slice(&bytes)
-                        .map_err(|e| DagError::StorageError(format!("Failed to deserialize children: {}", e)))?,
+            // 3. Update children index (using DAG-CBOR)
+            for parent_cid in &parent_cids {
+                 let parent_key = Self::cid_to_key(parent_cid);
+                 let existing = db_clone.get_cf(cf_children, &parent_key)
+                     .map_err(|e| DagError::StorageError(format!("Failed to get children: {}", e)))?;
+                 let mut children: Vec<Vec<u8>> = match existing {
+                    Some(bytes) => Self::deserialize_cid_list(&bytes)?,
                     None => Vec::new(),
-                };
-                
-                // Add new child
-                children.push(node_key.clone());
-                
-                // Store updated children list
-                let serialized = serde_json::to_vec(&children)
-                    .map_err(|e| DagError::StorageError(format!("Failed to serialize children: {}", e)))?;
-                    
-                db.put_cf(cf_children, &parent_key, &serialized)
-                    .map_err(|e| DagError::StorageError(format!("Failed to update children: {}", e)))?;
+                 };
+                 if !children.contains(&node_key) {
+                    children.push(node_key.clone());
+                 }
+                 let serialized_children = Self::serialize_cid_list(&children)?;
+                 batch.put_cf(cf_children, &parent_key, &serialized_children);
             }
-            
-            // Update author index
-            let cf_authors = db.cf_handle(CF_AUTHORS)
-                .ok_or_else(|| DagError::StorageError(format!("Column family not found: {}", CF_AUTHORS)))?;
-                
-            let author_key = node.node.author.to_string().into_bytes();
-            
-            // Get existing nodes for this author
-            let existing = db.get_cf(cf_authors, &author_key)
-                .map_err(|e| DagError::StorageError(format!("Failed to get author nodes: {}", e)))?;
-            
-            let mut author_nodes: Vec<Vec<u8>> = match existing {
-                Some(bytes) => serde_json::from_slice(&bytes)
-                    .map_err(|e| DagError::StorageError(format!("Failed to deserialize author nodes: {}", e)))?,
+
+            // 4. Update author index (using DAG-CBOR)
+            let existing_author_nodes = db_clone.get_cf(cf_authors, &author_key)
+                 .map_err(|e| DagError::StorageError(format!("Failed to get author nodes: {}", e)))?;
+            let mut author_nodes: Vec<Vec<u8>> = match existing_author_nodes {
+                Some(bytes) => Self::deserialize_cid_list(&bytes)?,
                 None => Vec::new(),
             };
-            
-            // Add new node
-            author_nodes.push(node_key.clone());
-            
-            // Store updated author nodes list
-            let serialized = serde_json::to_vec(&author_nodes)
-                .map_err(|e| DagError::StorageError(format!("Failed to serialize author nodes: {}", e)))?;
-                
-            db.put_cf(cf_authors, &author_key, &serialized)
-                .map_err(|e| DagError::StorageError(format!("Failed to update author nodes: {}", e)))?;
-                
-            // Update payload type index
-            let cf_payload_types = db.cf_handle(CF_PAYLOAD_TYPES)
-                .ok_or_else(|| DagError::StorageError(format!("Column family not found: {}", CF_PAYLOAD_TYPES)))?;
-                
-            let payload_type = match &node.node.payload {
-                crate::dag::DagPayload::Raw(_) => "raw",
-                crate::dag::DagPayload::Json(_) => "json",
-                crate::dag::DagPayload::Reference(_) => "reference",
-                crate::dag::DagPayload::TrustBundle(_) => "trustbundle",
-                crate::dag::DagPayload::ExecutionReceipt(_) => "receipt",
-            };
-            let payload_key = payload_type.as_bytes();
-            
-            // Get existing nodes for this payload type
-            let existing = db.get_cf(cf_payload_types, payload_key)
-                .map_err(|e| DagError::StorageError(format!("Failed to get payload type nodes: {}", e)))?;
-            
-            let mut payload_nodes: Vec<Vec<u8>> = match existing {
-                Some(bytes) => serde_json::from_slice(&bytes)
-                    .map_err(|e| DagError::StorageError(format!("Failed to deserialize payload type nodes: {}", e)))?,
+            if !author_nodes.contains(&node_key) {
+                 author_nodes.push(node_key.clone());
+            }
+            let serialized_author_nodes = Self::serialize_cid_list(&author_nodes)?;
+            batch.put_cf(cf_authors, &author_key, &serialized_author_nodes);
+
+             // 5. Update payload type index (using DAG-CBOR)
+            let existing_payload_nodes = db_clone.get_cf(cf_payload_types, &payload_type_key)
+                 .map_err(|e| DagError::StorageError(format!("Failed to get payload type nodes: {}", e)))?;
+            let mut payload_nodes: Vec<Vec<u8>> = match existing_payload_nodes {
+                Some(bytes) => Self::deserialize_cid_list(&bytes)?,
                 None => Vec::new(),
             };
-            
-            // Add new node
-            payload_nodes.push(node_key);
-            
-            // Store updated payload type nodes list
-            let serialized = serde_json::to_vec(&payload_nodes)
-                .map_err(|e| DagError::StorageError(format!("Failed to serialize payload type nodes: {}", e)))?;
-                
-            db.put_cf(cf_payload_types, payload_key, &serialized)
-                .map_err(|e| DagError::StorageError(format!("Failed to update payload type nodes: {}", e)))?;
-            
-            Ok(cid)
-        }).await.map_err(|e| DagError::JoinError(e.to_string()))?
+            if !payload_nodes.contains(&node_key) {
+                 payload_nodes.push(node_key.clone());
+            }
+            let serialized_payload_nodes = Self::serialize_cid_list(&payload_nodes)?;
+            batch.put_cf(cf_payload_types, &payload_type_key, &serialized_payload_nodes);
+
+            // --- Commit Batch ---
+            db_clone.write(batch).map_err(|e| {
+                DagError::StorageError(format!("Atomic batch write failed: {}", e))
+            })?;
+
+            // Return parent keys needed for cache update
+            Ok::<_, DagError>(parent_keys)
+
+        }).await.map_err(|e| DagError::JoinError(e.to_string()))??; // Handle join error and inner Result
+
+        // --- Update In-Memory Cache (After successful commit) ---
+        let parent_keys = batch_result; // Get parent keys from blocking task result
+        { // Scope the lock guard
+            let mut non_tips = self
+                 .non_tips
+                 .write() // Consider using blocking_write if this might contend heavily
+                 .map_err(|e| DagError::StorageError(format!("Failed to acquire write lock for cache: {}", e)))?;
+             for parent_key in parent_keys {
+                 non_tips.insert(parent_key);
+            }
+        } // Lock guard dropped here
+
+
+        Ok(node_cid)
     }
 
     async fn get_node(&self, cid: &Cid) -> Result<SignedDagNode, DagError> {

@@ -37,7 +37,7 @@ pub enum DagError {
     #[error("Invalid parent references")]
     InvalidParentRefs,
     #[error("Serialization error: {0}")]
-    SerializationError(#[from] serde_json::Error),
+    SerializationError(String),
     #[error("CID computation error: {0}")]
     CidError(String),
     #[error("Storage error: {0}")]
@@ -105,17 +105,14 @@ pub struct SignedDagNode {
 }
 
 impl SignedDagNode {
-    /// Calculate the CID for this node based on its canonical serialization
+    /// Calculate the CID for this node based on its canonical serialization (DAG-CBOR)
     pub fn calculate_cid(&self) -> Result<Cid, DagError> {
-        // For now, we'll implement a simple approach using JSON serialization
-        // In a production system, we would use a more efficient binary format and IPLD
-        
-        // First, serialize the node without the signature and cid fields
-        let canonical_node = serde_json::to_vec(&self.node)
-            .map_err(DagError::SerializationError)?;
+        // Serialize the inner node using DAG-CBOR for canonical representation
+        let canonical_node_bytes = serde_ipld_dagcbor::to_vec(&self.node)
+            .map_err(|e| DagError::SerializationError(format!("DAG-CBOR serialization error: {}", e)))?;
             
-        // Calculate CID using the canonical serialization
-        Cid::from_bytes(&canonical_node)
+        // Calculate CID using the canonical DAG-CBOR bytes
+        Cid::from_bytes(&canonical_node_bytes)
             .map_err(|e| DagError::CidError(e.to_string()))
     }
     
