@@ -20,26 +20,29 @@ ICN utilizes a monorepo structure to manage its various components and facilitat
 
 *   **Overview of the monorepo layout**:
     *   `crates/`: Contains all Rust crates, the core of the ICN system.
-        *   `crates/icn-common/`: Shared types, cryptographic utilities, error handling, and core interfaces used across multiple ICN crates.
-        *   `crates/icn-identity/`: Manages DIDs, Verifiable Credentials (VCs), TrustBundles, and quorum proofs.
-        *   `crates/icn-runtime/`: The core governance and execution engine (CoVM - Cooperative Virtual Machine). Handles WASM execution, DAG anchoring, and economic metering.
-        *   `crates/icn-wallet-core/`: Core logic for the ICN Wallet, including key management, DAG synchronization, and FFI preparation.
-        *   `crates/icn-agoranet/`: Implements the deliberation layer for proposals, discussions, and thread management.
-        *   `crates/icn-mesh/`: Code for the planetary compute commons, enabling distributed task execution.
-        *   `crates/icn-ccl/`: The Contract Chain Language parser, compiler, and associated tooling.
-        *   `crates/icn-ffi/`: Foreign Function Interface bindings (e.g., UniFFI for mobile) for the wallet and other components.
-    *   `tools/`: Contains CLI utilities and developer tools.
-        *   `tools/icn-cli/`: The main command-line interface for interacting with ICN federations, managing identities, and submitting jobs.
-        *   `tools/meshctl/`: CLI tool for managing and interacting with the compute mesh.
+        *   `crates/common/`: Contains common libraries shared across the workspace.
+            *   `crates/common/icn-core-types/`: Core types used throughout ICN.
+            *   `crates/common/icn-identity-core/`: Manages DIDs, Verifiable Credentials (VCs), TrustBundles, and quorum proofs. (Formerly `icn-identity`)
+            *   `crates/common/icn-types/`: Common data types and structures (e.g., for DAGs, TrustBundles).
+        *   `crates/runtime/icn-runtime/`: The core governance and execution engine (CoVM - Cooperative Virtual Machine). Handles WASM execution, DAG anchoring, and economic metering.
+        *   `crates/wallet/icn-wallet/`: Core logic for the ICN Wallet, including key management, DAG synchronization, and FFI preparation. (Formerly `icn-wallet-core`)
+        *   `crates/agoranet/agoranet-core/`: Implements the deliberation layer for proposals, discussions, and thread management. (Formerly `icn-agoranet`)
+        *   `crates/mesh/planetary-mesh/`: Code for the planetary compute commons, enabling distributed task execution across federation nodes. (This is the primary mesh crate in the workspace)
+        *   `crates/tools/`: Contains CLI utilities and developer tools built as crates.
+            *   `crates/tools/icn-cli/`: The main command-line interface for interacting with ICN federations, managing identities, and submitting jobs.
+        *   `crates/cli/`: (Not currently in workspace members) A generic CLI crate. Its specific role and integration status need clarification.
+        *   `crates/planetary-mesh/`: (Not currently in workspace members) Another mesh-related crate. Its purpose alongside `crates/mesh/planetary-mesh` and its integration status need clarification.
     *   `docs/`: Contains all project documentation.
-        *   `docs/architecture/`: Detailed architectural documents, specifications, and design rationale.
+        *   `docs/architecture/`: Detailed architectural documents, specifications, and design rationale. (See also [`CRATE_INDEX.md`](./CRATE_INDEX.md) for a quick crate overview).
         *   `docs/rfc/`: Requests for Comments for proposing significant changes or new features.
     *   `scripts/`: Helper scripts for common development tasks (setup, testing, building).
-    *   `examples/`: Example code, configurations, and sample CCL contracts.
+    *   `examples/`: Example code, configurations, and sample configurations.
+    *   `demo/`: Contains scripts and resources for running demonstrations of ICN features.
+    *   `monitoring/`: Contains configurations or tools related to monitoring ICN components. (Further documentation TBD)
 
 *   **Naming conventions**:
-    *   Rust crates are prefixed with `icn-` (e.g., `icn-runtime`, `icn-wallet-core`).
-    *   Binaries (CLI tools) follow a similar pattern (e.g., `icn-cli`).
+    *   Rust crates often follow `icn-<feature>` or `<feature>-core` patterns, located in categorized subdirectories within `crates/`.
+    *   The main CLI tool is `icn-cli`.
 
 ---
 
@@ -185,6 +188,30 @@ Comprehensive testing is crucial for ICN's reliability and security.
 
 ---
 
+## ⚠️ Crates Not Yet Implemented or Not in Workspace
+
+This section lists crates that are part of the conceptual ICN architecture or have been mentioned in documentation but are not currently found in the main workspace, or their status is to be determined.
+
+*   **`icn-ccl`**: Planned Contract Chain Language parser/compiler.
+    *   **Status**: TBD. This component is crucial for the governance proposal lifecycle.
+    *   **Action**: Needs to be implemented and integrated, or its absence/replacement clearly documented.
+*   **`icn-ffi`**: Foreign Function Interface for mobile and desktop interop (e.g., UniFFI for mobile).
+    *   **Status**: TBD. Essential for wallet integration with native mobile platforms.
+    *   **Action**: Needs to be implemented and integrated.
+*   **`meshctl`**: A dedicated CLI tool for mesh network control and management.
+    *   **Status**: Not found. Functionality might be merged into `icn-cli` or planned for future development.
+    *   **Action**: Clarify if it's deprecated, merged, or pending.
+*   **`crates/planetary-mesh/`**: A standalone crate located at `crates/planetary-mesh/`.
+    *   **Status**: Exists but is not currently a member of the root `Cargo.toml` workspace.
+    *   **Action**: Clarify its intended use, its relationship with `crates/mesh/planetary-mesh`, and whether it should be part of the main workspace.
+*   **`crates/cli/`**: A generic CLI crate located at `crates/cli/`.
+    *   **Status**: Exists but is not currently a member of the root `Cargo.toml` workspace.
+    *   **Action**: Clarify its specific purpose and whether it should be part of the main workspace or is a utility/example.
+
+**TODO**: Review the status of these components. Either integrate them fully into the workspace and documentation, or update the documentation to reflect their planned status, alternative solutions, or deprecation.
+
+---
+
 ## 7. Developer Tooling
 
 *   **Custom scripts (`scripts/`, `justfile`)**:
@@ -247,45 +274,4 @@ This section provides step-by-step guides for frequent development activities.
 ## 9. Known Pitfalls and Troubleshooting
 
 *   **Common build issues**:
-    *   **`cid`/`multihash` feature resolution**: These crates have many features; ensure consistent feature flags across the workspace. A `[patch.crates-io]` section in the root `Cargo.toml` might be used to enforce versions or features.
-    *   **Protobuf/gRPC compilation**: If used, ensure `protoc` and relevant toolchains are installed.
-*   **WASM execution errors and debugging tips**:
-    *   Ensure WASM modules are compiled with the correct target (`wasm32-unknown-unknown`).
-    *   Check for sufficient fuel and correct host ABI calls.
-    *   Use extensive logging within WASM contracts (via host ABI logging functions).
-    *   Wasmtime CLI can sometimes be used to run and debug WASM modules locally if they don't have complex host dependencies.
-*   **Credential validation and quorum signature errors**:
-    *   Double-check DID keys and signature algorithms.
-    *   Ensure TrustBundles are correctly formed and all required signatures for a quorum are present and valid.
-    *   Verify timestamps and nonces if replay protection is involved.
-*   **Platform-specific build quirks**:
-    *   **macOS**: May require specific versions of XCode command-line tools or OpenSSL configurations.
-    *   **WSL2**: Ensure file paths and permissions are handled correctly, especially when interacting with Docker.
-    *   **Mobile targets**: Cross-compilation setups (e.g., for `aarch64-linux-android`, `armv7-linux-androideabi`, `aarch64-apple-ios`) require correct NDK/SDK paths and linker settings.
-
----
-
-## 10. Glossary / Quick Reference
-
-*   **CoVM**: Cooperative Virtual Machine (the ICN runtime).
-*   **CCL**: Contract Chain Language (for writing governance proposals).
-*   **DAG**: Directed Acyclic Graph (core data structure for history).
-*   **DID**: Decentralized Identifier.
-*   **VC**: Verifiable Credential.
-*   **TrustBundle**: A quorum-signed package of governance data.
-*   **Key Paths**:
-    *   `crates/`: Location of all Rust source code.
-    *   `docs/architecture/`: For detailed design documents.
-    *   `tools/icn-cli/`: Main CLI tool.
-*   **Common Commands**:
-    *   `cargo check --all`: Quick compilation check.
-    *   `cargo test --all`: Run all tests.
-    *   `cargo clippy --all-targets -- -D warnings`: Linting.
-    *   `cargo fmt --all`: Code formatting.
-*   **Companion Docs**:
-    *   [`ARCHITECTURE.md`](./ARCHITECTURE.md)
-    *   [`SECURITY.md`](./SECURITY.md) (To be created)
-    *   [`ECONOMICS.md`](./ECONOMICS.md) (To be created)
-
----
-This guide is a living document. Please contribute to its improvement by submitting PRs for corrections, additions, or clarifications. 
+    *   **`

@@ -3,11 +3,14 @@ members = [
     "crates/runtime/icn-runtime",
     "crates/wallet/icn-wallet",
     "crates/agoranet/agoranet-core",
-    "crates/mesh/planetary-mesh",
+    "crates/mesh/planetary-mesh",   # Main mesh compute crate
     "crates/common/icn-types",
     "crates/common/icn-identity-core",
     "crates/common/icn-core-types",
     "crates/tools/icn-cli",
+    # TODO: Review and decide on inclusion for the following crates:
+    # "crates/planetary-mesh",      # Standalone mesh crate - clarify purpose and if it should be in workspace
+    # "crates/cli",                 # Generic CLI crate - clarify purpose and if it should be in workspace
 ]
 resolver = "2"
 

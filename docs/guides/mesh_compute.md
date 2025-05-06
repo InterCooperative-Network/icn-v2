@@ -11,6 +11,31 @@ The mesh computation system allows you to:
 3. Execute tasks on the most suitable nodes
 4. Record verifiable execution results in the DAG
 
+## Task Lifecycle Overview
+
+This diagram illustrates the core flow of decentralized task execution across mesh nodes. It helps clarify:
+*   What roles (requester, bidder, scheduler, executor) exist
+*   How WASM tasks move through the system
+*   Where DAG anchoring and Verifiable Credentials (VCs) enter the process
+
+```mermaid
+sequenceDiagram
+    participant Wallet as Requester Wallet
+    participant Mesh as Mesh Nodes
+    participant Scheduler as Scheduler Node
+    participant Executor as Executor Node
+    participant DAG as Federated DAG
+    participant Wallet2 as Requester Wallet (sync)
+
+    Wallet->>Mesh: Publish Task (WASM, manifest, tokens)
+    Mesh->>Scheduler: Bid on task
+    Scheduler->>Executor: Select executor
+    Executor->>Executor: Execute WASM task
+    Executor->>DAG: Anchor result
+    Executor->>Wallet2: Send DispatchReceipt (VC)
+    DAG->>Wallet2: Sync anchored receipt
+```
+
 ## Prerequisites
 
 - ICN CLI installed
@@ -165,6 +190,79 @@ icn mesh scheduler \
   --require "max_power_watts=50"
 ```
 
+## Capability Scoring and Node Selection
+
+Schedulers determine the best node to execute a task by evaluating bids using a scoring formula that balances technical capability, network metrics, and trust incentives.
+
+```mermaid
+flowchart TD
+    subgraph Task Publisher (Wallet)
+        A1[Publish Task]
+        A2[Manifest Includes Required Capabilities]
+    end
+
+    subgraph Mesh Nodes
+        B1[Node A: Submit Capabilities]
+        B2[Node B: Submit Capabilities]
+        B3[Node C: Submit Capabilities]
+    end
+
+    subgraph Scheduler Node
+        C1[Match Capabilities Against Requirements]
+        C2[Fetch Node Reputation + Latency]
+        C3[Apply Scoring Formula]
+        C4[Select Best Executor]
+        C5[Notify Executor & Log Selection]
+    end
+
+    A1 --> A2 --> C1
+    B1 --> C1
+    B2 --> C1
+    B3 --> C1
+    C1 --> C2 --> C3 --> C4 --> C5
+```
+
+### Scoring Flow Overview
+
+1. **Task Publication**
+
+   * The task manifest specifies the required capabilities (e.g., memory, CPU, GPU, architecture).
+
+2. **Bid Submission**
+
+   * Mesh nodes submit their capabilities and availability.
+   * These include static specs (arch, cores), dynamic metrics (latency, bandwidth), and optional incentives (staked tokens, history).
+
+3. **Scheduler Matching**
+
+   * The scheduler compares node capabilities to the manifest requirements.
+   * Nodes that don't meet minimum thresholds are filtered out.
+
+4. **Score Calculation**
+
+   * The scheduler computes a score for each candidate using a weighted formula:
+
+     ```
+     score = capability_match × reputation_factor × incentive_weight × latency_bonus
+     ```
+   * Policies may be federation-defined and programmable.
+
+5. **Executor Selection**
+
+   * The top-scoring node is selected as executor.
+   * The result is recorded in the DAG or shared with the requester.
+
+### Configurable Policies
+
+Federations or task publishers may modify:
+
+* Minimum score thresholds
+* Reputation curve or decay rate
+* Token incentives/staking weights
+* Architecture or region affinity
+
+This scoring mechanism ensures **fair, auditable, and incentive-aligned** task execution across the global mesh.
+
 ## Executing Tasks
 
 When a bid is accepted, the winning node executes the task:
@@ -182,6 +280,144 @@ After execution:
 1. Results are saved to the specified output directory
 2. An `ExecutionReceipt` is anchored to the DAG
 3. The receipt contains execution metrics and results hash
+
+## DispatchReceipt Verification Flow
+
+This flow illustrates how `DispatchReceipt` Verifiable Credentials (VCs) are validated across federations to ensure task execution integrity.
+
+```mermaid
+flowchart TD
+    subgraph Executor Node
+        A1[Execute WASM Task]
+        A2[Generate DispatchReceipt VC]
+        A3[Anchor CID to DAG]
+    end
+
+    subgraph Federation DAG
+        B1[DAG Stores CID + Execution Hash]
+    end
+
+    subgraph Wallet or Verifier Node
+        C1[Sync DAG / Fetch Receipt]
+        C2[Verify VC Signature]
+        C3[Validate DAG Anchor Matches CID]
+        C4[Replay or Hash Execution Output]
+        C5[Check Federation Policy / Quorum]
+        C6[Mark Receipt as Verified ✅ or Rejected ❌]
+    end
+
+    A1 --> A2 --> A3 --> B1
+    B1 --> C1 --> C2 --> C3 --> C4 --> C5 --> C6
+```
+
+### Verification Steps
+
+1. **Execution and Receipt Generation**
+
+   * The executor node runs the WASM task and issues a `DispatchReceipt` (a Verifiable Credential).
+   * This includes: the task hash, input/output CID, signature(s), and metadata.
+
+2. **DAG Anchoring**
+
+   * The executor anchors the CID to the federated DAG, enabling traceable execution lineage.
+
+3. **Receipt Synchronization**
+
+   * A wallet or federation node fetches the receipt and associated DAG data.
+
+4. **Cryptographic Verification**
+
+   * The verifier checks:
+
+     * VC signature validity against the executor's DID.
+     * CID consistency with the receipt's contents.
+     * Output hash matches expected result (or replays the WASM deterministically).
+
+5. **Policy and Quorum Enforcement**
+
+   * If the federation requires threshold/multi-signature validation, the verifier confirms all required endorsements.
+
+6. **Trust Marking**
+
+   * The wallet or node marks the receipt as ✅ **Verified** or ❌ **Rejected**, and can share this judgment with other peers.
+
+This process ensures that execution is not only decentralized, but **cryptographically verifiable**, enabling secure cross-federation computation.
+
+## Federated Economic Enforcement
+
+Each federation defines its own scoped economic policy, controlling how tokens are authorized and metered during task execution.
+
+```mermaid
+flowchart TD
+    subgraph Federation Config
+        A1[Economic Policy Defined (token_type, rules, caps)]
+    end
+
+    subgraph Wallet
+        B1[Create Task Manifest]
+        B2[Specify Token Allocation]
+        B3[Submit to Federation]
+    end
+
+    subgraph Runtime Node
+        C1[Load Federation Policy]
+        C2[Check Authorization]
+        C3[Execute Metered WASM]
+        C4[Record Resource Usage]
+        C5[Anchor ExecutionReceipt]
+    end
+
+    subgraph DAG + Verifier
+        D1[Sync ExecutionReceipt VC]
+        D2[Verify Token Usage Against Policy]
+        D3[Confirm Economic Validity]
+    end
+
+    A1 --> C1
+    B1 --> B2 --> B3 --> C2
+    C2 --> C3 --> C4 --> C5 --> D1
+    D1 --> D2 --> D3
+```
+
+### Economic Enforcement Steps
+
+1. **Federation Policy Definition**
+
+   * The federation specifies allowed `token_type`s, usage caps, minimum balance rules, and metering granularity.
+   * These policies are stored on-chain or bundled with the federation's config and loaded into the runtime environment.
+
+2. **Task Publication with Allocation**
+
+   * Requesters submit a task with:
+
+     * `wasm_file`
+     * `token_type`
+     * `token_amount`
+     * `target_federation`
+   * The manifest is cryptographically signed and submitted via the wallet.
+
+3. **Runtime Economic Checks**
+
+   * During execution, the WASM task:
+
+     * Calls `host_check_resource_authorization` to verify allowed token use.
+     * Calls `host_record_resource_usage` to record final consumption.
+   * If authorization fails, execution is rejected and the error is anchored.
+
+4. **ExecutionReceipt + Verification**
+
+   * After execution, a signed `ExecutionReceipt` VC is anchored in the DAG.
+   * It includes:
+
+     * `token_type`, `amount_spent`
+     * Policy reference (e.g., `policy_hash`)
+     * Execution hash, output CID
+   * Other nodes or wallets can verify:
+
+     * Signature authenticity
+     * Conformance with the declared economic policy
+
+This mechanism ensures that **tasks cannot exceed their authorized economic scope**, creating a transparent, verifiable link between **resource use and governance-defined economic rules**.
 
 ## Bid Scoring Formula
 

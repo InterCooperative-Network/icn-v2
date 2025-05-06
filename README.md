@@ -16,14 +16,24 @@ The project follows a modular architecture organized within a Rust workspace:
 
 ```
 crates/
-├── runtime/icn-runtime           # Core runtime logic
-├── wallet/icn-wallet             # Wallet management and transaction signing
-├── agoranet/agoranet-core        # Core networking and consensus protocols
-├── mesh/planetary-mesh           # Peer-to-peer mesh networking layer
 ├── common/
-│   ├── icn-types                 # Common data types and structures (DAG, TrustBundle, etc.)
-│   └── icn-identity-core         # Identity management and cryptographic primitives
-└── tools/icn-cli                 # Command-line interface for interacting with the network
+│   ├── icn-core-types/         # Core types used throughout ICN
+│   ├── icn-identity-core/      # Identity management (DIDs, VCs) and cryptographic primitives
+│   └── icn-types/              # Common data types and structures (DAG, TrustBundle, etc.)
+├── runtime/
+│   └── icn-runtime/            # Core runtime logic (CoVM)
+├── wallet/
+│   └── icn-wallet/             # Wallet management and transaction signing
+├── agoranet/
+│   └── agoranet-core/          # Deliberation layer, networking and consensus protocols
+├── mesh/
+│   └── planetary-mesh/         # Peer-to-peer mesh networking layer for distributed compute
+└── tools/
+    └── icn-cli/                # Command-line interface for interacting with the network
+
+# Note: Additional crates like icn-ccl (Contract Chain Language) and icn-ffi (Foreign Function Interface)
+# are planned. Some utility/experimental crates may exist but are not yet part of the main workspace.
+# See DEVELOPER_GUIDE.md in docs/architecture/ for the most detailed structure.
 ```
 
 ## Getting Started
