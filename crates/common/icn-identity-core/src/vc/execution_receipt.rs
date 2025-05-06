@@ -272,6 +272,6 @@ impl ExecutionReceipt {
 
         let bytes = serde_ipld_dagcbor::to_vec(&temp_receipt)?;
         let hash = MultihashCode::Sha2_256.digest(&bytes);
-        Ok(Cid::new_v1(DAG_CBOR_CODEC, hash))
+        Ok(RawCid::new_v1(DAG_CBOR_CODEC, hash).into())
     }
 } 
