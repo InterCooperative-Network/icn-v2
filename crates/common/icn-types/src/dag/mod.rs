@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 use ed25519_dalek::Signature;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use ed25519_dalek::VerifyingKey;
 
 // Include the RocksDB implementation
 #[cfg(feature = "persistence")]
@@ -32,8 +33,8 @@ pub use sync::{DAGSyncBundle, DAGSyncService, FederationPeer, SyncError, Verific
 pub enum DagError {
     #[error("Node not found: {0}")]
     NodeNotFound(Cid),
-    #[error("Invalid signature")]
-    InvalidSignature,
+    #[error("Invalid signature for node: {0}")]
+    InvalidSignature(Cid),
     #[error("Invalid parent references")]
     InvalidParentRefs,
     #[error("Serialization error: {0}")]
@@ -46,6 +47,19 @@ pub enum DagError {
     InvalidNodeData(String),
     #[error("Task join error: {0}")]
     JoinError(String),
+    #[error("Calculated CID does not match stored CID for node: {0}")]
+    CidMismatch(Cid),
+    #[error("Missing parent node: {0}")]
+    MissingParent(Cid),
+    #[error("Public key resolution failed for DID {0}: {1}")]
+    PublicKeyResolutionError(Did, String),
+}
+
+/// Trait for resolving DIDs to public verifying keys
+pub trait PublicKeyResolver {
+    fn resolve(&self, did: &Did) -> Result<VerifyingKey, DagError>;
+    // Potentially add an async version if needed later
+    // async fn resolve_async(&self, did: &Did) -> Result<VerifyingKey, DagError>;
 }
 
 /// Metadata associated with a DAG node
@@ -196,12 +210,13 @@ pub trait DagStore {
     #[cfg(not(feature = "async"))]
     fn find_path(&self, from: &Cid, to: &Cid) -> Result<Vec<SignedDagNode>, DagError>;
     
-    /// Verify all signatures and structural integrity of a DAG branch
+    /// Verify all signatures and structural integrity of a DAG branch, starting from a tip.
+    /// Returns Ok(()) if valid, or an Err(DagError) indicating the first validation failure.
     #[cfg(feature = "async")]
-    async fn verify_branch(&self, tip: &Cid) -> Result<bool, DagError>;
+    async fn verify_branch(&self, tip: &Cid, resolver: &dyn PublicKeyResolver) -> Result<(), DagError>;
     
     #[cfg(not(feature = "async"))]
-    fn verify_branch(&self, tip: &Cid) -> Result<bool, DagError>;
+    fn verify_branch(&self, tip: &Cid, resolver: &dyn PublicKeyResolver) -> Result<(), DagError>;
 }
 
 /// Builder for creating new DAG nodes

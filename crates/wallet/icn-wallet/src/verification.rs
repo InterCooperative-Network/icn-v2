@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use std::str::FromStr;
 use hex::FromHex;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use serde_ipld_dagcbor;
 
 /// A report on the verification status of a dispatch credential
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -391,9 +392,9 @@ fn verify_credential_signature(credential: &DispatchCredential) -> Result<bool> 
     let mut credential_to_verify = credential.clone();
     credential_to_verify.proof = None;
     
-    // Convert to canonical form for verification
-    let canonical_bytes = serde_json::to_vec(&credential_to_verify)
-        .context("Failed to serialize credential for verification")?;
+    // Convert to canonical form (DAG-CBOR) for verification
+    let canonical_bytes = serde_ipld_dagcbor::to_vec(&credential_to_verify)
+        .context("Failed to serialize credential to DAG-CBOR for verification")?;
     
     // Extract the signature
     let signature_bytes = Vec::from_hex(&proof.proofValue)

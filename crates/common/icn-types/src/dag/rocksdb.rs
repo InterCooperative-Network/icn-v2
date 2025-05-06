@@ -1,12 +1,13 @@
 #![cfg(feature = "persistence")]
 
 use crate::cid::Cid;
-use crate::dag::{DagError, DagStore, SignedDagNode};
+use crate::dag::{DagError, DagStore, SignedDagNode, PublicKeyResolver};
 use crate::identity::Did;
 use rocksdb::{ColumnFamily, ColumnFamilyDescriptor, Options, DB, WriteBatch};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::sync::{Arc, RwLock};
+use ed25519_dalek::VerifyingKey;
 
 /// ColumnFamily names for different types of data
 const CF_NODES: &str = "nodes";
@@ -588,18 +589,16 @@ impl DagStore for RocksDbDagStore {
         Ok(path)
     }
 
-    fn verify_branch(&self, tip: &Cid) -> Result<bool, DagError> {
-        // Verify a branch of the DAG, starting from the given tip
-        // This ensures that all signatures are valid and parent references are correct
-        
+    fn verify_branch(&self, tip: &Cid, resolver: &dyn PublicKeyResolver) -> Result<(), DagError> {
         let tip_key = Self::cid_to_key(tip);
         let cf_nodes = self.cf_handle(CF_NODES)?;
         
+        // Check if tip exists
         if self.db.get_cf(cf_nodes, &tip_key)?.is_none() {
             return Err(DagError::NodeNotFound(tip.clone()));
         }
         
-        // Perform a topological traversal starting from the tip
+        // Perform a BFS traversal starting from the tip, verifying each node
         let mut queue = VecDeque::new();
         let mut visited = HashSet::new();
         
@@ -608,26 +607,40 @@ impl DagStore for RocksDbDagStore {
         
         while let Some(current_key) = queue.pop_front() {
             // Get the current node
-            let node_data = self.db.get_cf(cf_nodes, &current_key)?.unwrap();
-            let node = Self::deserialize_node(&node_data)?;
-            
-            // TODO: Verify the signature of the node
-            // This would require accessing the author's public key
-            // For now, we just check that the CID is correctly calculated
-            let calculated_cid = node.calculate_cid()?;
-            if node.cid.as_ref().unwrap() != &calculated_cid {
-                return Ok(false);
+            let node_data = self.db.get_cf(cf_nodes, &current_key)?
+                .ok_or_else(|| DagError::StorageError(format!("Node data missing for visited key {:?}", current_key)))?;
+            let signed_node = Self::deserialize_node(&node_data)?;
+            let node_cid = signed_node.cid.as_ref().ok_or_else(|| 
+                DagError::InvalidNodeData(format!("Missing CID in deserialized node for key {:?}", current_key))
+            )?.clone();
+
+            // 1. Verify CID calculation matches stored CID
+            let calculated_cid = signed_node.calculate_cid()?;
+            if calculated_cid != node_cid {
+                return Err(DagError::CidMismatch(node_cid));
             }
-            
-            // Add parent nodes to the queue
-            for parent_cid in &node.node.parents {
+
+            // 2. Verify the signature
+            // Resolve the public key
+            let verifying_key = resolver.resolve(&signed_node.node.author)?;
+            // Get canonical bytes (must serialize the inner 'node' field)
+            let canonical_bytes = serde_ipld_dagcbor::to_vec(&signed_node.node)
+                .map_err(|e| DagError::SerializationError(format!("DAG-CBOR serialization error during verify: {}", e)))?;
+            // Perform verification
+            verifying_key.verify(&canonical_bytes, &signed_node.signature)
+                .map_err(|_| DagError::InvalidSignature(node_cid.clone()))?;
+
+            // 3. Check parent existence and add to queue
+            for parent_cid in &signed_node.node.parents {
                 let parent_key = Self::cid_to_key(parent_cid);
                 
-                // Check if the parent exists
+                // Check if the parent exists in the database
                 if self.db.get_cf(cf_nodes, &parent_key)?.is_none() {
-                    return Ok(false); // Missing parent, branch is invalid
+                    // Parent referenced by a valid node is missing
+                    return Err(DagError::MissingParent(parent_cid.clone()));
                 }
                 
+                // Add parent to queue if not already visited
                 if !visited.contains(&parent_key) {
                     visited.insert(parent_key.clone());
                     queue.push_back(parent_key);
@@ -635,8 +648,8 @@ impl DagStore for RocksDbDagStore {
             }
         }
         
-        // All nodes in the branch are valid
-        Ok(true)
+        // All nodes in the branch were visited and verified successfully
+        Ok(())
     }
 }
 
@@ -804,6 +817,85 @@ impl DagStore for RocksDbDagStore {
         }).await.map_err(|e| DagError::JoinError(e.to_string()))?
     }
 
-    // ... similar implementations for other methods, each wrapping the synchronous
-    // code in a spawn_blocking task ...
+    async fn verify_branch(&self, tip: &Cid, resolver: &dyn PublicKeyResolver) -> Result<(), DagError> {
+        // Note: This async implementation assumes the PublicKeyResolver is Sync + Send.
+        // If the resolver itself needs to be async, the trait and implementation need adjustments.
+        
+        let tip_clone = tip.clone();
+        let db_clone = self.db.clone();
+        
+        // We need a way to pass the resolver logic into spawn_blocking.
+        // Directly passing `resolver` works if it's `Sync + Send`.
+        // If not, we might need to pre-resolve keys or use a different async strategy.
+        
+        // For now, assuming resolver is Sync + Send. This is common for simple resolvers.
+        // We cannot pass the trait object directly, need a concrete type or Arc.
+        // Let's assume the caller wraps the resolver in an Arc if needed for async.
+        // *** This part needs careful consideration based on actual resolver implementation ***
+        // *** A simpler approach for now might be to make the resolver method blocking ***
+        // *** or require the async trait to implement it differently. ***
+        
+        // --- Simplified Approach: Perform resolution outside spawn_blocking if possible? --- 
+        // This is difficult because we discover DIDs *during* the traversal within spawn_blocking.
+        
+        // --- Alternative: Redesign resolver or accept limitations --- 
+        // Let's proceed assuming a Sync+Send resolver can be used, but acknowledge complexity.
+        // The easiest path might be to make the synchronous `resolve` method callable
+        // from the blocking thread.
+
+        // TODO: Properly handle passing and using the resolver in the async context.
+        // This placeholder just calls the sync version within spawn_blocking, assuming
+        // the resolver is Sync+Send and its `resolve` is blocking-safe.
+
+        tokio::task::spawn_blocking(move || {
+            let tip_key = Self::cid_to_key(&tip_clone);
+            let cf_nodes = db_clone.cf_handle(CF_NODES)?;
+            
+            if db_clone.get_cf(cf_nodes, &tip_key)?.is_none() {
+                 return Err(DagError::NodeNotFound(tip_clone));
+            }
+            
+            let mut queue = VecDeque::new();
+            let mut visited = HashSet::new();
+            queue.push_back(tip_key.clone());
+            visited.insert(tip_key);
+            
+            while let Some(current_key) = queue.pop_front() {
+                let node_data = db_clone.get_cf(cf_nodes, &current_key)?
+                     .ok_or_else(|| DagError::StorageError(format!("Node data missing for visited key {:?}", current_key)))?;
+                let signed_node = Self::deserialize_node(&node_data)?;
+                let node_cid = signed_node.cid.as_ref().ok_or_else(|| 
+                    DagError::InvalidNodeData(format!("Missing CID in deserialized node for key {:?}", current_key))
+                )?.clone();
+
+                // 1. Verify CID
+                let calculated_cid = signed_node.calculate_cid()?;
+                if calculated_cid != node_cid {
+                    return Err(DagError::CidMismatch(node_cid));
+                }
+
+                // 2. Verify Signature (using resolver passed into blocking task)
+                let verifying_key = resolver.resolve(&signed_node.node.author)?;
+                let canonical_bytes = serde_ipld_dagcbor::to_vec(&signed_node.node)
+                     .map_err(|e| DagError::SerializationError(format!("DAG-CBOR serialization error during verify: {}", e)))?;
+                verifying_key.verify(&canonical_bytes, &signed_node.signature)
+                     .map_err(|_| DagError::InvalidSignature(node_cid.clone()))?;
+
+                // 3. Check Parents
+                for parent_cid in &signed_node.node.parents {
+                     let parent_key = Self::cid_to_key(parent_cid);
+                     if db_clone.get_cf(cf_nodes, &parent_key)?.is_none() {
+                         return Err(DagError::MissingParent(parent_cid.clone()));
+                     }
+                     if !visited.contains(&parent_key) {
+                         visited.insert(parent_key.clone());
+                         queue.push_back(parent_key);
+                     }
+                 }
+            }
+            Ok(())
+        }).await.map_err(|e| DagError::JoinError(e.to_string()))??;
+        
+        Ok(())
+    }
 } 

@@ -17,6 +17,7 @@ uniffi = { version = "0.24", optional = true }
 thiserror = "1.0"
 log = "0.4"
 uuid = { version = "1.4", features = ["v4"] }
+serde_ipld_dagcbor = "0.2"
 
 # ICN internal crates
 icn-types = { path = "../../common/icn-types" }
