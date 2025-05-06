@@ -88,6 +88,83 @@ The scheduler:
 3. Selects the optimal bid for each task
 4. Creates task assignments in the DAG
 
+### Capability-Based Scheduling
+
+You can specify capability requirements to filter nodes based on their manifests before considering bids:
+
+```bash
+icn mesh scheduler \
+  --federation "my-federation" \
+  --key ./scheduler.json \
+  --dag-dir ./dag-data \
+  --listen "/ip4/0.0.0.0/tcp/9001" \
+  --require "arch=x86_64" \
+  --require "min_cores=4" \
+  --require "min_ram_mb=8192" \
+  --require "gpu_api=cuda" \
+  --require "gpu_vram_mb=4096" \
+  --require "min_renewable=50"
+```
+
+Multiple `--require` flags can be added, each with a key=value pair. The scheduler will only consider nodes
+whose manifests match all the specified requirements.
+
+#### Available Capability Requirements
+
+| Key | Value Format | Description |
+|-----|--------------|-------------|
+| `arch` | `x86_64`, `arm64`, `riscv32`, `riscv64`, `wasm32` | Required CPU architecture |
+| `min_cores` | Integer | Minimum number of CPU cores |
+| `min_ram_mb` | Integer | Minimum RAM in megabytes |
+| `min_storage_gb` | Integer | Minimum storage in gigabytes |
+| `gpu_vram_mb` | Integer | Minimum GPU VRAM in megabytes |
+| `gpu_cores` | Integer | Minimum number of GPU cores |
+| `gpu_tensor_cores` | `true`/`false` | Whether tensor cores are required |
+| `gpu_api` | `cuda`, `vulkan`, `metal`, `webgpu`, `opencl`, `directx` | Required GPU API |
+| `gpu_feature` | String | Required GPU feature (can be specified multiple times) |
+| `sensor` | `type:protocol:active` | Required sensor type, optional protocol, and active status |
+| `actuator` | `type:protocol:active` | Required actuator type, optional protocol, and active status |
+| `min_renewable` | Integer (0-100) | Minimum renewable energy percentage |
+| `energy_source` | `grid`, `solar`, `wind`, `battery`, `generator` | Required energy source |
+| `requires_battery` | `true`/`false` | Whether battery power is required |
+| `requires_charging` | `true`/`false` | Whether charging status is required |
+| `max_power_watts` | Decimal | Maximum power consumption in watts |
+
+#### Example Use Cases
+
+**AI Workloads**:
+```bash
+icn mesh scheduler \
+  --federation "ai-federation" \
+  --key ./scheduler.json \
+  --dag-dir ./dag-data \
+  --require "gpu_api=cuda" \
+  --require "gpu_vram_mb=8192" \
+  --require "gpu_tensor_cores=true"
+```
+
+**IoT Sensor Network**:
+```bash
+icn mesh scheduler \
+  --federation "iot-federation" \
+  --key ./scheduler.json \
+  --dag-dir ./dag-data \
+  --require "sensor=temperature:i2c:true" \
+  --require "sensor=humidity:i2c:true" \
+  --require "requires_battery=true"
+```
+
+**Green Computing**:
+```bash
+icn mesh scheduler \
+  --federation "green-federation" \
+  --key ./scheduler.json \
+  --dag-dir ./dag-data \
+  --require "min_renewable=75" \
+  --require "energy_source=solar" \
+  --require "max_power_watts=50"
+```
+
 ## Executing Tasks
 
 When a bid is accepted, the winning node executes the task:

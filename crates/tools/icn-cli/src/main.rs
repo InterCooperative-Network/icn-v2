@@ -509,6 +509,10 @@ enum MeshCommands {
         /// Enable mDNS discovery
         #[arg(long, default_value = "true")]
         mdns: bool,
+        
+        /// Required node capabilities (can be specified multiple times as key=value)
+        #[arg(long, value_parser = parse_key_val)]
+        require: Vec<(String, String)>,
     },
     
     /// Start a metrics server for monitoring mesh activity
@@ -586,6 +590,19 @@ enum MeshCommands {
         #[arg(long)]
         firmware_hash: Option<String>,
     },
+}
+
+/// Parse a key=value pair
+fn parse_key_val(s: &str) -> Result<(String, String), String> {
+    let parts: Vec<&str> = s.split('=').collect();
+    if parts.len() != 2 {
+        return Err(format!("Invalid key=value format: {}", s));
+    }
+    
+    let key = parts[0].trim().to_string();
+    let value = parts[1].trim().to_string();
+    
+    Ok((key, value))
 }
 
 #[tokio::main]
@@ -1278,7 +1295,8 @@ async fn handle_mesh_command(cmd: &MeshCommands) -> Result<()> {
             key, 
             dag_dir, 
             listen, 
-            mdns 
+            mdns,
+            require 
         } => {
             // Load the key file
             let key_data = fs::read_to_string(key)
@@ -1310,7 +1328,34 @@ async fn handle_mesh_command(cmd: &MeshCommands) -> Result<()> {
             println!("Starting scheduler node for federation: {}", federation);
             println!("Listening on: {}", listen);
             
-            // Create the transport
+            // Create capability selector from --require arguments
+            let mut capability_selector = None;
+            if !require.is_empty() {
+                let mut selector = icn_planetary_mesh::cap_index::CapabilitySelector::new();
+                
+                for (key, value) in require {
+                    if let Err(e) = selector.parse_requirement(&key, &value) {
+                        eprintln!("Warning: Failed to parse requirement {}={}: {}", key, value, e);
+                    } else {
+                        println!("Added requirement: {}={}", key, value);
+                    }
+                }
+                
+                capability_selector = Some(selector);
+            }
+            
+            // Create the capability index
+            let cap_index = Arc::new(icn_planetary_mesh::scheduler::CapabilityIndex::new(store.clone()));
+            
+            // Create the scheduler
+            let scheduler = icn_planetary_mesh::scheduler::Scheduler::new(
+                federation.clone(),
+                cap_index.clone(),
+                store.clone(),
+                author_did.clone(),
+            );
+            
+            // Start the transport
             let transport = Libp2pDagTransport::new(transport_config).await?;
             
             // Create the sync service
@@ -1321,113 +1366,45 @@ async fn handle_mesh_command(cmd: &MeshCommands) -> Result<()> {
                 Some(author_did.clone()),
             );
             
-            // Start background sync
+            // Start background sync to publish the task
+            println!("Starting mesh network synchronization...");
             sync_service.start_background_sync().await?;
-            println!("Background sync started");
             
-            // Spawn a task to monitor the DAG for new tasks and bids
-            let store_clone = store.clone();
-            tokio::spawn(async move {
-                let mut last_check = Instant::now();
-                let mut processed_tasks = HashSet::new();
-                let mut processed_bids = HashSet::new();
-                
-                loop {
-                    // Wait a bit before checking again
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                    
-                    // Get all nodes created since last check
-                    let now = Instant::now();
-                    
-                    // Get all nodes (in a real implementation, we would filter by timestamp)
-                    match store_clone.get_ordered_nodes().await {
-                        Ok(nodes) => {
-                            let mut tasks = Vec::new();
-                            let mut bids = HashMap::new();
-                            
-                            // Identify task tickets and bids
-                            for node in nodes {
-                                if let Some(cid) = &node.cid {
-                                    let cid_str = cid.to_string();
-                                    
-                                    if let icn_types::dag::DagPayload::Json(payload) = &node.node.payload {
-                                        if let Some(type_str) = payload.get("type").and_then(|t| t.as_str()) {
-                                            match type_str {
-                                                "TaskTicket" => {
-                                                    if !processed_tasks.contains(&cid_str) {
-                                                        tasks.push((cid_str.clone(), node.clone(), payload.clone()));
-                                                        processed_tasks.insert(cid_str);
-                                                    }
-                                                },
-                                                "TaskBid" => {
-                                                    if !processed_bids.contains(&cid_str) {
-                                                        if let Some(task_cid) = payload.get("task_cid").and_then(|t| t.as_str()) {
-                                                            bids.entry(task_cid.to_string())
-                                                               .or_insert_with(Vec::new)
-                                                               .push((cid_str.clone(), node.clone(), payload.clone()));
-                                                            
-                                                            processed_bids.insert(cid_str);
-                                                        }
-                                                    }
-                                                },
-                                                _ => {}
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            
-                            // Process tasks with bids
-                            for (task_cid, task_node, task_payload) in tasks {
-                                if let Some(task_bids) = bids.get(&task_cid) {
-                                    println!("Processing task: {} with {} bids", task_cid, task_bids.len());
-                                    
-                                    // Find the best bid (lowest score)
-                                    let mut best_bid = None;
-                                    let mut best_score = f64::MAX;
-                                    
-                                    for (bid_cid, bid_node, bid_payload) in task_bids {
-                                        if let (Some(latency), Some(memory), Some(cores), Some(reputation), Some(renewable)) = (
-                                            bid_payload["offered_resources"]["latency_ms"].as_u64(),
-                                            bid_payload["offered_resources"]["memory_mb"].as_u64(),
-                                            bid_payload["offered_resources"]["cores"].as_u64(),
-                                            bid_payload["offered_resources"]["reputation"].as_u64(),
-                                            bid_payload["offered_resources"]["renewable_energy_pct"].as_u64(),
-                                        ) {
-                                            // Calculate bid score - lower is better
-                                            let score = latency as f64 * (100.0 - reputation as f64) / 
-                                                      (memory as f64 * cores as f64 * (1.0 + renewable as f64 / 100.0));
-                                            
-                                            if score < best_score {
-                                                best_score = score;
-                                                best_bid = Some((bid_cid.clone(), bid_node.clone(), bid_payload.clone()));
-                                            }
-                                        }
-                                    }
-                                    
-                                    // If we found a best bid, create a task assignment
-                                    if let Some((best_bid_cid, best_bid_node, _)) = best_bid {
-                                        println!("  Selected bid: {} with score: {:.4}", best_bid_cid, best_score);
-                                        
-                                        // In a real implementation, we would create a task assignment node
-                                        // that links the task and the winning bid, and distribute it to peers
-                                    }
-                                }
-                            }
-                        },
-                        Err(e) => {
-                            eprintln!("Error getting nodes: {:?}", e);
-                        }
-                    }
-                    
-                    last_check = now;
+            // In a real implementation, this would be a long-running process
+            // that listens for new task requests, collects bids, and matches them
+            println!("Scheduler is running. Press Ctrl+C to exit.");
+            println!("This is a simulated implementation. In a real implementation, this would:");
+            println!("  1. Listen for incoming task requests");
+            println!("  2. Request bids from nodes with matching capabilities");
+            println!("  3. Score and select the best bid");
+            println!("  4. Notify the winning node and requestor");
+            
+            if let Some(selector) = &capability_selector {
+                println!("\nUsing capability selector with requirements:");
+                if let Some(arch) = &selector.arch {
+                    println!("  - Architecture: {:?}", arch);
                 }
-            });
-            
-            // Keep the process running
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                if let Some(cores) = selector.min_cores {
+                    println!("  - Minimum cores: {}", cores);
+                }
+                if let Some(ram) = selector.min_ram_mb {
+                    println!("  - Minimum RAM: {} MB", ram);
+                }
+                if let Some(storage) = selector.min_storage_bytes {
+                    println!("  - Minimum storage: {} bytes", storage);
+                }
+                // Add more detailed information as needed
             }
+            
+            // Record metrics for scheduler startup
+            if let Ok(metrics_context) = init_metrics(&federation, None) {
+                metrics_context.record_scheduler_started();
+            }
+            
+            // Wait for user input to exit
+            tokio::signal::ctrl_c().await?;
+            
+            Ok(())
         },
         
         MeshCommands::Execute { task_cid, bid_cid, key, dag_dir, output_dir } => {
