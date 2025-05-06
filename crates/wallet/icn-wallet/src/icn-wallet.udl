@@ -1,0 +1,18 @@
+namespace icn_wallet {
+    // Core verification function that takes a JSON string and returns a verification report
+    string verify_credential(string json);
+};
+
+// Definition of the verification report structure
+dictionary VerificationReport {
+    string issuer_did;
+    boolean signature_valid;
+    boolean is_trusted;
+    boolean is_revoked;
+    string policy_version;
+    boolean lineage_verified;
+    boolean overall_valid;
+    boolean? capability_match;
+    string? error;
+    string timestamp;
+}; 
