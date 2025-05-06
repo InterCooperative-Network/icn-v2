@@ -546,6 +546,46 @@ enum MeshCommands {
         #[arg(long, default_value = "10")]
         limit: usize,
     },
+    
+    /// Work with node manifests for mesh capability advertisement
+    #[command(name = "manifest")]
+    Manifest {
+        /// Action to perform (create, publish, show, update, list)
+        #[arg(long)]
+        action: String,
+        
+        /// Path to key file for signing the manifest
+        #[arg(long)]
+        key: PathBuf,
+        
+        /// Path to DAG storage
+        #[arg(long)]
+        dag_dir: PathBuf,
+        
+        /// Federation ID
+        #[arg(long)]
+        federation: String,
+        
+        /// Output file for created manifests
+        #[arg(long)]
+        output: Option<PathBuf>,
+        
+        /// CID of manifest to show (only for 'show' action)
+        #[arg(long)]
+        cid: Option<String>,
+        
+        /// Field to update (only for 'update' action)
+        #[arg(long)]
+        field: Option<String>,
+        
+        /// Value to set (only for 'update' action)
+        #[arg(long)]
+        value: Option<String>,
+        
+        /// Trusted firmware hash (only for 'create' and 'publish' actions)
+        #[arg(long)]
+        firmware_hash: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -2255,6 +2295,617 @@ async fn handle_mesh_command(cmd: &MeshCommands) -> Result<()> {
             
             Ok(())
         },
+        MeshCommands::Manifest { action, key, dag_dir, federation, output, cid, field, value, firmware_hash } => {
+            // Create DAG store
+            let store = Arc::new(icn_types::dag::rocksdb::RocksDbDagStore::new(dag_dir)?);
+            
+            // Load the key file
+            let key_data = fs::read_to_string(&key)
+                .context("Failed to read key file")?;
+            let key_json: Value = serde_json::from_str(&key_data)
+                .context("Failed to parse key file as JSON")?;
+            let did_str = key_json["did"].as_str()
+                .context("Key file missing 'did' field")?;
+            
+            // For demo purposes, we'll create a new DidKey
+            // In a real implementation, we would load the private key from the file
+            let dummy_key = DidKey::new();
+            let did = Did::from(did_str.to_string());
+            
+            match action.as_str() {
+                "create" => {
+                    // Get firmware hash or use a default
+                    let hash = firmware_hash.unwrap_or_else(|| "unknown-firmware-hash".to_string());
+                    
+                    // Create a new manifest from system information
+                    let manifest = icn_identity_core::manifest::NodeManifest::from_system(did.clone(), &hash)
+                        .context("Failed to create manifest from system information")?;
+                    
+                    // Save to a file if output is specified
+                    if let Some(output_path) = output {
+                        let manifest_json = serde_json::to_string_pretty(&manifest)
+                            .context("Failed to serialize manifest to JSON")?;
+                        fs::write(&output_path, manifest_json)
+                            .context("Failed to write manifest to file")?;
+                        
+                        println!("Created node manifest for DID: {}", did_str);
+                        println!("Saved to: {}", output_path.display());
+                    } else {
+                        // Print the manifest
+                        let manifest_json = serde_json::to_string_pretty(&manifest)
+                            .context("Failed to serialize manifest to JSON")?;
+                        println!("{}", manifest_json);
+                    }
+                },
+                "publish" => {
+                    // Get firmware hash or use a default
+                    let hash = firmware_hash.unwrap_or_else(|| "unknown-firmware-hash".to_string());
+                    
+                    // Create a manifest
+                    let mut manifest = icn_identity_core::manifest::NodeManifest::from_system(did.clone(), &hash)
+                        .context("Failed to create manifest from system information")?;
+                    
+                    // Update the timestamp
+                    manifest.last_seen = chrono::Utc::now();
+                    
+                    // Sign the manifest
+                    let manifest_json = serde_json::to_vec(&manifest)
+                        .context("Failed to serialize manifest")?;
+                    manifest.signature = dummy_key.sign(&manifest_json);
+                    
+                    // Convert to a verifiable credential
+                    let manifest_vc = manifest.to_verifiable_credential();
+                    
+                    // Create a DAG node for the manifest
+                    let node = icn_types::dag::DagNodeBuilder::new()
+                        .with_payload(icn_types::dag::DagPayload::Json(manifest_vc))
+                        .with_author(did.clone())
+                        .with_federation_id(federation.clone())
+                        .with_label("NodeManifest".to_string())
+                        .build()
+                        .context("Failed to build DAG node")?;
+                        
+                    // Serialize the node for signing
+                    let node_bytes = serde_json::to_vec(&node)
+                        .context("Failed to serialize node")?;
+                    
+                    // Sign the node
+                    let signature = dummy_key.sign(&node_bytes);
+                    
+                    // Create a signed node
+                    let signed_node = icn_types::dag::SignedDagNode {
+                        node,
+                        signature,
+                        cid: None, // Will be computed when added to the DAG
+                    };
+                    
+                    // Add to the DAG store
+                    let manifest_cid = store.add_node(signed_node).await
+                        .map_err(|e| anyhow::anyhow!("Failed to add node to DAG: {:?}", e))?;
+                        
+                    println!("Published node manifest with CID: {}", manifest_cid);
+                    println!("Federation: {}", federation);
+                    println!("DID: {}", did_str);
+                    
+                    // Simulate publishing to gossipsub - in a real implementation this would use libp2p
+                    println!("Publishing manifest CID to gossipsub topic: mesh-capabilities");
+                },
+                "show" => {
+                    match cid {
+                        Some(ref manifest_cid) => {
+                            // Parse CID
+                            let cid_obj = parse_cid(manifest_cid)?;
+                            
+                            // Get the node from the DAG
+                            let node = store.get_node(&cid_obj).await?;
+                            
+                            // Check if it's a manifest
+                            if let icn_types::dag::DagPayload::Json(payload) = &node.node.payload {
+                                if payload.get("type").and_then(|t| t.as_array()).and_then(|a| a.iter().find(|t| t.as_str() == Some("NodeManifestCredential"))).is_some() {
+                                    // This is a NodeManifest credential
+                                    println!("Node Manifest (CID: {})", manifest_cid);
+                                    println!("Author: {}", node.node.author);
+                                    println!("Timestamp: {}", node.node.metadata.timestamp);
+                                    
+                                    // Extract and display capability details
+                                    if let Some(subject) = payload.get("credentialSubject") {
+                                        println!("\nCapabilities:");
+                                        println!("  Architecture: {}", subject.get("architecture").and_then(|a| a.as_str()).unwrap_or("unknown"));
+                                        println!("  Cores: {}", subject.get("cores").and_then(|c| c.as_u64()).unwrap_or(0));
+                                        println!("  RAM: {} MB", subject.get("ramMb").and_then(|r| r.as_u64()).unwrap_or(0));
+                                        println!("  Storage: {} bytes", subject.get("storageBytes").and_then(|s| s.as_u64()).unwrap_or(0));
+                                        
+                                        // GPU details if available
+                                        if let Some(gpu) = subject.get("gpu") {
+                                            if !gpu.is_null() {
+                                                println!("\nGPU:");
+                                                println!("  Model: {}", gpu.get("model").and_then(|m| m.as_str()).unwrap_or("unknown"));
+                                                println!("  VRAM: {} MB", gpu.get("vram_mb").and_then(|v| v.as_u64()).unwrap_or(0));
+                                                println!("  Cores: {}", gpu.get("cores").and_then(|c| c.as_u64()).unwrap_or(0));
+                                                println!("  Tensor cores: {}", gpu.get("tensor_cores").and_then(|t| t.as_bool()).unwrap_or(false));
+                                                
+                                                // API support
+                                                if let Some(apis) = gpu.get("api").and_then(|a| a.as_array()) {
+                                                    let api_strings: Vec<String> = apis.iter()
+                                                        .filter_map(|a| a.as_str().map(|s| s.to_string()))
+                                                        .collect();
+                                                    println!("  APIs: {}", api_strings.join(", "));
+                                                }
+                                                
+                                                // Features
+                                                if let Some(features) = gpu.get("features").and_then(|f| f.as_array()) {
+                                                    let feature_strings: Vec<String> = features.iter()
+                                                        .filter_map(|f| f.as_str().map(|s| s.to_string()))
+                                                        .collect();
+                                                    println!("  Features: {}", feature_strings.join(", "));
+                                                }
+                                            }
+                                        }
+                                        
+                                        // Sensor details if available
+                                        if let Some(sensors) = subject.get("sensors").and_then(|s| s.as_array()) {
+                                            if !sensors.is_empty() {
+                                                println!("\nSensors:");
+                                                for (i, sensor) in sensors.iter().enumerate() {
+                                                    println!("  {}. {} ({})", 
+                                                        i + 1,
+                                                        sensor.get("sensor_type").and_then(|t| t.as_str()).unwrap_or("unknown"),
+                                                        sensor.get("model").and_then(|m| m.as_str()).unwrap_or("unknown model")
+                                                    );
+                                                    println!("     Protocol: {}", sensor.get("protocol").and_then(|p| p.as_str()).unwrap_or("unknown"));
+                                                    println!("     Active: {}", sensor.get("active").and_then(|a| a.as_bool()).unwrap_or(false));
+                                                }
+                                            }
+                                        }
+                                        
+                                        // Actuator details if available
+                                        if let Some(actuators) = subject.get("actuators").and_then(|a| a.as_array()) {
+                                            if !actuators.is_empty() {
+                                                println!("\nActuators:");
+                                                for (i, actuator) in actuators.iter().enumerate() {
+                                                    println!("  {}. {} ({})", 
+                                                        i + 1,
+                                                        actuator.get("actuator_type").and_then(|t| t.as_str()).unwrap_or("unknown"),
+                                                        actuator.get("model").and_then(|m| m.as_str()).unwrap_or("unknown model")
+                                                    );
+                                                    println!("     Protocol: {}", actuator.get("protocol").and_then(|p| p.as_str()).unwrap_or("unknown"));
+                                                    println!("     Active: {}", actuator.get("active").and_then(|a| a.as_bool()).unwrap_or(false));
+                                                }
+                                            }
+                                        }
+                                        
+                                        // Energy details
+                                        if let Some(energy) = subject.get("energyProfile") {
+                                            println!("\nEnergy Profile:");
+                                            println!("  Renewable: {}%", energy.get("renewable_percentage").and_then(|r| r.as_u64()).unwrap_or(0));
+                                            
+                                            if let Some(battery) = energy.get("battery_percentage").and_then(|b| b.as_u64()) {
+                                                println!("  Battery: {}%", battery);
+                                                
+                                                if let Some(charging) = energy.get("charging").and_then(|c| c.as_bool()) {
+                                                    println!("  Charging: {}", charging);
+                                                }
+                                            }
+                                            
+                                            if let Some(power) = energy.get("power_consumption_watts").and_then(|p| p.as_f64()) {
+                                                println!("  Power consumption: {:.2} watts", power);
+                                            }
+                                            
+                                            // Energy sources
+                                            if let Some(sources) = energy.get("source").and_then(|s| s.as_array()) {
+                                                let source_strings: Vec<String> = sources.iter()
+                                                    .filter_map(|s| s.as_str().map(|s| s.to_string()))
+                                                    .collect();
+                                                println!("  Sources: {}", source_strings.join(", "));
+                                            }
+                                        }
+                                        
+                                        // Mesh protocols
+                                        if let Some(protocols) = subject.get("meshProtocols").and_then(|p| p.as_array()) {
+                                            let protocol_strings: Vec<String> = protocols.iter()
+                                                .filter_map(|p| p.as_str().map(|s| s.to_string()))
+                                                .collect();
+                                            println!("\nMesh Protocols: {}", protocol_strings.join(", "));
+                                        }
+                                        
+                                        println!("\nFirmware Hash: {}", subject.get("trustFirmwareHash").and_then(|h| h.as_str()).unwrap_or("unknown"));
+                                    } else {
+                                        println!("Warning: Missing credentialSubject in manifest");
+                                    }
+                                } else {
+                                    println!("Warning: The specified CID does not refer to a NodeManifest");
+                                    // Print the payload type for debugging
+                                    if let Some(type_val) = payload.get("type") {
+                                        println!("Payload type: {}", type_val);
+                                    }
+                                }
+                            } else {
+                                println!("Warning: The specified CID does not contain a JSON payload");
+                            }
+                        },
+                        None => {
+                            // List all manifests
+                            println!("Showing all manifests for federation: {}", federation);
+                            
+                            // Get all nodes
+                            let nodes = store.get_ordered_nodes().await?;
+                            
+                            // Filter for manifests in this federation
+                            let manifests: Vec<_> = nodes.iter()
+                                .filter(|node| node.node.federation_id == federation)
+                                .filter(|node| {
+                                    if let icn_types::dag::DagPayload::Json(payload) = &node.node.payload {
+                                        if let Some(types) = payload.get("type").and_then(|t| t.as_array()) {
+                                            types.iter().any(|t| t.as_str() == Some("NodeManifestCredential"))
+                                        } else {
+                                            false
+                                        }
+                                    } else {
+                                        false
+                                    }
+                                })
+                                .collect();
+                            
+                            if manifests.is_empty() {
+                                println!("No manifests found for federation: {}", federation);
+                            } else {
+                                println!("Found {} manifests:", manifests.len());
+                                
+                                for (i, node) in manifests.iter().enumerate() {
+                                    let cid = node.cid.as_ref().unwrap();
+                                    println!("{}. CID: {}", i + 1, cid);
+                                    println!("   Author: {}", node.node.author);
+                                    println!("   Timestamp: {}", node.node.metadata.timestamp);
+                                    
+                                    // Extract basic info
+                                    if let icn_types::dag::DagPayload::Json(payload) = &node.node.payload {
+                                        if let Some(subject) = payload.get("credentialSubject") {
+                                            let arch = subject.get("architecture").and_then(|a| a.as_str()).unwrap_or("unknown");
+                                            let cores = subject.get("cores").and_then(|c| c.as_u64()).unwrap_or(0);
+                                            let ram = subject.get("ramMb").and_then(|r| r.as_u64()).unwrap_or(0);
+                                            
+                                            println!("   Architecture: {}, Cores: {}, RAM: {} MB", arch, cores, ram);
+                                            
+                                            // GPU info if available
+                                            if let Some(gpu) = subject.get("gpu") {
+                                                if !gpu.is_null() {
+                                                    let model = gpu.get("model").and_then(|m| m.as_str()).unwrap_or("unknown");
+                                                    println!("   GPU: {}", model);
+                                                }
+                                            }
+                                            
+                                            // Number of sensors and actuators
+                                            let sensor_count = subject.get("sensors").and_then(|s| s.as_array()).map(|a| a.len()).unwrap_or(0);
+                                            let actuator_count = subject.get("actuators").and_then(|a| a.as_array()).map(|a| a.len()).unwrap_or(0);
+                                            
+                                            if sensor_count > 0 || actuator_count > 0 {
+                                                println!("   Sensors: {}, Actuators: {}", sensor_count, actuator_count);
+                                            }
+                                            
+                                            // Renewable energy percentage
+                                            if let Some(energy) = subject.get("energyProfile") {
+                                                let renewable = energy.get("renewable_percentage").and_then(|r| r.as_u64()).unwrap_or(0);
+                                                println!("   Renewable Energy: {}%", renewable);
+                                            }
+                                        }
+                                    }
+                                    
+                                    println!("");
+                                }
+                            }
+                        }
+                    }
+                },
+                "update" => {
+                    // Both field and value must be provided
+                    if field.is_none() || value.is_none() {
+                        return Err(anyhow::anyhow!("Both --field and --value parameters are required for update action"));
+                    }
+                    
+                    let field = field.unwrap();
+                    let value_str = value.unwrap();
+                    
+                    // Parse the value string as JSON
+                    let value_json: Value = serde_json::from_str(&value_str)
+                        .context("Failed to parse value as JSON")?;
+                    
+                    // Create a manifest
+                    let hash = firmware_hash.unwrap_or_else(|| "unknown-firmware-hash".to_string());
+                    let mut manifest = icn_identity_core::manifest::NodeManifest::from_system(did.clone(), &hash)
+                        .context("Failed to create manifest from system information")?;
+                    
+                    // Update the field
+                    match field.as_str() {
+                        "energy_profile.renewable_percentage" => {
+                            if let Some(percentage) = value_json.as_u64() {
+                                manifest.energy_profile.renewable_percentage = percentage.min(100) as u8;
+                            } else {
+                                return Err(anyhow::anyhow!("Renewable percentage must be a number"));
+                            }
+                        },
+                        "energy_profile.battery_percentage" => {
+                            if let Some(percentage) = value_json.as_u64() {
+                                manifest.energy_profile.battery_percentage = Some(percentage.min(100) as u8);
+                            } else if value_json.is_null() {
+                                manifest.energy_profile.battery_percentage = None;
+                            } else {
+                                return Err(anyhow::anyhow!("Battery percentage must be a number or null"));
+                            }
+                        },
+                        "energy_profile.charging" => {
+                            if value_json.is_boolean() {
+                                manifest.energy_profile.charging = value_json.as_bool();
+                            } else {
+                                return Err(anyhow::anyhow!("Charging must be a boolean"));
+                            }
+                        },
+                        "energy_profile.power_consumption_watts" => {
+                            if let Some(watts) = value_json.as_f64() {
+                                manifest.energy_profile.power_consumption_watts = Some(watts);
+                            } else if value_json.is_null() {
+                                manifest.energy_profile.power_consumption_watts = None;
+                            } else {
+                                return Err(anyhow::anyhow!("Power consumption must be a number or null"));
+                            }
+                        },
+                        "sensors" => {
+                            if let Some(sensors) = value_json.as_array() {
+                                let mut new_sensors = Vec::new();
+                                
+                                for sensor in sensors {
+                                    if let Some(sensor_obj) = sensor.as_object() {
+                                        if let (Some(sensor_type), Some(protocol)) = (
+                                            sensor_obj.get("sensor_type").and_then(|s| s.as_str()),
+                                            sensor_obj.get("protocol").and_then(|p| p.as_str())
+                                        ) {
+                                            new_sensors.push(icn_identity_core::manifest::SensorProfile {
+                                                sensor_type: sensor_type.to_string(),
+                                                model: sensor_obj.get("model").and_then(|m| m.as_str()).map(|s| s.to_string()),
+                                                capabilities: sensor_obj.get("capabilities").cloned().unwrap_or(serde_json::json!({})),
+                                                protocol: protocol.to_string(),
+                                                active: sensor_obj.get("active").and_then(|a| a.as_bool()).unwrap_or(true),
+                                            });
+                                        }
+                                    }
+                                }
+                                
+                                manifest.sensors = new_sensors;
+                            } else {
+                                return Err(anyhow::anyhow!("Sensors must be an array"));
+                            }
+                        },
+                        "actuators" => {
+                            if let Some(actuators) = value_json.as_array() {
+                                let mut new_actuators = Vec::new();
+                                
+                                for actuator in actuators {
+                                    if let Some(actuator_obj) = actuator.as_object() {
+                                        if let (Some(actuator_type), Some(protocol)) = (
+                                            actuator_obj.get("actuator_type").and_then(|s| s.as_str()),
+                                            actuator_obj.get("protocol").and_then(|p| p.as_str())
+                                        ) {
+                                            new_actuators.push(icn_identity_core::manifest::Actuator {
+                                                actuator_type: actuator_type.to_string(),
+                                                model: actuator_obj.get("model").and_then(|m| m.as_str()).map(|s| s.to_string()),
+                                                capabilities: actuator_obj.get("capabilities").cloned().unwrap_or(serde_json::json!({})),
+                                                protocol: protocol.to_string(),
+                                                active: actuator_obj.get("active").and_then(|a| a.as_bool()).unwrap_or(true),
+                                            });
+                                        }
+                                    }
+                                }
+                                
+                                manifest.actuators = new_actuators;
+                            } else {
+                                return Err(anyhow::anyhow!("Actuators must be an array"));
+                            }
+                        },
+                        "gpu" => {
+                            if value_json.is_null() {
+                                manifest.gpu = None;
+                            } else if let Some(gpu_obj) = value_json.as_object() {
+                                if let (Some(model), Some(vram_mb), Some(cores)) = (
+                                    gpu_obj.get("model").and_then(|m| m.as_str()),
+                                    gpu_obj.get("vram_mb").and_then(|v| v.as_u64()),
+                                    gpu_obj.get("cores").and_then(|c| c.as_u64())
+                                ) {
+                                    // Parse APIs
+                                    let mut apis = Vec::new();
+                                    if let Some(api_array) = gpu_obj.get("api").and_then(|a| a.as_array()) {
+                                        for api in api_array {
+                                            if let Some(api_str) = api.as_str() {
+                                                match api_str.to_lowercase().as_str() {
+                                                    "cuda" => apis.push(icn_identity_core::manifest::GpuApi::Cuda),
+                                                    "vulkan" => apis.push(icn_identity_core::manifest::GpuApi::Vulkan),
+                                                    "metal" => apis.push(icn_identity_core::manifest::GpuApi::Metal),
+                                                    "webgpu" => apis.push(icn_identity_core::manifest::GpuApi::WebGpu),
+                                                    "opencl" => apis.push(icn_identity_core::manifest::GpuApi::OpenCl),
+                                                    "directx" => apis.push(icn_identity_core::manifest::GpuApi::DirectX),
+                                                    _ => apis.push(icn_identity_core::manifest::GpuApi::Other),
+                                                }
+                                            }
+                                        }
+                                    }
+                                    
+                                    // Parse features
+                                    let mut features = Vec::new();
+                                    if let Some(feature_array) = gpu_obj.get("features").and_then(|f| f.as_array()) {
+                                        for feature in feature_array {
+                                            if let Some(feature_str) = feature.as_str() {
+                                                features.push(feature_str.to_string());
+                                            }
+                                        }
+                                    }
+                                    
+                                    manifest.gpu = Some(icn_identity_core::manifest::GpuProfile {
+                                        model: model.to_string(),
+                                        api: apis,
+                                        vram_mb,
+                                        cores: cores as u32,
+                                        tensor_cores: gpu_obj.get("tensor_cores").and_then(|t| t.as_bool()).unwrap_or(false),
+                                        features,
+                                    });
+                                } else {
+                                    return Err(anyhow::anyhow!("GPU object must contain model, vram_mb, and cores fields"));
+                                }
+                            } else {
+                                return Err(anyhow::anyhow!("GPU must be an object or null"));
+                            }
+                        },
+                        "storage_bytes" => {
+                            if let Some(bytes) = value_json.as_u64() {
+                                manifest.storage_bytes = bytes;
+                            } else {
+                                return Err(anyhow::anyhow!("Storage bytes must be a number"));
+                            }
+                        },
+                        "ram_mb" => {
+                            if let Some(mb) = value_json.as_u64() {
+                                manifest.ram_mb = mb as u32;
+                            } else {
+                                return Err(anyhow::anyhow!("RAM MB must be a number"));
+                            }
+                        },
+                        "cores" => {
+                            if let Some(cores) = value_json.as_u64() {
+                                manifest.cores = cores as u16;
+                            } else {
+                                return Err(anyhow::anyhow!("Cores must be a number"));
+                            }
+                        },
+                        "trust_fw_hash" => {
+                            if let Some(hash) = value_json.as_str() {
+                                manifest.trust_fw_hash = hash.to_string();
+                            } else {
+                                return Err(anyhow::anyhow!("Firmware hash must be a string"));
+                            }
+                        },
+                        _ => {
+                            return Err(anyhow::anyhow!("Unknown field: {}", field));
+                        }
+                    }
+                    
+                    // Update the timestamp
+                    manifest.last_seen = chrono::Utc::now();
+                    
+                    // Sign the manifest
+                    let manifest_json = serde_json::to_vec(&manifest)
+                        .context("Failed to serialize manifest")?;
+                    manifest.signature = dummy_key.sign(&manifest_json);
+                    
+                    // Convert to a verifiable credential
+                    let manifest_vc = manifest.to_verifiable_credential();
+                    
+                    // Create a DAG node for the manifest
+                    let node = icn_types::dag::DagNodeBuilder::new()
+                        .with_payload(icn_types::dag::DagPayload::Json(manifest_vc))
+                        .with_author(did.clone())
+                        .with_federation_id(federation.clone())
+                        .with_label("NodeManifest".to_string())
+                        .build()
+                        .context("Failed to build DAG node")?;
+                        
+                    // Serialize the node for signing
+                    let node_bytes = serde_json::to_vec(&node)
+                        .context("Failed to serialize node")?;
+                    
+                    // Sign the node
+                    let signature = dummy_key.sign(&node_bytes);
+                    
+                    // Create a signed node
+                    let signed_node = icn_types::dag::SignedDagNode {
+                        node,
+                        signature,
+                        cid: None, // Will be computed when added to the DAG
+                    };
+                    
+                    // Add to the DAG store
+                    let manifest_cid = store.add_node(signed_node).await
+                        .map_err(|e| anyhow::anyhow!("Failed to add node to DAG: {:?}", e))?;
+                        
+                    println!("Updated node manifest with CID: {}", manifest_cid);
+                    println!("Updated field: {}", field);
+                    println!("Federation: {}", federation);
+                    println!("DID: {}", did_str);
+                },
+                "list" => {
+                    // List all manifests for this federation
+                    println!("Listing all manifests for federation: {}", federation);
+                    
+                    // Get all nodes
+                    let nodes = store.get_ordered_nodes().await?;
+                    
+                    // Filter for manifests in this federation
+                    let manifests: Vec<_> = nodes.iter()
+                        .filter(|node| node.node.federation_id == federation)
+                        .filter(|node| {
+                            if let icn_types::dag::DagPayload::Json(payload) = &node.node.payload {
+                                if let Some(types) = payload.get("type").and_then(|t| t.as_array()) {
+                                    types.iter().any(|t| t.as_str() == Some("NodeManifestCredential"))
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            }
+                        })
+                        .collect();
+                    
+                    if manifests.is_empty() {
+                        println!("No manifests found for federation: {}", federation);
+                    } else {
+                        println!("Found {} manifests:", manifests.len());
+                        
+                        for (i, node) in manifests.iter().enumerate() {
+                            let cid = node.cid.as_ref().unwrap();
+                            println!("{}. CID: {}", i + 1, cid);
+                            println!("   Author: {}", node.node.author);
+                            println!("   Timestamp: {}", node.node.metadata.timestamp);
+                            
+                            // Extract basic info
+                            if let icn_types::dag::DagPayload::Json(payload) = &node.node.payload {
+                                if let Some(subject) = payload.get("credentialSubject") {
+                                    let arch = subject.get("architecture").and_then(|a| a.as_str()).unwrap_or("unknown");
+                                    let cores = subject.get("cores").and_then(|c| c.as_u64()).unwrap_or(0);
+                                    let ram = subject.get("ramMb").and_then(|r| r.as_u64()).unwrap_or(0);
+                                    
+                                    println!("   Architecture: {}, Cores: {}, RAM: {} MB", arch, cores, ram);
+                                    
+                                    // GPU info if available
+                                    if let Some(gpu) = subject.get("gpu") {
+                                        if !gpu.is_null() {
+                                            let model = gpu.get("model").and_then(|m| m.as_str()).unwrap_or("unknown");
+                                            println!("   GPU: {}", model);
+                                        }
+                                    }
+                                    
+                                    // Number of sensors and actuators
+                                    let sensor_count = subject.get("sensors").and_then(|s| s.as_array()).map(|a| a.len()).unwrap_or(0);
+                                    let actuator_count = subject.get("actuators").and_then(|a| a.as_array()).map(|a| a.len()).unwrap_or(0);
+                                    
+                                    if sensor_count > 0 || actuator_count > 0 {
+                                        println!("   Sensors: {}, Actuators: {}", sensor_count, actuator_count);
+                                    }
+                                    
+                                    // Renewable energy percentage
+                                    if let Some(energy) = subject.get("energyProfile") {
+                                        let renewable = energy.get("renewable_percentage").and_then(|r| r.as_u64()).unwrap_or(0);
+                                        println!("   Renewable Energy: {}%", renewable);
+                                    }
+                                }
+                            }
+                            
+                            println!("");
+                        }
+                    }
+                },
+                _ => {
+                    return Err(anyhow::anyhow!("Unknown action: {}. Allowed actions: create, publish, show, update, list", action));
+                }
+            }
+            
+            Ok(())
+        },
     }
 }
 
@@ -2262,239 +2913,168 @@ async fn handle_mesh_command(cmd: &MeshCommands) -> Result<()> {
 async fn handle_dag_sync_command(cmd: &DagSyncCommands) -> Result<()> {
     match cmd {
         DagSyncCommands::Connect { peer, federation, dag_dir } => {
-            // Create storage path
-            std::fs::create_dir_all(dag_dir)?;
+            // Create DAG store
+            let dag_store = open_dag_store(dag_dir).await?;
             
-            // Create DAG store with RocksDB
-            let store = Arc::new(icn_types::dag::rocksdb::RocksDbDagStore::new(dag_dir)?);
-            
-            // Create transport config
-            let transport_config = TransportConfig {
-                peer_id: uuid::Uuid::new_v4().to_string(), // Generate random peer ID
-                federation_id: federation.clone(),
-                local_did: None, // We could load from key file in the future
-                listen_addresses: vec!["/ip4/0.0.0.0/tcp/0".to_string()], // Random port
-                bootstrap_peers: vec![peer.clone()],
-                enable_mdns: true,
-                enable_kad_dht: false,
-                max_message_size: 1024 * 1024, // 1MB
-                request_timeout: 30, // 30 seconds
-            };
-            
-            println!("Connecting to peer {}", peer);
-            
-            // Create the transport
-            let transport = Libp2pDagTransport::new(transport_config).await?;
-            
-            // Create the sync service
-            let sync_service = NetworkDagSyncService::new(
-                transport,
-                store,
-                federation.clone(),
-                None, // Local DID
-            );
-            
-            // Parse the peer string into a FederationPeer
-            let peer_parts: Vec<&str> = peer.split('/').collect();
-            let peer_id = peer_parts.last().unwrap_or(&"").to_string();
-            
-            let federation_peer = FederationPeer {
-                id: peer_id,
+            // Create a federation peer
+            let federation_peer = icn_types::dag::FederationPeer {
+                id: peer.clone(),
                 endpoint: peer.clone(),
                 federation_id: federation.clone(),
                 metadata: None,
             };
             
-            // Connect to the peer
-            sync_service.connect_peer(&federation_peer).await?;
-            println!("Connected to peer: {}", peer);
-            
-            // Start background sync
-            sync_service.start_background_sync().await?;
-            println!("Background sync started");
-            
-            // Keep the process running
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            }
-        },
-        
-        DagSyncCommands::AutoSync { 
-            federation, 
-            dag_dir,
-            mdns, 
-            kad_dht, 
-            bootstrap_peers,
-            authorized_dids,
-            min_quorum,
-        } => {
-            // Create storage directory
-            std::fs::create_dir_all(dag_dir)?;
-            
-            // Create DAG store
-            let store = Arc::new(icn_types::dag::rocksdb::RocksDbDagStore::new(dag_dir)?);
-            
-            // Create transport config
-            let transport_config = TransportConfig {
-                peer_id: uuid::Uuid::new_v4().to_string(), // Generate random peer ID
-                federation_id: federation.clone(),
-                local_did: None, // We could load from key file in the future
-                listen_addresses: vec!["/ip4/0.0.0.0/tcp/0".to_string()], // Random port
-                bootstrap_peers: bootstrap_peers.clone().unwrap_or_default(),
-                enable_mdns: *mdns,
-                enable_kad_dht: *kad_dht,
-                max_message_size: 1024 * 1024, // 1MB
-                request_timeout: 30, // 30 seconds
-            };
-            
-            println!("Starting auto-sync for federation {}", federation);
-            
-            // Create the transport
-            let transport = Libp2pDagTransport::new(transport_config).await?;
-            
-            // Create sync policy
-            let mut policy = SyncPolicy::default();
-            policy.min_quorum = *min_quorum;
-            
-            // Set authorized DIDs if provided
-            if let Some(dids) = authorized_dids {
-                let did_set: HashSet<Did> = dids.iter()
-                    .filter_map(|d| {
-                        if d.starts_with("did:") {
-                            Some(Did::from(d.to_string()))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                
-                if !did_set.is_empty() {
-                    policy.authorized_dids = Some(did_set);
-                }
-            }
-            
-            // Create the sync service with the policy
-            let sync_service = NetworkDagSyncService::new(
-                transport,
-                store,
+            // Create a sync service
+            let mut sync_service = icn_types::dag::sync::memory::MemoryDAGSyncService::new(
+                dag_store,
                 federation.clone(),
-                None, // Local DID
-            ).with_policy(policy);
-            
-            // Start background sync
-            sync_service.start_background_sync().await?;
-            println!("Background sync started");
-            
-            // Discover peers periodically
-            let sync_service_clone = sync_service.clone();
-            tokio::spawn(async move {
-                loop {
-                    match sync_service_clone.discover_peers().await {
-                        Ok(peers) => {
-                            println!("Discovered {} peers", peers.len());
-                            for peer in peers {
-                                if let Err(e) = sync_service_clone.connect_peer(&peer).await {
-                                    eprintln!("Failed to connect to peer {}: {:?}", peer.id, e);
-                                } else {
-                                    println!("Connected to peer: {}", peer.id);
-                                }
-                            }
-                        },
-                        Err(e) => {
-                            eprintln!("Error discovering peers: {:?}", e);
-                        }
-                    }
-                    
-                    // Wait before next discovery
-                    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-                }
-            });
-            
-            // Keep the process running
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            }
-        },
-        
-        DagSyncCommands::Offer { peer, federation, dag_dir, max_nodes } => {
-            // Create DAG store
-            let store = Arc::new(icn_types::dag::rocksdb::RocksDbDagStore::new(dag_dir)?);
-            
-            // Create transport config
-            let transport_config = TransportConfig {
-                peer_id: uuid::Uuid::new_v4().to_string(), // Generate random peer ID
-                federation_id: federation.clone(),
-                local_did: None, // We could load from key file in the future
-                listen_addresses: vec!["/ip4/0.0.0.0/tcp/0".to_string()], // Random port
-                bootstrap_peers: vec![],
-                enable_mdns: true,
-                enable_kad_dht: false,
-                max_message_size: 1024 * 1024, // 1MB
-                request_timeout: 30, // 30 seconds
-            };
-            
-            // Create the transport
-            let transport = Libp2pDagTransport::new(transport_config).await?;
-            
-            // Create the sync service
-            let sync_service = NetworkDagSyncService::new(
-                transport,
-                store.clone(),
-                federation.clone(),
-                None, // Local DID
+                "local-peer".to_string(), // In a real implementation, we'd use a persistent peer ID
             );
             
-            // Get nodes from the store (limited by max_nodes)
-            let cids = store.list_cids(*max_nodes).await?;
+            // Add the peer to the service
+            sync_service.add_peer(federation_peer.clone(), 50);
             
-            if cids.is_empty() {
-                println!("No nodes available to offer");
-                return Ok(());
-            }
+            // Sync with the peer
+            println!("Synchronizing with peer {} at {}", peer, peer);
+            println!("Federation: {}", federation);
+            println!("Trust level: 50");
             
-            println!("Offering {} nodes to peer {}", cids.len(), peer);
-            
-            // Offer nodes to the peer
-            match sync_service.offer_nodes(peer, &cids).await {
-                Ok(requested_cids) => {
-                    println!("Peer requested {} nodes", requested_cids.len());
+            match sync_service.sync_with_peer(&federation_peer).await {
+                Ok(result) => {
+                    println!("\nSync result:");
+                    println!("  Valid: {}", result.is_valid);
+                    println!("  Accepted nodes: {}", result.accepted_nodes.len());
+                    println!("  Rejected nodes: {}", result.rejected_nodes.len());
+                    println!("\nDetailed report:");
+                    println!("{}", result.report);
                     
-                    if !requested_cids.is_empty() {
-                        // Fetch the requested nodes from our store
-                        let mut nodes = Vec::new();
-                        for cid in &requested_cids {
-                            if let Ok(Some(node)) = store.get(cid).await {
-                                nodes.push(node);
-                            }
-                        }
-                        
-                        // Create a bundle and send it
-                        if !nodes.is_empty() {
-                            sync_service.broadcast_nodes(&nodes).await?;
-                            println!("Sent {} nodes to peer", nodes.len());
-                        }
-                    }
+                    Ok(())
                 },
                 Err(e) => {
-                    eprintln!("Failed to offer nodes: {:?}", e);
+                    Err(anyhow::anyhow!("Sync failed: {}", e))
+                }
+            }
+        },
+        DagSyncCommands::AutoSync { federation, dag_dir, mdns, kad_dht, bootstrap_peers, authorized_dids, min_quorum } => {
+            // Create DAG store
+            let dag_store = open_dag_store(dag_dir).await?;
+            
+            // Create a sync service
+            let mut sync_service = icn_types::dag::sync::memory::MemoryDAGSyncService::new(
+                dag_store,
+                federation.clone(),
+                "local-peer".to_string(), // In a real implementation, we'd use a persistent peer ID
+            );
+            
+            // Add the peers to the service
+            if let Some(peers) = bootstrap_peers {
+                for peer in peers {
+                    sync_service.add_peer(icn_types::dag::FederationPeer {
+                        id: peer.clone(),
+                        endpoint: peer.clone(),
+                        federation_id: federation.clone(),
+                        metadata: None,
+                    }, 50);
                 }
             }
             
-            Ok(())
+            if let Some(dids) = authorized_dids {
+                for did in dids {
+                    sync_service.add_peer(icn_types::dag::FederationPeer {
+                        id: did.clone(),
+                        endpoint: did.clone(),
+                        federation_id: federation.clone(),
+                        metadata: None,
+                    }, 50);
+                }
+            }
+            
+            // Set minimum quorum
+            sync_service.set_min_quorum(*min_quorum);
+            
+            // Start auto-sync
+            println!("Starting auto-sync with federation: {}", federation);
+            println!("Trust level: 50");
+            println!("Minimum quorum: {}", min_quorum);
+            
+            if *mdns {
+                println!("mDNS discovery enabled");
+            }
+            
+            if *kad_dht {
+                println!("Kademlia DHT discovery enabled");
+            }
+            
+            if let Some(peers) = bootstrap_peers {
+                println!("Bootstrap peers: {}", peers.join(", "));
+            }
+            
+            if let Some(dids) = authorized_dids {
+                println!("Authorized DIDs: {}", dids.join(", "));
+            }
+            
+            match sync_service.start_auto_sync().await {
+                Ok(result) => {
+                    println!("\nAuto-sync result:");
+                    println!("  Valid: {}", result.is_valid);
+                    println!("  Accepted nodes: {}", result.accepted_nodes.len());
+                    println!("  Rejected nodes: {}", result.rejected_nodes.len());
+                    println!("\nDetailed report:");
+                    println!("{}", result.report);
+                    
+                    Ok(())
+                },
+                Err(e) => {
+                    Err(anyhow::anyhow!("Auto-sync failed: {}", e))
+                }
+            }
         },
-        
-        DagSyncCommands::Genesis { 
-            federation, 
-            dag_dir,
-            key,
-            policy_id,
-            founding_dids,
-            start_node,
-            listen_addr,
-            mdns,
-        } => {
-            // Create storage directory
-            std::fs::create_dir_all(dag_dir)?;
+        DagSyncCommands::Offer { peer, federation, dag_dir, max_nodes } => {
+            // Create DAG store
+            let dag_store = open_dag_store(dag_dir).await?;
+            
+            // Create a federation peer
+            let federation_peer = icn_types::dag::FederationPeer {
+                id: peer.clone(),
+                endpoint: peer.clone(),
+                federation_id: federation.clone(),
+                metadata: None,
+            };
+            
+            // Create a sync service
+            let mut sync_service = icn_types::dag::sync::memory::MemoryDAGSyncService::new(
+                dag_store,
+                federation.clone(),
+                "local-peer".to_string(), // In a real implementation, we'd use a persistent peer ID
+            );
+            
+            // Add the peer to the service
+            sync_service.add_peer(federation_peer.clone(), 50);
+            
+            // Offer nodes to the peer
+            println!("Offering {} nodes to peer {} at {}", max_nodes, peer, peer);
+            println!("Federation: {}", federation);
+            println!("Trust level: 50");
+            
+            match sync_service.offer_nodes(&federation_peer, max_nodes).await {
+                Ok(result) => {
+                    println!("\nOffer result:");
+                    println!("  Valid: {}", result.is_valid);
+                    println!("  Accepted nodes: {}", result.accepted_nodes.len());
+                    println!("  Rejected nodes: {}", result.rejected_nodes.len());
+                    println!("\nDetailed report:");
+                    println!("{}", result.report);
+                    
+                    Ok(())
+                },
+                Err(e) => {
+                    Err(anyhow::anyhow!("Offer failed: {}", e))
+                }
+            }
+        },
+        DagSyncCommands::Genesis { federation, dag_dir, key, policy_id, founding_dids, start_node, listen_addr, mdns } => {
+            // Create DAG store
+            let dag_store = open_dag_store(dag_dir).await?;
             
             // Load the key file
             let key_data = fs::read_to_string(key)
@@ -2505,219 +3085,112 @@ async fn handle_dag_sync_command(cmd: &DagSyncCommands) -> Result<()> {
                 .context("Key file missing 'did' field")?;
             
             // Get the DID from the key file
-            let author_did = Did::from(did_str.to_string());
+            let did = Did::from(did_str.to_string());
             
-            // In a real implementation, we would load the private key
-            // For now, we'll use a placeholder by generating a new key
-            let dummy_key = DidKey::new();
+            // Create a new manifest
+            let manifest = icn_identity_core::manifest::NodeManifest::from_system(did.clone(), "unknown-firmware-hash")
+                .context("Failed to create manifest from system information")?;
             
-            // Create DAG store
-            let store = Arc::new(icn_types::dag::rocksdb::RocksDbDagStore::new(dag_dir)?);
-            let mut store_ref = store.clone();
-
-            println!("Creating genesis state for federation: {}", federation);
-            
-            // Create a genesis state object - this would be the initial state of the federation
-            let genesis_state = serde_json::json!({
-                "type": "GenesisState",
-                "federation_id": federation,
-                "timestamp": chrono::Utc::now().to_rfc3339(),
-                "founding_members": founding_dids,
-                "policy_id": policy_id,
-                "description": "Genesis state for the federation",
-            });
-            
-            // Serialize the genesis state and compute its CID
-            let genesis_bytes = serde_json::to_vec(&genesis_state)
-                .context("Failed to serialize genesis state")?;
-                
-            // Use the DagNodeBuilder to create a raw payload node
-            let genesis_node = icn_types::dag::DagNodeBuilder::new()
-                .with_payload(icn_types::dag::DagPayload::Json(genesis_state))
-                .with_author(author_did.clone())
-                .with_federation_id(federation.clone())
-                .with_label("GenesisState".to_string())
-                .build()?;
-                
-            // Sign the genesis node
-            let node_bytes = serde_json::to_vec(&genesis_node)
-                .context("Failed to serialize genesis node")?;
-            let signature = dummy_key.sign(&node_bytes);
-            
-            // Create a signed node
-            let signed_genesis_node = icn_types::dag::SignedDagNode {
-                node: genesis_node,
-                signature,
-                cid: None, // Will be computed when added to the DAG
-            };
-            
-            // Add to the DAG store to get its CID
-            let genesis_cid = store_ref.add_node(signed_genesis_node)
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to add genesis node to DAG: {}", e))?;
-                
-            println!("Genesis state created with CID: {}", genesis_cid);
-            
-            // Create DIDs for quorum members and signatures
-            let quorum_dids: Vec<Did> = founding_dids.iter()
-                .map(|s| Did::from(s.clone()))
-                .collect();
-                
-            // Create signatures (in a real implementation, we would collect actual signatures)
-            // For now, we just create dummy signatures for all founding members
-            let signatures = quorum_dids.iter()
-                .map(|did| (did.clone(), dummy_key.sign(genesis_cid.as_bytes())))
-                .collect();
-                
-            // Create quorum proof
-            let quorum_proof = icn_types::quorum::QuorumProof {
-                data_cid: genesis_cid.clone(),
-                policy_id: policy_id.clone(),
-                signatures,
-                metadata: None,
-            };
-            
-            // Create TrustBundle with the genesis state as its state CID
-            let trust_bundle = TrustBundle::new(
-                genesis_cid.clone(),
-                quorum_proof,
-                vec![], // No previous anchors for genesis
-                Some(serde_json::json!({
-                    "name": "Genesis TrustBundle",
-                    "description": "Initial TrustBundle for the federation",
-                    "timestamp": chrono::Utc::now().to_rfc3339(),
-                })),
+            // Create a sync service
+            let mut sync_service = icn_types::dag::sync::memory::MemoryDAGSyncService::new(
+                dag_store,
+                federation.clone(),
+                "local-peer".to_string(), // In a real implementation, we'd use a persistent peer ID
             );
             
-            // Anchor the TrustBundle to the DAG
-            let bundle_node = trust_bundle.to_dag_node(author_did.clone())?;
-            let bundle_bytes = serde_json::to_vec(&bundle_node)
-                .context("Failed to serialize bundle node")?;
-            let bundle_signature = dummy_key.sign(&bundle_bytes);
-            
-            let signed_bundle_node = icn_types::dag::SignedDagNode {
-                node: bundle_node,
-                signature: bundle_signature,
-                cid: None,
-            };
-            
-            let bundle_cid = store_ref.add_node(signed_bundle_node)
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to add bundle node to DAG: {}", e))?;
-                
-            println!("Genesis TrustBundle anchored with CID: {}", bundle_cid);
-            
-            // If not starting a node, we're done
-            if !*start_node {
-                println!("Genesis state created successfully. Node not started.");
-                return Ok(());
+            // Add the peers to the service
+            if *start_node {
+                sync_service.add_peer(icn_types::dag::FederationPeer {
+                    id: "local-peer".to_string(),
+                    endpoint: listen_addr.clone(),
+                    federation_id: federation.clone(),
+                    metadata: None,
+                }, 50);
             }
             
-            println!("Starting p2p node for federation sync...");
-            
-            // Create transport config for the p2p node
-            let transport_config = TransportConfig {
-                peer_id: uuid::Uuid::new_v4().to_string(), // Generate random peer ID
-                federation_id: federation.clone(),
-                local_did: Some(author_did.clone()), // Use the author DID for the node
-                listen_addresses: vec![listen_addr.clone()],
-                bootstrap_peers: vec![],
-                enable_mdns: *mdns,
-                enable_kad_dht: false,
-                max_message_size: 1024 * 1024, // 1MB
-                request_timeout: 30, // 30 seconds
-            };
-            
-            // Create the transport
-            let transport = Libp2pDagTransport::new(transport_config).await?;
-            
-            // Create sync policy
-            let mut policy = SyncPolicy::default();
-            policy.min_quorum = 1; // Genesis quorum is always 1
-            
-            // Set authorized DIDs
-            let did_set: HashSet<Did> = founding_dids.iter()
-                .filter_map(|d| {
-                    if d.starts_with("did:") {
-                        Some(Did::from(d.to_string()))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            
-            if !did_set.is_empty() {
-                policy.authorized_dids = Some(did_set);
+            if let Some(peers) = founding_dids {
+                for peer in peers {
+                    sync_service.add_peer(icn_types::dag::FederationPeer {
+                        id: peer.clone(),
+                        endpoint: peer.clone(),
+                        federation_id: federation.clone(),
+                        metadata: None,
+                    }, 50);
+                }
             }
             
-            // Create the sync service with the policy
-            let sync_service = NetworkDagSyncService::new(
-                transport,
-                store,
-                federation.clone(),
-                Some(author_did), // Use the author DID for the node
-            ).with_policy(policy);
+            // Set minimum quorum
+            sync_service.set_min_quorum(peers.len() + 1);
             
-            // Print listening address
-            println!("Listening on: {}", listen_addr);
+            // Start the genesis DAG state
+            println!("Creating genesis DAG state for federation: {}", federation);
+            println!("Trust level: 50");
+            println!("Minimum quorum: {}", peers.len() + 1);
             
-            // Start background sync
-            sync_service.start_background_sync().await?;
-            println!("Background sync started");
+            if *mdns {
+                println!("mDNS discovery enabled");
+            }
             
-            // Discover peers periodically
-            let sync_service_clone = sync_service.clone();
-            tokio::spawn(async move {
-                loop {
-                    match sync_service_clone.discover_peers().await {
-                        Ok(peers) => {
-                            println!("Discovered {} peers", peers.len());
-                            for peer in peers {
-                                if let Err(e) = sync_service_clone.connect_peer(&peer).await {
-                                    eprintln!("Failed to connect to peer {}: {:?}", peer.id, e);
-                                } else {
-                                    println!("Connected to peer: {}", peer.id);
-                                    
-                                    // Once connected, try to sync with the peer
-                                    match sync_service_clone.sync_with_peer(&peer).await {
-                                        Ok(result) => {
-                                            println!("Synced with peer {}: {} nodes accepted, {} nodes rejected", 
-                                                peer.id, result.accepted_nodes.len(), result.rejected_nodes.len());
-                                        },
-                                        Err(e) => {
-                                            eprintln!("Failed to sync with peer {}: {:?}", peer.id, e);
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                        Err(e) => {
-                            eprintln!("Error discovering peers: {:?}", e);
-                        }
+            if let Some(peers) = founding_dids {
+                println!("Founding members: {}", peers.join(", "));
+            }
+            
+            match sync_service.create_genesis_dag_state().await {
+                Ok(result) => {
+                    println!("\nGenesis DAG state created successfully!");
+                    println!("State CID: {}", result.state_cid);
+                    println!("Policy ID: {}", result.policy_id);
+                    
+                    // Create a transport config for publishing to peers
+                    let transport_config = TransportConfig {
+                        peer_id: uuid::Uuid::new_v4().to_string(),
+                        federation_id: federation.clone(),
+                        local_did: Some(did.clone()),
+                        listen_addresses: vec!["/ip4/0.0.0.0/tcp/0".to_string()], // Random port
+                        bootstrap_peers: vec![],
+                        enable_mdns: *mdns,
+                        enable_kad_dht: false,
+                        max_message_size: 1024 * 1024, // 1MB
+                        request_timeout: 30, // 30 seconds
+                    };
+                    
+                    // Create the transport
+                    let transport = Libp2pDagTransport::new(transport_config).await?;
+                    
+                    // Create the sync service
+                    let sync_service = NetworkDagSyncService::new(
+                        transport,
+                        Arc::new(dag_store),
+                        federation.clone(),
+                        Some(did.clone()),
+                    );
+                    
+                    // Start background sync to publish the genesis state
+                    println!("Publishing genesis state to peers...");
+                    sync_service.start_background_sync().await?;
+                    
+                    // Wait a bit for publication
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    
+                    println!("Genesis state published successfully.");
+                    
+                    // Record metrics for genesis state creation
+                    if let Ok(metrics_context) = init_metrics(&federation, None) {
+                        metrics_context.record_genesis_state_created(
+                            &result.state_cid,
+                            &result.policy_id,
+                            result.state_proof.signatures.len() as u64,
+                            result.state_proof.previous_anchors.len() as u64
+                        );
                     }
                     
-                    // Wait before next discovery
-                    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-                }
-            });
-            
-            // Keep the process running
-            loop {
-                // Display some status information every 10 seconds
-                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-                
-                // Get tip nodes to show the current DAG state
-                match store_ref.get_tips().await {
-                    Ok(tips) => {
-                        println!("Current DAG has {} tip nodes", tips.len());
-                    },
-                    Err(e) => {
-                        eprintln!("Error getting DAG tips: {:?}", e);
-                    }
+                    Ok(())
+                },
+                Err(e) => {
+                    Err(anyhow::anyhow!("Failed to create genesis DAG state: {}", e))
                 }
             }
         },
-        
         DagSyncCommands::Visualize { dag_dir, output, thread_did, max_nodes } => {
             // Create DAG store
             let store = Arc::new(icn_types::dag::rocksdb::RocksDbDagStore::new(dag_dir)?);
