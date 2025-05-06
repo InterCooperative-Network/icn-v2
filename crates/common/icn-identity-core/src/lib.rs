@@ -19,4 +19,14 @@ pub use trustbundle::storage::{TrustBundleStore, MemoryTrustBundleStore, Storage
 // pub use manifest::{AgentManifest, ManifestError};
 // pub use did_type::Did;
 
+// Re-export VC types
+pub use vc::execution_receipt::{
+    ExecutionReceipt, 
+    ExecutionSubject, 
+    ExecutionScope,
+    ExecutionStatus,
+    Proof as ExecutionReceiptProof,
+    ExecutionReceiptError
+};
+
 pub fn placeholder() {}

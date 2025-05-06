@@ -1,12 +1,15 @@
-// use icn_types::{Cid, Did}; // Remove unused Cid import
+// Re-export from the existing vc.rs content
 use icn_core_types::Did;
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use ed25519_dalek::{Signature, Verifier}; // Import Verifier
+use ed25519_dalek::{Signature, Verifier};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD_NO_PAD as BASE64_ENGINE;
-use std::convert::{TryFrom, TryInto}; // Import TryInto and TryFrom
+use std::convert::{TryFrom, TryInto};
+
+// Submodules
+pub mod execution_receipt;
 
 // Basic structure mirroring W3C VC Data Model concepts
 // Needs refinement with proper context, proof types etc.
@@ -54,7 +57,7 @@ impl VcIssuer {
     // Method to issue a new VC (simplified)
     pub fn issue(
         &self,
-        issuer_did_key: &super::did::DidKey, // Need issuer's key to sign
+        issuer_did_key: &crate::did::DidKey, // Need issuer's key to sign
         context: Vec<String>,
         type_: Vec<String>,
         credential_subject: Value,
@@ -108,7 +111,7 @@ impl VcVerifier {
     ) -> Result<(), String> {
         let proof = vc.proof.as_ref().ok_or("Credential has no proof")?;
 
-        let verifying_key = super::did::DidKey::verifying_key_from_did(&proof.verification_method)
+        let verifying_key = crate::did::DidKey::verifying_key_from_did(&proof.verification_method)
             .map_err(|e| format!("Failed to get public key from DID: {}", e))?;
 
         // 2. Decode the signature from proof.proof_value (base64)
@@ -135,3 +138,6 @@ impl VcVerifier {
         Ok(())
     }
 }
+
+// Re-export key types from the execution_receipt module
+pub use execution_receipt::{ExecutionReceipt, ExecutionSubject, ExecutionScope, ExecutionStatus}; 
