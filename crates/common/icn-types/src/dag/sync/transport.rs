@@ -1,82 +1,58 @@
-use crate::cid::Cid;
-use crate::dag::sync::{DAGSyncBundle, FederationPeer, SyncError};
-use crate::identity::Did;
 use async_trait::async_trait;
+use crate::cid::Cid;
+use crate::dag::sync::bundle::DAGSyncBundle;
+use crate::dag::sync::network::{FederationPeer, SyncError}; // Use the types defined in network.rs
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-/// Protocol identifier for libp2p DAG sync
-pub const DAG_SYNC_PROTOCOL_ID: &str = "/icn/dag-sync/1.0.0";
-
-/// Trait defining the interface for DAG sync network transport implementations
-#[async_trait]
-pub trait DAGSyncTransport {
-    /// Connect to a peer
-    async fn connect(&mut self, peer: &FederationPeer) -> Result<(), SyncError>;
-    
-    /// Disconnect from a peer
-    async fn disconnect(&mut self, peer_id: &str) -> Result<(), SyncError>;
-    
-    /// Check if connected to a peer
-    async fn is_connected(&self, peer_id: &str) -> Result<bool, SyncError>;
-    
-    /// Send a bundle to a peer
-    async fn send_bundle(&mut self, peer_id: &str, bundle: DAGSyncBundle) -> Result<(), SyncError>;
-    
-    /// Receive bundles from peers (may be a long-running operation)
-    async fn receive_bundles(&mut self) -> Result<(String, DAGSyncBundle), SyncError>;
-    
-    /// Send an offer of node CIDs to a peer
-    async fn send_offer(&mut self, peer_id: &str, cids: &[Cid]) -> Result<HashSet<Cid>, SyncError>;
-    
-    /// Request specific nodes from a peer
-    async fn request_nodes(&mut self, peer_id: &str, cids: &[Cid]) -> Result<DAGSyncBundle, SyncError>;
-    
-    /// Discover peers in the network
-    async fn discover_peers(&mut self) -> Result<Vec<FederationPeer>, SyncError>;
-    
-    /// Get local peer ID
-    fn local_peer_id(&self) -> String;
-    
-    /// Get local peer DID
-    fn local_did(&self) -> Option<Did>;
+/// Configuration for a transport implementation
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TransportConfig {
+    pub timeout_secs: Option<u64>,
+    // Add other relevant config fields like bind address, retry logic etc.
 }
 
 /// Transport message types for DAG sync
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DAGSyncMessage {
-    /// Bundle of DAG nodes
+    Offer(Vec<Cid>),
+    Request(Vec<Cid>),
     Bundle(DAGSyncBundle),
-    /// Offer of node CIDs
-    Offer { cids: Vec<Cid> },
-    /// Request for specific nodes
-    Request { cids: Vec<Cid> },
-    /// Response to an offer with the CIDs the requester wants
-    OfferResponse { cids: HashSet<Cid> },
-    /// Peer discovery request
-    DiscoveryRequest { federation_id: String },
-    /// Peer discovery response
-    DiscoveryResponse { peers: Vec<FederationPeer> },
+    // TODO: Potentially other message types like Ack, Error, etc.
 }
 
-/// Configuration for a transport implementation
-#[derive(Debug, Clone)]
-pub struct TransportConfig {
-    /// Local peer ID
-    pub peer_id: String,
-    /// Local federation ID
-    pub federation_id: String,
-    /// Local DID for signing messages
-    pub local_did: Option<Did>,
-    /// Listen addresses (format depends on transport implementation)
-    pub listen_addresses: Vec<String>,
-    /// Bootstrap peers (format depends on transport implementation)
-    pub bootstrap_peers: Vec<String>,
-    /// Enable mDNS discovery
-    pub enable_mdns: bool,
-    /// Enable KAD DHT discovery
-    pub enable_kad_dht: bool,
-    /// Maximum message size in bytes
-    pub max_message_size: usize,
-    /// Timeout for requests in seconds
-    pub request_timeout: u64,
-} 
+/// Trait defining the interface for DAG sync network transport implementations
+#[async_trait]
+pub trait DAGSyncTransport: Send + Sync {
+    /// Get the local peer ID for this transport
+    fn local_peer_id(&self) -> String;
+
+    /// Check if connected to a specific peer
+    async fn is_connected(&self, peer_id: &str) -> Result<bool, SyncError>;
+
+    /// Send an offer of CIDs to a peer, returns the CIDs they need
+    async fn send_offer(&self, peer_id: &str, cids: &[Cid]) -> Result<HashSet<Cid>, SyncError>;
+
+    /// Send a bundle of nodes to a peer
+    async fn send_bundle(&self, peer_id: &str, bundle: DAGSyncBundle) -> Result<(), SyncError>;
+
+    /// Receive bundles from any connected peers
+    async fn receive_bundles(&mut self) -> Result<(String, DAGSyncBundle), SyncError>; // Returns (peer_id, bundle)
+
+    /// Request specific nodes (by CID) from a peer
+    async fn request_nodes(&self, peer_id: &str, cids: &[Cid]) -> Result<DAGSyncBundle, SyncError>;
+
+    /// Connect to a peer
+    async fn connect(&mut self, peer: &FederationPeer) -> Result<(), SyncError>;
+
+    /// Disconnect from a peer
+    async fn disconnect(&mut self, peer_id: &str) -> Result<(), SyncError>;
+
+    /// Discover peers
+    async fn discover_peers(&self) -> Result<Vec<FederationPeer>, SyncError>;
+
+    // Add other necessary methods like configure, listen, clone etc. if needed
+}
+
+// NOTE: Concrete implementations of DAGSyncTransport will need to handle Clone
+// trait if required by NetworkDagSyncService construction/usage. 

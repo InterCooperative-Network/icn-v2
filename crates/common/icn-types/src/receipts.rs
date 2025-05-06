@@ -52,6 +52,8 @@ pub enum ReceiptError {
     ReceiptNotFound(Cid),
     #[error("Invalid payload type")]
     InvalidPayloadType,
+    #[error("Receipt not found: {0}")]
+    NotFound(Cid),
 }
 
 impl ExecutionReceipt {
@@ -131,12 +133,11 @@ impl ExecutionReceipt {
     
     /// Retrieve an ExecutionReceipt from the DAG
     pub async fn from_dag(cid: &Cid, dag_store: &impl DagStore) -> Result<Self, ReceiptError> {
-        // Get the node from the DAG
         let node = dag_store.get_node(cid).await?;
-        
-        // Verify payload type
-        if let DagPayload::ExecutionReceipt(receipt) = node.node.payload {
-            Ok(receipt)
+
+        if let DagPayload::ExecutionReceipt(referenced_cid) = node.node.payload {
+            // TODO: Fetch actual receipt object using referenced_cid
+            Err(ReceiptError::NotFound(referenced_cid))
         } else {
             Err(ReceiptError::InvalidPayloadType)
         }
@@ -157,22 +158,8 @@ impl ExecutionReceipt {
     
     /// List all ExecutionReceipts in the DAG
     pub async fn list_all(dag_store: &impl DagStore) -> Result<Vec<(Cid, ExecutionReceipt)>, ReceiptError> {
-        // Get all nodes with ExecutionReceipt payload type
-        let nodes = dag_store.get_nodes_by_payload_type("receipt").await?;
-        
-        let mut result = Vec::new();
-        for node in nodes {
-             if let DagPayload::ExecutionReceipt(receipt) = node.node.payload {
-                 if let Some(cid) = node.cid {
-                    result.push((cid, receipt));
-                 } else {
-                    eprintln!("Warning: Node from list_all missing CID");
-                 }
-            } else {
-                eprintln!("Warning: Node from list_all has incorrect payload type");
-            }
-        }
-        Ok(result)
+        // TODO: Implement correctly by fetching referenced receipts
+        Ok(Vec::new()) // Return empty vec for now
     }
     
     /// Export this ExecutionReceipt to a portable format

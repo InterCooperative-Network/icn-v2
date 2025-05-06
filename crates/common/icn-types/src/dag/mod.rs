@@ -6,6 +6,9 @@ use ed25519_dalek::Signature;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use ed25519_dalek::VerifyingKey;
+// Removed specific imports, use full path in #[from]
+// use serde_ipld_dagcbor::Error as DagCborError; 
+// use rocksdb::Error as RocksDbLibError;      
 
 // Include the RocksDB implementation
 #[cfg(feature = "persistence")]
@@ -37,8 +40,8 @@ pub enum DagError {
     ParentNotFound { child: Cid, parent: Cid },
     #[error("Invalid signature for node {0}")]
     InvalidSignature(Cid),
-    #[error("Error during serialization/deserialization: {0}")]
-    SerializationError(#[from] serde_ipld_dagcbor::error::Error),
+    #[error("Error during DAG-CBOR serialization/deserialization: {0}")]
+    SerializationError(String),
     #[error("Invalid node data: {0}")]
     InvalidNodeData(String),
     #[error("Public key resolution failed for DID {0}: {1}")]
@@ -46,13 +49,19 @@ pub enum DagError {
     #[error("Storage error: {0}")]
     StorageError(String),
     #[error("RocksDB error: {0}")]
-    RocksDbError(#[from] rocksdb::Error),
+    RocksDbError(#[from] ::rocksdb::Error),
     #[error("Join error from background task: {0}")]
     JoinError(#[from] tokio::task::JoinError),
+    #[error("CID calculation or parsing error: {0}")]
+    CidError(String),
+    #[error("CID mismatch detected for node: {0}")]
+    CidMismatch(Cid),
+    #[error("Missing parent node in DAG: {0}")]
+    MissingParent(Cid),
 }
 
 /// Trait for resolving DIDs to public verifying keys
-pub trait PublicKeyResolver {
+pub trait PublicKeyResolver: Send + Sync {
     fn resolve(&self, did: &Did) -> Result<VerifyingKey, DagError>;
     // Potentially add an async version if needed later
     // async fn resolve_async(&self, did: &Did) -> Result<VerifyingKey, DagError>;
@@ -119,7 +128,7 @@ impl SignedDagNode {
     pub fn calculate_cid(&self) -> Result<Cid, DagError> {
         // Serialize the inner node using DAG-CBOR for canonical representation
         let canonical_node_bytes = serde_ipld_dagcbor::to_vec(&self.node)
-            .map_err(|e| DagError::SerializationError(format!("DAG-CBOR serialization error: {}", e)))?;
+            .map_err(|e| DagError::SerializationError(e.to_string()))?;
             
         // Calculate CID using the canonical DAG-CBOR bytes
         Cid::from_bytes(&canonical_node_bytes)
@@ -209,10 +218,10 @@ pub trait DagStore {
     /// Verify all signatures and structural integrity of a DAG branch, starting from a tip.
     /// Returns Ok(()) if valid, or an Err(DagError) indicating the first validation failure.
     #[cfg(feature = "async")]
-    async fn verify_branch(&self, tip: &Cid, resolver: &dyn PublicKeyResolver) -> Result<(), DagError>;
+    async fn verify_branch(&self, tip: &Cid, resolver: &(dyn PublicKeyResolver + Send + Sync)) -> Result<(), DagError>;
     
     #[cfg(not(feature = "async"))]
-    fn verify_branch(&self, tip: &Cid, resolver: &dyn PublicKeyResolver) -> Result<(), DagError>;
+    fn verify_branch(&self, tip: &Cid, resolver: &(dyn PublicKeyResolver + Send + Sync)) -> Result<(), DagError>;
 }
 
 /// Builder for creating new DAG nodes
