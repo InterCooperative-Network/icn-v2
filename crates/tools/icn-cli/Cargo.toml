@@ -6,7 +6,7 @@ edition = "2021"
 # Add features section
 [features]
 default = []
-persistence = [] # Declare the persistence feature
+persistence = ["icn-identity-core/persistence"] # Enable persistence in dependencies
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -23,6 +23,7 @@ icn-core-types = { path = "../../common/icn-core-types" }
 clap = { version = "4.0", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+toml = "0.8"
 cid = "0.10"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5.0.1"
@@ -36,9 +37,12 @@ lazy_static = "1.4"
 hex = "0.4"
 icn-wallet = { path = "../../wallet/icn-wallet" }
 multibase = "0.9"
+base64 = "0.22"
 
 [build-dependencies]
 # Add any build-time dependencies here if needed
 
 [dev-dependencies]
-# Add any development-time dependencies here if needed
+assert_cmd = "2.0"
+predicates = "3.0"
+tempfile = "3.8"

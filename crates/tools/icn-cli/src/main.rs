@@ -13,6 +13,7 @@ use context::CliContext;
 use error::CliError;
 use commands::handle_dag_command; // Import the specific handler
 use commands::handle_mesh_command; // Add handle_mesh_command
+use commands::handle_federation_command; // Add federation handler
 // use icn_types::ExecutionResult; // Needs locating
 use std::path::PathBuf;
 use tokio;
@@ -65,6 +66,10 @@ enum Commands {
     #[command(subcommand)]
     Mesh(commands::mesh::MeshCommands),
 
+    /// Federation management commands
+    #[command(subcommand)]
+    Federation(commands::federation::FederationCommands),
+
     /// Manage trust policies
     Policy,
 }
@@ -105,6 +110,9 @@ async fn main() -> Result<(), CliError> {
          Commands::SyncP2P(cmd) => {
             // Call the handler from the sync_p2p module
             commands::sync_p2p::handle_dag_sync_command(&mut context, cmd).await?
+        }
+        Commands::Federation(cmd) => {
+            handle_federation_command(&mut context, cmd).await?
         }
         Commands::Policy => {
             todo!("Implement Policy commands")
