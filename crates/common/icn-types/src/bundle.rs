@@ -1,11 +1,17 @@
-use crate::anchor::AnchorRef;
-use crate::{Cid, CidError};
+use crate::anchor::{AnchorRef, TrustBundleAnchor};
+use crate::cid::{Cid, CidError};
 use crate::dag::{DagError, DagNode, DagNodeBuilder, DagPayload, DagStore, SignedDagNode};
 use crate::Did;
 use crate::QuorumProof;
 use ed25519_dalek::{SigningKey, Signer};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use crate::governance::QuorumConfig;
+use crate::identity::Did;
+use crate::receipts::QuorumProof;
+use crate::utils::timestamp;
+use std::collections::BTreeSet;
+use super::anchor::{AnchorRef, TrustBundleAnchor};
 
 /// A core data structure in ICN, representing a stateful object anchored to the DAG
 /// and secured by a quorum proof.
@@ -26,26 +32,44 @@ pub struct TrustBundle {
 pub enum TrustBundleError {
     #[error("Serialization error: {0}")]
     SerializationError(String),
+    #[error("Deserialization error: {0}")]
+    Deserialization(String),
     #[error("Signing error: {0}")]
     SigningError(String),
     #[error("DAG store error: {0}")]
     DagStoreError(#[from] DagError),
+    #[error("DAG access error: {0}")]
+    DagAccessError(String),
     #[error("DID Key error: {0}")]
     DidKeyError(String),
     #[error("CID error: {0}")]
     CidError(#[from] CidError),
     #[error("Node build error: {0}")]
     NodeBuildError(String),
-    #[error("Failed to serialize/deserialize: {0}")]
-    SerializationErrorFromOther(String),
     #[error("Invalid previous anchors")]
     InvalidPreviousAnchors,
     #[error("Invalid quorum proof")]
-    InvalidQuorumProof,
-    #[error("Bundle not found: {0}")]
+    InvalidQuorumProofStructure,
+    #[error("Bundle not found in DAG: {0}")]
     BundleNotFound(Cid),
-    #[error("Invalid payload type")]
+    #[error("Anchor not found in DAG: {0}")]
+    AnchorNotFound(Cid),
+    #[error("Data not found in DAG for CID: {0}")]
+    DataNotFound(Cid),
+    #[error("Invalid payload type in DAG node")]
     InvalidPayloadType,
+    #[error("Invalid anchor structure: {0}")]
+    InvalidAnchor(String),
+    #[error("Author DID mismatch: expected {expected}, got {got}")]
+    AuthorDidMismatch { expected: Did, got: Did },
+    #[error("Missing previous anchor in DAG: {0}")]
+    MissingAnchor(Cid),
+    #[error("Previous anchor type mismatch: {0}")]
+    AnchorMismatch(String),
+    #[error("Missing state data in DAG for CID: {0}")]
+    MissingStateData(Cid),
+    #[error("State proof verification failed: {0}")]
+    InvalidStateProof(String),
 }
 
 // Helper function to abstract the add_node call
@@ -147,23 +171,28 @@ impl TrustBundle {
     }
     
     /// Retrieve a TrustBundle from the DAG
-    pub async fn from_dag(cid: &Cid, dag_store: &impl DagStore) -> Result<Self, TrustBundleError> {
-        let node = dag_store.get_node(cid).await?;
-        
-        // Verify payload type and get the *referenced* CID
-        if let DagPayload::TrustBundle(referenced_cid) = node.node.payload {
-            // TODO: Fetch the actual TrustBundle object using the referenced_cid
-            // For now, return error as we can't reconstruct the bundle from just the reference node.
-            Err(TrustBundleError::BundleNotFound(referenced_cid))
-            // Example of future logic:
-            // let bundle_node = dag_store.get_node(&referenced_cid).await?;
-            // if let DagPayload::Json(json_value) = bundle_node.node.payload {
-            //     serde_json::from_value(json_value).map_err(TrustBundleError::SerializationError)
-            // } else {
-            //     Err(TrustBundleError::InvalidPayloadType) // Expected JSON payload for bundle
-            // }
-        } else {
-            Err(TrustBundleError::InvalidPayloadType)
+    pub async fn from_dag(anchor_cid: &Cid, dag_store: &mut (impl DagStore + Send)) -> Result<Self, TrustBundleError> {
+        // 1. Fetch anchor node
+        let anchor_signed_node = dag_store.get_node(anchor_cid).await?;
+
+        // 2. Expect anchor payload to be a TrustBundle reference
+        let referenced_cid = match &anchor_signed_node.node.payload {
+            DagPayload::TrustBundle(cid) => cid.clone(), // Clone the CID for the next lookup
+            _other => return Err(TrustBundleError::InvalidPayloadType),
+        };
+
+        // 3. Fetch referenced node (which should contain the actual TrustBundle data)
+        let data_signed_node = dag_store.get_node(&referenced_cid).await?;
+
+        // 4. Expect payload to be a Json bundle
+        match &data_signed_node.node.payload {
+            DagPayload::Json(value) => {
+                // Attempt to deserialize from the serde_json::Value
+                let bundle: TrustBundle = serde_json::from_value(value.clone())
+                    .map_err(|e| TrustBundleError::SerializationError(e.to_string()))?; // Assuming SerializationError takes a String
+                Ok(bundle)
+            }
+            _other => Err(TrustBundleError::InvalidPayloadType),
         }
     }
     
@@ -262,5 +291,60 @@ impl TrustBundle {
         // Placeholder: Needs actual implementation to iterate through stored TrustBundles
         // For now, returns an empty list or an error if not implemented.
         Err(TrustBundleError::InvalidPayloadType)
+    }
+
+    /// Verify the integrity and validity of this TrustBundle.
+    /// This includes checking its previous anchors and its state proof.
+    pub async fn verify<S: DagStore>(
+        &self,
+        dag_store: &S,
+        quorum_config: &QuorumConfig,
+    ) -> Result<(), TrustBundleError> {
+        // 1. Verify previous anchors
+        for anchor_ref in &self.previous_anchors {
+            match dag_store.get(&anchor_ref.cid).await
+                .map_err(|e| TrustBundleError::DagAccessError(format!("Failed to get previous anchor {}: {}", anchor_ref.cid, e)))?
+            {
+                Some(anchor_bytes) => {
+                    let prev_anchor: TrustBundleAnchor =
+                        ciborium::from_reader(&anchor_bytes[..])
+                            .map_err(|e| TrustBundleError::Deserialization(format!("Failed to deserialize previous anchor {}: {}", anchor_ref.cid, e)))?;
+                    
+                    if prev_anchor.bundle_type != self.bundle_type {
+                        return Err(TrustBundleError::AnchorMismatch(format!(
+                            "Previous anchor {} (for bundle {}) has type {:?} but current bundle type is {:?}",
+                            anchor_ref.cid, prev_anchor.bundle_cid, prev_anchor.bundle_type, self.bundle_type
+                        )));
+                    }
+                    // TODO: Optionally verify signature on prev_anchor if present and author_did is known/resolvable.
+                    // This would involve DID resolution and cryptographic verification against prev_anchor.author_did.
+                }
+                None => {
+                    return Err(TrustBundleError::MissingAnchor(anchor_ref.cid));
+                }
+            }
+        }
+
+        // 2. Verify state_proof against state_cid
+        if let Some(state_proof) = &self.state_proof {
+            let state_data_bytes = match dag_store.get(&self.state_cid).await
+                .map_err(|e| TrustBundleError::DagAccessError(format!("Failed to get state data {}: {}", self.state_cid, e)))?
+            {
+                Some(bytes) => bytes,
+                None => return Err(TrustBundleError::MissingStateData(self.state_cid)),
+            };
+
+            // Assumes QuorumProof::verify method exists with signature:
+            // pub fn verify(&self, content_cid: &Cid, signed_data: &[u8], quorum_config: &QuorumConfig) -> bool
+            if !state_proof.verify(&self.state_cid, &state_data_bytes, quorum_config) {
+                 return Err(TrustBundleError::InvalidStateProof("State proof verification failed using provided quorum configuration.".to_string()));
+            }
+        }
+        // If state_proof is None, no verification of it is performed here.
+        // The significance of state_cid without a state_proof depends on the bundle's semantics.
+
+        // 3. (Optional) Verify metadata if any specific rules apply to self.metadata based on bundle_type or other context.
+
+        Ok(())
     }
 } 

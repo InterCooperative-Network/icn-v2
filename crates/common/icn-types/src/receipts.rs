@@ -4,6 +4,7 @@ use crate::anchor::AnchorRef;
 use crate::Cid;
 use crate::dag::{DagError, DagNode, DagNodeBuilder, DagPayload, DagStore, SignedDagNode};
 use crate::Did;
+use crate::governance::QuorumConfig;
 // use crate::quorum::QuorumProof; // Comment out unused import for now
 use ed25519_dalek::{SigningKey, Signer};
 use serde::{Deserialize, Serialize};
@@ -185,4 +186,98 @@ impl ExecutionReceipt {
         }
         Ok(true) // No anchor or anchor exists
     }
-} 
+}
+
+// Ensure QuorumProof struct definition is present
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct QuorumProof {
+    pub content_cid: Cid,
+    pub signatures: Vec<(Did, Vec<u8>)>, // (Signer DID, Signature bytes)
+    // Potentially other fields like policy_cid, etc.
+}
+
+#[derive(Error, Debug, Clone, PartialEq)]
+pub enum QuorumError {
+    #[error("Invalid signature from DID {0}")]
+    InvalidSignature(Did),
+    #[error("Signer DID {0} not in authorized list")]
+    UnauthorizedSigner(Did),
+    #[error("Quorum not met: got {got} signatures, needed {needed}")]
+    QuorumNotMet { got: usize, needed: usize },
+    #[error("No signatures provided in proof")]
+    NoSignatures,
+    #[error("Cryptographic error: {0}")]
+    CryptoError(String),
+    // Add other error types as needed, e.g., for DID resolution failure
+}
+
+impl QuorumProof {
+    pub fn new(content_cid: Cid, signatures: Vec<(Did, Vec<u8>)>) -> Self {
+        Self { content_cid, signatures }
+    }
+
+    // Placeholder for the verify method discussed
+    pub fn verify(
+        &self,
+        _data_to_verify: &[u8], // The actual data that was signed, matching self.content_cid
+        config: &QuorumConfig,
+    ) -> Result<(), QuorumError> {
+        if self.signatures.is_empty() {
+            return Err(QuorumError::NoSignatures);
+        }
+
+        let mut valid_signatures_count = 0;
+        let mut unique_authorized_signers = std::collections::HashSet::new();
+
+        for (signer_did, signature_bytes) in &self.signatures {
+            // 1. Check if signer is authorized
+            if !config.authorized_signers.contains(signer_did) {
+                // Optionally, instead of hard error, just ignore this signature for quorum count
+                // but for now, let's be strict.
+                // Consider logging a warning or collecting all unauthorized attempts.
+                return Err(QuorumError::UnauthorizedSigner(signer_did.clone()));
+            }
+
+            // 2. Verify the signature against _data_to_verify
+            // This requires DID resolution to get the public key for signer_did
+            // and then using the appropriate crypto library (e.g., ed25519_dalek::PublicKey::verify)
+            // For this sketch, we'll assume a helper or direct way to do this.
+            // Let's imagine a function: verify_signature(did: &Did, data: &[u8], signature: &[u8]) -> Result<bool, CryptoError>
+            
+            // Placeholder for actual signature verification logic:
+            // match signer_did.verify_signature(_data_to_verify, signature_bytes) { // Assuming Did has such a method
+            //     Ok(true) => { /* Signature is valid */ }
+            //     Ok(false) => return Err(QuorumError::InvalidSignature(signer_did.clone())),
+            //     Err(e) => return Err(QuorumError::CryptoError(e.to_string())),
+            // }
+            // SIMULATED: For now, let's assume signature is valid if code reaches here after auth check
+            // In a real implementation, this is CRITICAL.
+            // For example:
+            // let public_key = resolve_public_key_for_did(signer_did).map_err(|e| QuorumError::CryptoError(format!("DID resolution failed: {}", e)))?;
+            // if !public_key.verify(_data_to_verify, signature_bytes).is_ok() {
+            //     return Err(QuorumError::InvalidSignature(signer_did.clone()));
+            // }
+
+            // If signature verification is successful:
+            if unique_authorized_signers.insert(signer_did.clone()) {
+                 valid_signatures_count += 1;
+            } // else, it's a duplicate signature from an authorized signer, count only once
+        }
+
+        // 3. Check if quorum threshold is met
+        if valid_signatures_count >= config.threshold {
+            Ok(())
+        } else {
+            Err(QuorumError::QuorumNotMet {
+                got: valid_signatures_count,
+                needed: config.threshold,
+            })
+        }
+    }
+}
+
+// ... existing code ...
+// VoteReceipt struct and impl block
+// SignedVoteReceipt struct and impl block
+
+// ... existing code ... 

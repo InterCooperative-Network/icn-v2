@@ -9,6 +9,7 @@ pub mod dag;
 // pub mod quorum; // Removed: types moved to icn-core-types
 pub mod receipts;
 pub mod resources;
+pub mod governance;
 
 // Re-export core types for easier access
 pub use anchor::AnchorRef;
@@ -40,3 +41,7 @@ pub use dag::sync::*;
 
 #[cfg(feature = "persistence")]
 pub use dag::rocksdb::RocksDbDagStore;
+
+pub use governance::QuorumConfig;
+pub use receipts::{QuorumProof, ReceiptError, ReceiptProof, VoteReceipt, SignedVoteReceipt};
+pub use resources::{ResourceOffer, ResourceType as EconomicResourceType, MeteringProof};

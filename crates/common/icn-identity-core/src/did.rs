@@ -60,6 +60,12 @@ impl DidKey {
         &self.verifying_key
     }
 
+    /// Returns a reference to the underlying Ed25519 signing key.
+    /// Use with care—this exposes private key material for direct signing.
+    pub fn signing_key(&self) -> &SigningKey {
+        &self.signing_key
+    }
+
     /// Sign a message using the secret key.
     pub fn sign(&self, message: &[u8]) -> Signature {
         self.signing_key.sign(message)
