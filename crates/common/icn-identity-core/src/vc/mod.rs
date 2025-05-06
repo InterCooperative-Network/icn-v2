@@ -10,6 +10,8 @@ use std::convert::{TryFrom, TryInto};
 
 // Submodules
 pub mod execution_receipt;
+pub mod proposal;
+pub mod vote;
 
 // Basic structure mirroring W3C VC Data Model concepts
 // Needs refinement with proper context, proof types etc.
@@ -140,4 +142,23 @@ impl VcVerifier {
 }
 
 // Re-export key types from the execution_receipt module
-pub use execution_receipt::{ExecutionReceipt, ExecutionSubject, ExecutionScope, ExecutionStatus}; 
+pub use execution_receipt::{ExecutionReceipt, ExecutionSubject, ExecutionScope, ExecutionStatus};
+
+// Re-export key types from the proposal module
+pub use proposal::{
+    ProposalCredential, 
+    ProposalSubject, 
+    ProposalType, 
+    ProposalStatus,
+    VotingThreshold,
+    VotingDuration,
+    ProposalError
+};
+
+// Re-export key types from the vote module
+pub use vote::{
+    VoteCredential,
+    VoteSubject,
+    VoteDecision,
+    VoteError
+}; 

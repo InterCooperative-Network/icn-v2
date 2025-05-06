@@ -15,6 +15,8 @@ use commands::handle_dag_command; // Import the specific handler
 use commands::handle_mesh_command; // Add handle_mesh_command
 use commands::handle_federation_command; // Add federation handler
 use commands::runtime::handle_runtime_command; // 👈 NEW
+use commands::handle_proposal_commands; // Add proposal handler
+use commands::handle_vote_commands; // Add vote handler
 // use icn_types::ExecutionResult; // Needs locating
 use std::path::PathBuf;
 use tokio;
@@ -77,6 +79,14 @@ enum Commands {
     /// Runtime commands
     #[command(subcommand)]
     Runtime(commands::runtime::RuntimeCommands),
+    
+    /// Governance proposal commands
+    #[command(subcommand)]
+    Proposal(commands::proposal::ProposalCommands),
+    
+    /// Voting commands
+    #[command(subcommand)]
+    Vote(commands::vote::VoteCommands),
 }
 
 // Removed DagCommands enum definition from here (moved to commands/dag.rs)
@@ -124,6 +134,12 @@ async fn main() -> Result<(), CliError> {
         }
         Commands::Policy => {
             todo!("Implement Policy commands")
+        }
+        Commands::Proposal(cmd) => {
+            handle_proposal_commands(cmd.clone(), &mut context).await?
+        }
+        Commands::Vote(cmd) => {
+            handle_vote_commands(cmd.clone(), &mut context).await?
         }
     }
     
