@@ -1,10 +1,13 @@
 use crate::cid::Cid;
-use crate::dag::{DagError, DagNode, DagStore, SignedDagNode};
+use crate::dag::{DagError, DagNode, DagStore, SignedDagNode, PublicKeyResolver};
 use crate::identity::Did;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, RwLock};
+use async_trait::async_trait;
+use ed25519_dalek::VerifyingKey;
 
 /// An in-memory implementation of the DagStore trait for testing
+#[derive(Debug, Clone, Default)]
 pub struct MemoryDagStore {
     /// Map of CID -> SignedDagNode
     nodes: Arc<RwLock<HashMap<String, SignedDagNode>>>,
@@ -601,51 +604,48 @@ impl DagStore for MemoryDagStore {
         Ok(path)
     }
 
-    async fn verify_branch(&self, tip: &Cid) -> Result<bool, DagError> {
+    #[tracing::instrument(skip(self, resolver))]
+    async fn verify_branch(&self, tip: &Cid, resolver: &dyn PublicKeyResolver) -> Result<(), DagError> {
         let tip_key = Self::cid_to_key(tip);
         let nodes = self.nodes.read().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire nodes lock: {}", e)))?;
-        
+            DagError::StorageError(format!("Failed to lock nodes for read: {}", e))
+        )?;
+
         if !nodes.contains_key(&tip_key) {
             return Err(DagError::NodeNotFound(tip.clone()));
         }
-        
-        // Perform a topological traversal starting from the tip
-        let mut queue = VecDeque::new();
+
         let mut visited = HashSet::new();
-        
+        let mut queue = VecDeque::new();
         queue.push_back(tip_key.clone());
-        visited.insert(tip_key);
-        
+
         while let Some(current_key) = queue.pop_front() {
-            // Get the current node
-            let node = nodes.get(&current_key).unwrap();
-            
-            // TODO: Verify signature of the node
-            // This would require accessing the author's public key
-            // For now, we just check that the CID is correctly calculated
-            let calculated_cid = node.calculate_cid()?;
-            if node.cid.as_ref().unwrap() != &calculated_cid {
-                return Ok(false);
+            if !visited.insert(current_key.clone()) {
+                continue; // Already visited
             }
+
+            let node = nodes.get(&current_key)
+                .ok_or_else(|| DagError::NodeNotFound(Self::key_to_cid(&current_key).unwrap()))?;
             
-            // Add parent nodes to the queue
+            // *** Verify signature ***
+            let author_did = &node.node.author;
+            let verifying_key = resolver.resolve_public_key(author_did).await?;
+            node.verify_signature(&verifying_key)?;
+
             for parent_cid in &node.node.parents {
                 let parent_key = Self::cid_to_key(parent_cid);
-                
-                // Check if the parent exists
                 if !nodes.contains_key(&parent_key) {
-                    return Ok(false); // Missing parent, branch is invalid
+                    return Err(DagError::ParentNotFound { 
+                        child: Self::key_to_cid(&current_key).unwrap(), 
+                        parent: parent_cid.clone() 
+                    });
                 }
-                
                 if !visited.contains(&parent_key) {
-                    visited.insert(parent_key.clone());
                     queue.push_back(parent_key);
                 }
             }
         }
-        
-        // All nodes in the branch are valid
-        Ok(true)
+
+        Ok(()) // Return Ok(()) instead of Ok(true)
     }
 } 

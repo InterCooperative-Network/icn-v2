@@ -7,17 +7,20 @@
 mod error;
 mod context;
 mod commands;
+mod cli;
 
 use clap::{Parser, Subcommand};
 use context::CliContext;
 use error::CliError;
 use commands::handle_dag_command; // Import the specific handler
-
-// Keep these imports if needed by non-refactored commands/structs
+use commands::handle_mesh_command; // Add handle_mesh_command
 use icn_identity_core::did::DidKey;
 use icn_types::dag::{memory::MemoryDagStore, DagError, DagStore, SignedDagNode};
 use icn_types::{anchor::AnchorRef, Did, ExecutionReceipt, ExecutionResult, TrustBundle};
 use std::path::PathBuf;
+use icn_wallet::keystore::SimpleKeyStore;
+use thiserror::Error;
+use tokio;
 
 
 #[derive(Parser)]
@@ -35,7 +38,6 @@ struct Cli {
 // These will be moved to their respective command modules later
 #[derive(Subcommand, Debug, Clone)] enum BundleCommands { Temp }
 #[derive(Subcommand, Debug, Clone)] enum ReceiptCommands { Temp }
-#[derive(Subcommand, Debug, Clone)] enum MeshCommands { Temp }
 #[derive(Subcommand, Debug, Clone)] enum DagSyncCommands { Temp }
 
 #[derive(Subcommand, Debug)] // Added Debug
@@ -60,13 +62,15 @@ enum Commands {
     #[command(subcommand)]
     Receipt(ReceiptCommands), // Keep placeholder for now
     
-    /// Mesh computation commands
-    #[command(subcommand)]
-    Mesh(MeshCommands), // Keep placeholder for now
-
     /// Advanced DAG sync commands with libp2p support
     #[command(subcommand)]
     SyncP2P(DagSyncCommands), // Moved SyncP2P to top level?
+
+    /// Interact with the ICN mesh network (libp2p)
+    Mesh(commands::mesh::MeshCommands), // Add this line
+
+    /// Manage trust policies
+    Policy,
 }
 
 // Removed DagCommands enum definition from here (moved to commands/dag.rs)
@@ -101,19 +105,20 @@ async fn main() -> Result<(), CliError> {
             // TODO: Refactor Receipt commands
             unimplemented!("Receipt handler placeholder")
         }
-         Commands::Mesh(cmd) => {
-            println!("Mesh command placeholder...");
-            // TODO: Refactor Mesh commands
-            unimplemented!("Mesh handler placeholder")
+        Commands::Mesh(cmd) => {
+            handle_mesh_command(&mut context, cmd).await?
         }
          Commands::SyncP2P(cmd) => {
             println!("SyncP2P command placeholder...");
             // TODO: Refactor SyncP2P commands (into commands/sync_p2p.rs?)
             unimplemented!("SyncP2P handler placeholder")
-                        }
-                    }
-                    
-                    Ok(())
+        }
+        Commands::Policy => {
+            todo!("Implement Policy commands")
+        }
+    }
+    
+    Ok(())
 }
 
 // Removed old handler functions (handle_dag_command, handle_mesh_command etc.)

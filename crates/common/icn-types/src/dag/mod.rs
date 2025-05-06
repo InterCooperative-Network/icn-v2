@@ -33,26 +33,22 @@ pub use sync::{DAGSyncBundle, DAGSyncService, FederationPeer, SyncError, Verific
 pub enum DagError {
     #[error("Node not found: {0}")]
     NodeNotFound(Cid),
-    #[error("Invalid signature for node: {0}")]
+    #[error("Parent node not found for child {child}: {parent}")]
+    ParentNotFound { child: Cid, parent: Cid },
+    #[error("Invalid signature for node {0}")]
     InvalidSignature(Cid),
-    #[error("Invalid parent references")]
-    InvalidParentRefs,
-    #[error("Serialization error: {0}")]
-    SerializationError(String),
-    #[error("CID computation error: {0}")]
-    CidError(String),
-    #[error("Storage error: {0}")]
-    StorageError(String),
+    #[error("Error during serialization/deserialization: {0}")]
+    SerializationError(#[from] serde_ipld_dagcbor::error::Error),
     #[error("Invalid node data: {0}")]
     InvalidNodeData(String),
-    #[error("Task join error: {0}")]
-    JoinError(String),
-    #[error("Calculated CID does not match stored CID for node: {0}")]
-    CidMismatch(Cid),
-    #[error("Missing parent node: {0}")]
-    MissingParent(Cid),
     #[error("Public key resolution failed for DID {0}: {1}")]
     PublicKeyResolutionError(Did, String),
+    #[error("Storage error: {0}")]
+    StorageError(String),
+    #[error("RocksDB error: {0}")]
+    RocksDbError(#[from] rocksdb::Error),
+    #[error("Join error from background task: {0}")]
+    JoinError(#[from] tokio::task::JoinError),
 }
 
 /// Trait for resolving DIDs to public verifying keys

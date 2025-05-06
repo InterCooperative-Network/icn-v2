@@ -1,14 +1,15 @@
-// Re-export core sync types
-pub use super::sync::{DAGSyncBundle, DAGSyncService, FederationPeer, SyncError, VerificationResult};
+//! DAG Synchronization Logic
+
+pub mod network;
+pub mod transport;
+
+// Re-export key types from submodules
+pub use network::{DAGSyncService, FederationPeer, SyncError, VerificationResult};
+// Assuming DAGSyncBundle might be defined elsewhere or needs adjustment
+// pub use transport::{DAGSyncTransport, TransportConfig}; // Example if needed
 
 // Include the memory-based implementation
 pub mod memory;
-
-// Include the transport layer
-pub mod transport;
-
-// Include the network-based implementation
-pub mod network;
 
 // Re-export transport types
 pub use transport::{DAGSyncMessage, DAGSyncTransport, TransportConfig};
@@ -18,4 +19,4 @@ pub use network::{NetworkDagSyncService, SyncPolicy};
 
 // Tests module
 #[cfg(test)]
-mod tests; 
+mod tests;

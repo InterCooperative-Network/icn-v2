@@ -7,7 +7,8 @@ use rocksdb::{ColumnFamily, ColumnFamilyDescriptor, Options, DB, WriteBatch};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::sync::{Arc, RwLock};
-use ed25519_dalek::VerifyingKey;
+use ed25519_dalek::{Verifier, VerifyingKey};
+use async_trait::async_trait;
 
 // --- Prometheus Metrics --- 
 use lazy_static::lazy_static;
@@ -443,213 +444,19 @@ impl DagStore for RocksDbDagStore {
     }
 
     fn get_ordered_nodes(&self) -> Result<Vec<SignedDagNode>, DagError> {
-        // Implement topological sort
-        let cf_nodes = self.cf_handle(CF_NODES)?;
-        let cf_children = self.cf_handle(CF_CHILDREN)?;
-        
-        // Step 1: Build a graph representation and count incoming edges
-        let mut nodes: HashMap<Vec<u8>, SignedDagNode> = HashMap::new();
-        let mut incoming_count: HashMap<Vec<u8>, usize> = HashMap::new();
-        
-        // Load all nodes and count incoming edges
-        let iter = self.db.iterator_cf(cf_nodes, rocksdb::IteratorMode::Start);
-        for result in iter {
-            let (key, value) = result
-                .map_err(|e| DagError::StorageError(format!("Error iterating nodes: {}", e)))?;
-                
-            let node = Self::deserialize_node(&value)?;
-            nodes.insert(key.to_vec(), node.clone());
-            
-            // Initialize incoming count for this node
-            incoming_count.entry(key.to_vec()).or_insert(0);
-            
-            // Count incoming edges for each child
-            for parent_cid in &node.node.parents {
-                let parent_key = Self::cid_to_key(parent_cid);
-                *incoming_count.entry(parent_key).or_insert(0) += 1;
-            }
-        }
-        
-        // Step 2: Find all nodes with no incoming edges (sources)
-        let mut queue: VecDeque<Vec<u8>> = VecDeque::new();
-        for (key, count) in &incoming_count {
-            if *count == 0 {
-                queue.push_back(key.clone());
-            }
-        }
-        
-        // Step 3: Perform topological sort
-        let mut sorted_nodes = Vec::new();
-        
-        while let Some(current) = queue.pop_front() {
-            // Add the current node to the sorted list
-            if let Some(node) = nodes.get(&current) {
-                sorted_nodes.push(node.clone());
-            }
-            
-            // Get children of the current node
-            if let Ok(Some(children_data)) = self.db.get_cf(cf_children, &current) {
-                let children: Vec<Vec<u8>> = Self::deserialize_cid_list(&children_data)?;
-                
-                // Decrease incoming count for each child and add to queue if no more incoming edges
-                for child in children {
-                    if let Some(count) = incoming_count.get_mut(&child) {
-                        *count -= 1;
-                        if *count == 0 {
-                            queue.push_back(child);
-                        }
-                    }
-                }
-            }
-        }
-        
-        // Check if we have a cycle (not all nodes were visited)
-        if sorted_nodes.len() != nodes.len() {
-            return Err(DagError::InvalidNodeData("DAG contains cycles".to_string()));
-        }
-        
-        Ok(sorted_nodes)
+        unimplemented!("Synchronous get_ordered_nodes not implemented for RocksDB store");
     }
 
     fn get_nodes_by_author(&self, author: &Did) -> Result<Vec<SignedDagNode>, DagError> {
-        let cf_authors = self.cf_handle(CF_AUTHORS)?;
-        let cf_nodes = self.cf_handle(CF_NODES)?;
-        let author_key = author.to_string().into_bytes();
-        
-        match self.db.get_cf(cf_authors, &author_key)? {
-            Some(data) => {
-                // Deserialize list using DAG-CBOR
-                let node_keys: Vec<Vec<u8>> = Self::deserialize_cid_list(&data)?;
-                
-                let mut nodes = Vec::with_capacity(node_keys.len());
-                for key in node_keys {
-                    // Using multi_get_cf for potential performance improvement
-                    // Although error handling becomes slightly more complex
-                    match self.db.get_cf(cf_nodes, &key)? {
-                        Some(node_data) => {
-                            let node = Self::deserialize_node(&node_data)?;
-                            nodes.push(node);
-                        },
-                        None => {
-                             // Log or handle missing node referenced in index? Maybe continue?
-                             eprintln!("Warning: Node key {:?} found in author index but not in nodes CF.", key);
-                        }
-                    }
-                }
-                // Consider using multi_get_cf if performance is critical and error handling adjusted
-                Ok(nodes)
-            },
-            None => Ok(Vec::new()),
-        }
+        unimplemented!("Synchronous get_nodes_by_author not implemented for RocksDB store");
     }
 
     fn get_nodes_by_payload_type(&self, payload_type: &str) -> Result<Vec<SignedDagNode>, DagError> {
-        let cf_payload_types = self.cf_handle(CF_PAYLOAD_TYPES)?;
-        let cf_nodes = self.cf_handle(CF_NODES)?;
-        let payload_key = payload_type.as_bytes();
-        
-        match self.db.get_cf(cf_payload_types, payload_key)? {
-            Some(data) => {
-                // Deserialize list using DAG-CBOR
-                let node_keys: Vec<Vec<u8>> = Self::deserialize_cid_list(&data)?;
-                
-                let mut nodes = Vec::with_capacity(node_keys.len());
-                for key in node_keys {
-                     match self.db.get_cf(cf_nodes, &key)? {
-                        Some(node_data) => {
-                            let node = Self::deserialize_node(&node_data)?;
-                            nodes.push(node);
-                        },
-                        None => {
-                             eprintln!("Warning: Node key {:?} found in payload index but not in nodes CF.", key);
-                        }
-                    }
-                }
-                Ok(nodes)
-            },
-            None => Ok(Vec::new()),
-        }
+        unimplemented!("Synchronous get_nodes_by_payload_type not implemented for RocksDB store");
     }
 
     fn find_path(&self, from: &Cid, to: &Cid) -> Result<Vec<SignedDagNode>, DagError> {
-        // Perform a BFS search to find a path between two nodes
-        let cf_nodes = self.cf_handle(CF_NODES)?;
-        let cf_children = self.cf_handle(CF_CHILDREN)?;
-        
-        // Check if the nodes exist
-        let from_key = Self::cid_to_key(from);
-        let to_key = Self::cid_to_key(to);
-        
-        if self.db.get_cf(cf_nodes, &from_key)?.is_none() {
-            return Err(DagError::NodeNotFound(from.clone()));
-        }
-        
-        if self.db.get_cf(cf_nodes, &to_key)?.is_none() {
-            return Err(DagError::NodeNotFound(to.clone()));
-        }
-        
-        // Special case: from and to are the same
-        if from == to {
-            let node_data = self.db.get_cf(cf_nodes, &from_key)?.unwrap();
-            let node = Self::deserialize_node(&node_data)?;
-            return Ok(vec![node]);
-        }
-        
-        // BFS search
-        let mut queue = VecDeque::new();
-        queue.push_back(from_key.clone());
-        
-        // Keep track of visited nodes and their predecessors
-        let mut visited = HashSet::new();
-        let mut predecessors: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
-        
-        visited.insert(from_key.clone());
-        
-        while let Some(current_key) = queue.pop_front() {
-            // Check if we've reached the target
-            if current_key == to_key {
-                break;
-            }
-            
-            // Get children of the current node using DAG-CBOR for list
-            if let Ok(Some(children_data)) = self.db.get_cf(cf_children, &current_key) {
-                let children: Vec<Vec<u8>> = Self::deserialize_cid_list(&children_data)?;
-                
-                for child in children {
-                    if !visited.contains(&child) {
-                        visited.insert(child.clone());
-                        predecessors.insert(child.clone(), current_key.clone());
-                        queue.push_back(child);
-                    }
-                }
-            }
-        }
-        
-        // Reconstruct the path if found
-        if !predecessors.contains_key(&to_key) && from_key != to_key {
-            return Ok(Vec::new()); // No path found
-        }
-        
-        // Reconstruct the path
-        let mut path = Vec::new();
-        let mut current = to_key.clone();
-        
-        while current != from_key {
-            let node_data = self.db.get_cf(cf_nodes, &current)?.unwrap();
-            let node = Self::deserialize_node(&node_data)?;
-            path.push(node);
-            current = predecessors.get(&current).unwrap().clone();
-        }
-        
-        // Add the starting node
-        let node_data = self.db.get_cf(cf_nodes, &from_key)?.unwrap();
-        let node = Self::deserialize_node(&node_data)?;
-        path.push(node);
-        
-        // Reverse to get the path from start to end
-        path.reverse();
-        
-        Ok(path)
+        unimplemented!("Synchronous find_path not implemented for RocksDB store");
     }
 
     fn verify_branch(&self, tip: &Cid, resolver: &dyn PublicKeyResolver) -> Result<(), DagError> {
@@ -727,7 +534,7 @@ impl DagStore for RocksDbDagStore {
 
 // Asynchronous implementation
 #[cfg(feature = "async")]
-#[async_trait::async_trait]
+#[async_trait]
 impl DagStore for RocksDbDagStore {
     async fn add_node(&mut self, mut node: SignedDagNode) -> Result<Cid, DagError> {
         let _timer = DAG_ADD_NODE_DURATION.start_timer(); // Start timing
@@ -903,17 +710,18 @@ impl DagStore for RocksDbDagStore {
 
         let verification_result = tokio::task::spawn_blocking(move || {
             let tip_key = Self::cid_to_key(&tip_clone);
-            let cf_nodes = db_clone.cf_handle(CF_NODES)?;
+            // Use ok_or_else to provide a DagError if cf_handle returns None
+            let cf_nodes = db_clone.cf_handle(CF_NODES)
+                .ok_or_else(|| DagError::StorageError("Nodes column family not found".to_string()))?;
             
             if db_clone.get_cf(cf_nodes, &tip_key)?.is_none() {
-                 return Err(DagError::NodeNotFound(tip_clone));
+                return Err(DagError::NodeNotFound(tip_clone));
             }
             
-            let mut queue = VecDeque::new();
             let mut visited = HashSet::new();
+            let mut queue = VecDeque::new();
             queue.push_back(tip_key.clone());
-            visited.insert(tip_key);
-            
+
             while let Some(current_key) = queue.pop_front() {
                 let node_data = db_clone.get_cf(cf_nodes, &current_key)?
                      .ok_or_else(|| { 
@@ -952,7 +760,7 @@ impl DagStore for RocksDbDagStore {
                  }
             }
             Ok(())
-        }).await.map_err(|e| DagError::JoinError(e.to_string()));
+        }).await??; // Double ?? to handle JoinError then inner Result<(), DagError>
         
         // Handle result and increment counter on specific errors from the blocking task
         match verification_result {

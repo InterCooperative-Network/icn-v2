@@ -4,37 +4,45 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-serde = { version = "1.0", features = ["derive"] }
+serde = { version = "1.0", optional = true, features = ["derive"] }
 serde_json = "1.0"
+serde_bytes = "0.11"
 thiserror = "1.0"
-base64 = "0.22"
-multihash = { version = "0.18", features = ["serde"] }
-cid = { version = "0.10", features = ["serde"] }
-chrono = { version = "0.4", features = ["serde"] }
-ed25519-dalek = { version = "2.0", features = ["serde"] }
-multibase = "0.9"
-rand = "0.8"
+base64 = { version = "0.22", optional = true }
+multihash = { version = "0.18", features = ["serde-codec", "sha2", "sha3", "blake2b", "blake3"] }
+cid = { version = "0.10", features = ["serde-codec"] }
+chrono = { version = "0.4", features = ["serde"], optional = true }
+ed25519-dalek = { version = "2.0", features = ["serde"], optional = true }
+rand = { version = "0.8", optional = true }
+
+# Persistence deps
 rocksdb = { version = "0.21", optional = true }
 async-trait = { version = "0.1", optional = true }
-tokio = { version = "1", features = ["full"], optional = true }
+tokio = { version = "1", features = ["sync", "macros", "rt", "time"], optional = true }
 futures = { version = "0.3", optional = true }
-serde_ipld_dagcbor = "0.2"
+serde_ipld_dagcbor = { version = "0.2.2", optional = true }
 
 # Metrics
-prometheus = { version = "0.13", features = ["process"] }
-lazy_static = "1.4"
+prometheus = { version = "0.13", optional = true }
+lazy_static = { version = "1.4", optional = true }
 
-# Optional libp2p dependencies
-libp2p = { version = "0.53.2", features = ["tokio", "noise", "gossipsub", "mdns", "kad", "identify", "ping", "request-response"], optional = true }
+# Networking (Optional)
+libp2p = { version = "0.52", optional = true }
 libp2p-identity = { version = "0.2", features = ["ed25519"], optional = true }
 libp2p-swarm = { version = "0.44", optional = true }
+
+# Add tracing
+tracing = { version = "0.1", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1.27", features = ["full", "test-util"] }
 futures = "0.3"
 
 [features]
-default = []
-async = ["tokio", "futures", "async-trait"]
-persistence = ["rocksdb", "tokio", "futures"]
-networking = ["libp2p", "libp2p-identity", "libp2p-swarm", "tokio", "futures", "async-trait"]
+default = ["identity", "dag-cbor", "async", "persistence", "metrics"]
+dag-cbor = ["dep:serde_ipld_dagcbor", "cid/serde-codec", "multihash/serde-codec"]
+async = ["dep:async-trait", "dep:tokio", "dep:tracing"]
+persistence = ["dep:rocksdb", "dep:lazy_static", "async"] # Persistence implies async
+identity = ["dep:ed25519-dalek", "dep:rand", "dep:base64", "dep:chrono"]
+metrics = ["dep:prometheus", "dep:lazy_static"]
+networking = ["dep:libp2p", "dep:libp2p-identity", "dep:libp2p-swarm", "dep:tokio", "dep:futures", "dep:async-trait"]

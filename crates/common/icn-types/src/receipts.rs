@@ -4,7 +4,7 @@ use crate::dag::{DagError, DagNode, DagNodeBuilder, DagPayload, DagStore, Signed
 use crate::identity::Did;
 // use crate::quorum::QuorumProof; // Comment out unused import for now
 use chrono::{DateTime, Utc};
-use ed25519_dalek::{Signature, SigningKey};
+use ed25519_dalek::{Signature, SigningKey, Signer, Verifier};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 #[cfg(test)]
@@ -50,6 +50,8 @@ pub enum ReceiptError {
     InvalidDependencies,
     #[error("Receipt not found: {0}")]
     ReceiptNotFound(Cid),
+    #[error("Invalid payload type")]
+    InvalidPayloadType,
 }
 
 impl ExecutionReceipt {
@@ -100,7 +102,7 @@ impl ExecutionReceipt {
     }
     
     /// Anchor this ExecutionReceipt to the DAG
-    pub fn anchor_to_dag(
+    pub async fn anchor_to_dag(
         &self,
         signing_key: &SigningKey,
         dag_store: &mut impl DagStore,
@@ -122,29 +124,28 @@ impl ExecutionReceipt {
         };
         
         // Add to the DAG store
-        let cid = dag_store.add_node(signed_node)?;
+        let cid = dag_store.add_node(signed_node).await?;
         
         Ok(cid)
     }
     
     /// Retrieve an ExecutionReceipt from the DAG
-    pub fn from_dag(cid: &Cid, dag_store: &impl DagStore) -> Result<Self, ReceiptError> {
+    pub async fn from_dag(cid: &Cid, dag_store: &impl DagStore) -> Result<Self, ReceiptError> {
         // Get the node from the DAG
-        let node = dag_store.get_node(cid)?;
+        let node = dag_store.get_node(cid).await?;
         
-        // Extract the ExecutionReceipt from the node's payload
-        match &node.node.payload {
-            DagPayload::Json(value) => {
-                serde_json::from_value(value.clone()).map_err(ReceiptError::SerializationError)
-            }
-            _ => Err(ReceiptError::ReceiptNotFound(cid.clone())),
+        // Verify payload type
+        if let DagPayload::ExecutionReceipt(receipt) = node.node.payload {
+            Ok(receipt)
+        } else {
+            Err(ReceiptError::InvalidPayloadType)
         }
     }
     
     /// Verify that this ExecutionReceipt's dependencies exist in the DAG
-    pub fn verify_dependencies(&self, dag_store: &impl DagStore) -> Result<bool, ReceiptError> {
+    pub async fn verify_dependencies(&self, dag_store: &impl DagStore) -> Result<bool, ReceiptError> {
         for anchor in &self.dependencies {
-            match dag_store.get_node(&anchor.cid) {
+            match dag_store.get_node(&anchor.cid).await {
                 Ok(_) => {}, // Node exists
                 Err(DagError::NodeNotFound(_)) => return Ok(false),
                 Err(err) => return Err(ReceiptError::DagError(err)),
@@ -155,20 +156,23 @@ impl ExecutionReceipt {
     }
     
     /// List all ExecutionReceipts in the DAG
-    pub fn list_all(dag_store: &impl DagStore) -> Result<Vec<(Cid, ExecutionReceipt)>, ReceiptError> {
+    pub async fn list_all(dag_store: &impl DagStore) -> Result<Vec<(Cid, ExecutionReceipt)>, ReceiptError> {
         // Get all nodes with ExecutionReceipt payload type
-        let nodes = dag_store.get_nodes_by_payload_type("receipt")?;
+        let nodes = dag_store.get_nodes_by_payload_type("receipt").await?;
         
-        // Convert each node to an ExecutionReceipt
-        let mut receipts = Vec::new();
+        let mut result = Vec::new();
         for node in nodes {
-            if let DagPayload::Json(value) = &node.node.payload {
-                let receipt: ExecutionReceipt = serde_json::from_value(value.clone())?;
-                receipts.push((node.cid.unwrap(), receipt));
+             if let DagPayload::ExecutionReceipt(receipt) = node.node.payload {
+                 if let Some(cid) = node.cid {
+                    result.push((cid, receipt));
+                 } else {
+                    eprintln!("Warning: Node from list_all missing CID");
+                 }
+            } else {
+                eprintln!("Warning: Node from list_all has incorrect payload type");
             }
         }
-        
-        Ok(receipts)
+        Ok(result)
     }
     
     /// Export this ExecutionReceipt to a portable format
@@ -208,5 +212,17 @@ impl ExecutionReceipt {
         let cid = dag_store.add_node(signed_node)?;
         
         Ok(cid)
+    }
+
+    pub async fn verify_anchor(&self, dag_store: &impl DagStore) -> Result<bool, ReceiptError> {
+        // Check if the anchor node itself exists
+        if let Some(anchor) = &self.dependencies.first() {
+            match dag_store.get_node(&anchor.cid).await {
+                Ok(_) => {}, // Node exists
+                Err(DagError::NodeNotFound(_)) => return Ok(false),
+                Err(err) => return Err(ReceiptError::DagError(err)),
+            }
+        }
+        Ok(true) // No anchor or anchor exists
     }
 } 

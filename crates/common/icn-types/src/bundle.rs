@@ -1,9 +1,9 @@
 use crate::anchor::AnchorRef;
 use crate::cid::Cid;
-use crate::dag::{DagError, DagNode, DagNodeBuilder, DagPayload, DagStore, SignedDagNode};
+use crate::dag::{DagError, DagNode, DagNodeBuilder, DagPayload, DagStore, SignedDagNode, PublicKeyResolver};
 use crate::identity::Did;
 use crate::quorum::QuorumProof;
-use ed25519_dalek::{Signature, SigningKey};
+use ed25519_dalek::{Signature, SigningKey, Signer, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 #[cfg(test)]
@@ -36,6 +36,8 @@ pub enum TrustBundleError {
     InvalidQuorumProof,
     #[error("Bundle not found: {0}")]
     BundleNotFound(Cid),
+    #[error("Invalid payload type")]
+    InvalidPayloadType,
 }
 
 impl TrustBundle {
@@ -83,31 +85,35 @@ impl TrustBundle {
     }
     
     /// Anchor this TrustBundle to the DAG
-    pub fn anchor_to_dag(
+    pub async fn anchor_to_dag(
         &self,
         author: Did,
         signing_key: &SigningKey,
         dag_store: &mut impl DagStore,
     ) -> Result<Cid, TrustBundleError> {
-        // Create a DAG node for this bundle
-        let node = self.to_dag_node(author)?;
-        
-        // Serialize the node for signing
-        let node_bytes = serde_json::to_vec(&node)?;
-        
-        // Sign the node
+        // Serialize payload
+        let payload = DagPayload::TrustBundle(self.clone());
+        let node = DagNodeBuilder::new(author, payload)
+            .parents(self.previous_anchors.iter().map(|a| a.cid.clone()).collect())
+            .build();
+
+        // Calculate CID before signing
+        let node_bytes = serde_json::to_vec(&node).map_err(|e| TrustBundleError::SerializationError(e))?;
+        let node_cid = SignedDagNode::calculate_cid(&node_bytes)?;
+
+        // Sign the canonical bytes
         let signature = signing_key.sign(&node_bytes);
-        
-        // Create a signed node
+
+        // Create signed node
         let signed_node = SignedDagNode {
             node,
             signature,
-            cid: None, // Will be computed when added to the DAG
+            cid: Some(node_cid),
         };
-        
-        // Add to the DAG store
-        let cid = dag_store.add_node(signed_node)?;
-        
+
+        // Add to DAG store
+        let cid = dag_store.add_node(signed_node).await?;
+
         Ok(cid)
     }
     
@@ -142,23 +148,22 @@ impl TrustBundle {
     }
     
     /// Retrieve a TrustBundle from the DAG
-    pub fn from_dag(cid: &Cid, dag_store: &impl DagStore) -> Result<Self, TrustBundleError> {
+    pub async fn from_dag(cid: &Cid, dag_store: &impl DagStore) -> Result<Self, TrustBundleError> {
         // Get the node from the DAG
-        let node = dag_store.get_node(cid)?;
+        let node = dag_store.get_node(cid).await?;
         
-        // Extract the TrustBundle from the node's payload
-        match &node.node.payload {
-            DagPayload::Json(value) => {
-                serde_json::from_value(value.clone()).map_err(TrustBundleError::SerializationError)
-            }
-            _ => Err(TrustBundleError::BundleNotFound(cid.clone())),
+        // Verify payload type
+        if let DagPayload::TrustBundle(bundle) = node.node.payload {
+            Ok(bundle)
+        } else {
+            Err(TrustBundleError::InvalidPayloadType)
         }
     }
     
     /// Verify that this TrustBundle's previous anchors exist in the DAG
-    pub fn verify_anchors(&self, dag_store: &impl DagStore) -> Result<bool, TrustBundleError> {
+    pub async fn verify_anchors(&self, dag_store: &impl DagStore) -> Result<bool, TrustBundleError> {
         for anchor in &self.previous_anchors {
-            match dag_store.get_node(&anchor.cid) {
+            match dag_store.get_node(&anchor.cid).await {
                 Ok(_) => {}, // Node exists
                 Err(DagError::NodeNotFound(_)) => return Ok(false),
                 Err(err) => return Err(TrustBundleError::DagError(err)),
@@ -169,23 +174,26 @@ impl TrustBundle {
     }
     
     /// Get the path of TrustBundles from this bundle to another
-    pub fn get_path_to(
+    pub async fn get_path_to(
         &self,
         target_cid: &Cid,
         dag_store: &impl DagStore,
     ) -> Result<Vec<TrustBundle>, TrustBundleError> {
         // First, get our node from the DAG
-        let source_node = dag_store.get_node(&self.state_cid)?;
+        let source_node = dag_store.get_node(&self.state_cid).await?;
         
         // Find the path between the nodes
-        let path = dag_store.find_path(&source_node.cid.unwrap(), target_cid)?;
+        let path = dag_store.find_path(&source_node.cid.unwrap(), target_cid).await?;
         
         // Convert each node in the path to a TrustBundle
         let mut bundles = Vec::new();
         for node in path {
-            if let DagPayload::Json(value) = &node.node.payload {
-                let bundle: TrustBundle = serde_json::from_value(value.clone())?;
+            if let DagPayload::TrustBundle(bundle) = node.node.payload {
                 bundles.push(bundle);
+            } else {
+                // Skip nodes with incorrect payload type in the path?
+                // Or return an error?
+                eprintln!("Warning: Node {:?} in path has non-TrustBundle payload", node.cid);
             }
         }
         
@@ -193,20 +201,25 @@ impl TrustBundle {
     }
     
     /// List all TrustBundles in the DAG
-    pub fn list_all(dag_store: &impl DagStore) -> Result<Vec<(Cid, TrustBundle)>, TrustBundleError> {
+    pub async fn list_all(dag_store: &impl DagStore) -> Result<Vec<(Cid, TrustBundle)>, TrustBundleError> {
         // Get all nodes with TrustBundle payload type
-        let nodes = dag_store.get_nodes_by_payload_type("trustbundle")?;
+        let nodes = dag_store.get_nodes_by_payload_type("trustbundle").await?;
         
-        // Convert each node to a TrustBundle
-        let mut bundles = Vec::new();
+        let mut result = Vec::new();
         for node in nodes {
-            if let DagPayload::Json(value) = &node.node.payload {
-                let bundle: TrustBundle = serde_json::from_value(value.clone())?;
-                bundles.push((node.cid.unwrap(), bundle));
+            if let DagPayload::TrustBundle(bundle) = node.node.payload {
+                if let Some(cid) = node.cid {
+                    result.push((cid, bundle));
+                } else {
+                    // Should not happen if nodes come from store
+                    eprintln!("Warning: Node from list_all missing CID");
+                }
+            } else {
+                // Should not happen if get_nodes_by_payload_type works
+                eprintln!("Warning: Node from list_all has incorrect payload type");
             }
         }
-        
-        Ok(bundles)
+        Ok(result)
     }
     
     /// Export this TrustBundle to a portable format
