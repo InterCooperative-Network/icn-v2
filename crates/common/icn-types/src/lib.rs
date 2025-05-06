@@ -31,8 +31,8 @@ pub use bundle::{TrustBundle, TrustBundleError};
 pub use dag::{DagNodeBuilder, DagPayload};
 
 // Add mesh module and re-exports
-pub mod mesh;
-pub use mesh::{JobManifest, Bid, NodeCapability, ResourceType};
+// pub mod mesh; // REMOVED
+// pub use mesh::{JobManifest, Bid, NodeCapability, ResourceType}; // REMOVED
 
 // Conditional exports based on features
 #[cfg(feature = "async")]

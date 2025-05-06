@@ -1,11 +1,14 @@
 use clap::Subcommand;
 use crate::{CliContext, error::{CliError, CliResult}};
-use icn_types::mesh::{JobManifest, NodeCapability, Bid, ResourceType, JobStatus};
+use planetary_mesh::{JobManifest, NodeCapability, Bid, ResourceType, JobStatus};
 use std::path::PathBuf;
 use serde_json;
 use icn_core_types::Did;
 use cid;
 use chrono::Utc;
+use anyhow::Result;
+use clap::{Args, Parser};
+use icn_core_types::{Cid, PeerId};
 
 /// Commands for interacting with the ICN Mesh
 #[derive(Subcommand, Debug, Clone)]

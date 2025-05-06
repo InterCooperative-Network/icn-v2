@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::{Did, Cid}; // Import necessary types from this crate
+use icn_core_types::{Cid, Did}; // Updated from use crate::{Did, Cid}
 
 /// Placeholder for defining compute/storage/network resource requirements.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

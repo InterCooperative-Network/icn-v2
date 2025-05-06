@@ -3,7 +3,7 @@ members = [
     "crates/runtime/icn-runtime",
     "crates/wallet/icn-wallet",
     "crates/agoranet/agoranet-core",
-    "crates/mesh/planetary-mesh",
+    "crates/planetary-mesh",
     "crates/common/icn-types",
     "crates/common/icn-identity-core",
     "crates/common/icn-core-types",
