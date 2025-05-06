@@ -2,6 +2,8 @@ use crate::context::CliContext;
 use crate::error::CliError;
 
 pub mod bootstrap;
+pub mod verify;
+pub mod export;
 
 #[derive(clap::Subcommand, Debug)]
 pub enum FederationCommands {
@@ -43,6 +45,40 @@ pub enum FederationCommands {
         /// Path to the federation bundle file
         #[clap(long)]
         bundle_path: String,
+        
+        /// Path to the referenced event(s) for verification
+        /// If not provided, will try to find events in the same directory
+        #[clap(long)]
+        events_path: Option<String>,
+        
+        /// Directory containing participant key files for verification
+        /// If not provided, will try to find keys in the same directory
+        #[clap(long)]
+        keys_dir: Option<String>,
+        
+        /// Print detailed verification information
+        #[clap(long, default_value = "false")]
+        verbose: bool,
+    },
+    
+    /// Export a federation to a CAR archive for cold-sync
+    Export {
+        /// Path to the federation directory
+        #[clap(long)]
+        federation_dir: String,
+        
+        /// Output path for the CAR archive
+        /// If not provided, will use <federation_name>.car in the current directory
+        #[clap(long)]
+        output: Option<String>,
+        
+        /// Include keys in the export (warning: contains private keys)
+        #[clap(long, default_value = "false")]
+        include_keys: bool,
+        
+        /// Include additional files or directories in the export
+        #[clap(long = "include", value_name = "PATH")]
+        include_paths: Vec<String>,
     },
 }
 
@@ -71,9 +107,33 @@ pub async fn handle_federation_command(
                 key_format,
             ).await?;
         }
-        FederationCommands::Verify { bundle_path } => {
-            println!("Verifying federation bundle at {}", bundle_path);
-            todo!("Implement federation bundle verification");
+        FederationCommands::Verify { 
+            bundle_path,
+            events_path,
+            keys_dir,
+            verbose,
+        } => {
+            verify::run_verify(
+                context,
+                bundle_path,
+                events_path.as_deref(),
+                keys_dir.as_deref(),
+                *verbose,
+            ).await?;
+        }
+        FederationCommands::Export {
+            federation_dir,
+            output,
+            include_keys,
+            include_paths,
+        } => {
+            export::run_export(
+                context,
+                federation_dir,
+                output.as_deref(),
+                *include_keys,
+                include_paths,
+            ).await?;
         }
     }
     
