@@ -5,6 +5,7 @@ use crate::vc::{
     VotingThreshold
 };
 use std::collections::{HashMap, HashSet};
+use std::collections::hash_map::Entry;
 use thiserror::Error;
 use chrono::Utc;
 
@@ -197,7 +198,7 @@ impl QuorumEngine {
         use crate::vc::ProposalStatus;
         
         // Only 'Active' proposals can be voted on
-        match proposal.credential_subject.status {
+        match &proposal.credential_subject.status {
             ProposalStatus::Active => Ok(()),
             state => Err(QuorumEngineError::InvalidProposalState(
                 format!("Proposal must be in 'Active' state for voting, current state: {:?}", state)
@@ -212,7 +213,7 @@ impl QuorumEngine {
         votes: &'a [VoteCredential]
     ) -> Result<Vec<&'a VoteCredential>, QuorumEngineError> {
         let mut valid_votes = Vec::new();
-        let mut latest_votes = HashMap::new();
+        let mut latest_votes: HashMap<String, &'a VoteCredential> = HashMap::new();
         
         // 1. Find the latest vote from each voter
         for vote in votes {
@@ -224,14 +225,14 @@ impl QuorumEngine {
             let voter_id = &vote.credential_subject.id;
             
             // Track the latest vote for each voter by timestamp
-            match latest_votes.get(voter_id) {
-                Some(&existing_vote) => {
-                    if vote.credential_subject.cast_at > existing_vote.credential_subject.cast_at {
-                        latest_votes.insert(voter_id.clone(), vote);
+            match latest_votes.entry(voter_id.clone()) {
+                Entry::Occupied(mut entry) => {
+                    if vote.credential_subject.cast_at > entry.get().credential_subject.cast_at {
+                        entry.insert(vote);
                     }
                 },
-                None => {
-                    latest_votes.insert(voter_id.clone(), vote);
+                Entry::Vacant(entry) => {
+                    entry.insert(vote);
                 }
             }
         }

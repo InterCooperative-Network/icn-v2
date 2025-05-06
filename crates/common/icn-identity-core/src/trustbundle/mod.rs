@@ -52,7 +52,7 @@ pub enum QuorumType {
 }
 
 /// Configuration for quorum validation
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct QuorumConfig {
     /// The type of quorum required
     pub quorum_type: QuorumType,
@@ -84,7 +84,7 @@ impl QuorumConfig {
 }
 
 /// Cryptographic proof that a quorum of participants signed a bundle
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct QuorumProof {
     /// (DID, signature) pairs
     pub signatures: Vec<(Did, Vec<u8>)>,
@@ -156,7 +156,7 @@ impl QuorumProof {
                 
                 for (did, weight) in weights {
                     max_possible_weight += weight;
-                    if valid_signers.contains(did) {
+                    if valid_signers.contains(&did) {
                         total_weight += weight;
                     }
                 }
@@ -177,7 +177,7 @@ impl QuorumProof {
 }
 
 /// A container for federation-verified DAG events
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TrustBundle {
     /// Federation identifier
     pub federation_id: String,
