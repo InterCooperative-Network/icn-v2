@@ -24,3 +24,6 @@ thiserror = "1.0"
 ed25519-dalek = "2.0"
 rand = "0.8"
 tokio = { version = "1.27", features = ["full"] }
+prometheus = { version = "0.13", features = ["process"] }
+lazy_static = "1.4"
+hex = "0.4"
