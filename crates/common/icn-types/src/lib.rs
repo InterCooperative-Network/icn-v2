@@ -22,5 +22,21 @@ pub use receipts::ExecutionReceipt; // Uncommented
 // Re-export sync types
 pub use dag::sync::{DAGSyncBundle, DAGSyncService, FederationPeer, SyncError, VerificationResult};
 
-// Re-export from icn-core-types
-pub use icn_core_types::{Cid, CidError, Did, DidKey, DidKeyError, QuorumProof};
+// Re-export core types from icn-core-types for convenience
+pub use icn_core_types::{Cid, CidError, Did, QuorumProof};
+pub use icn_core_types::did::DidParseError;
+
+// Re-export types from modules
+pub use bundle::{TrustBundle, TrustBundleError};
+pub use dag::{DagNodeBuilder, DagPayload};
+
+// Add mesh module and re-exports
+pub mod mesh;
+pub use mesh::{JobManifest, Bid, NodeCapability, ResourceType};
+
+// Conditional exports based on features
+#[cfg(feature = "async")]
+pub use dag::sync::*;
+
+#[cfg(feature = "persistence")]
+pub use dag::rocksdb::RocksDbDagStore;

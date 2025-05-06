@@ -1383,6 +1383,7 @@ dependencies = [
  "lazy_static",
  "metrics",
  "metrics-exporter-prometheus",
+ "multibase",
  "prometheus",
  "rand",
  "serde",

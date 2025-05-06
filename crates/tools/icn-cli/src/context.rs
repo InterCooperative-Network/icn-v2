@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use icn_types::dag::{DagStore, memory::MemoryDagStore, rocksdb::RocksDbDagStore, DagError, PublicKeyResolver};
+use icn_types::dag::{DagStore, rocksdb::RocksDbDagStore, DagError, PublicKeyResolver};
 use icn_types::Did;
 use icn_identity_core::did::DidKey;
 use crate::error::CliError;
-use ed25519_dalek::VerifyingKey;
+use ed25519_dalek::{VerifyingKey, SigningKey};
 use hex;
 use serde::Deserialize;
 

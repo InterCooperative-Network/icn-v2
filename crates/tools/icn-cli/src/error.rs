@@ -35,8 +35,8 @@ pub enum CliError {
     #[error("Verification Error: {0}")]
     Verification(String),
 
-    #[error("Prometheus Metric Error: {0}")]
-    Metrics(#[from] prometheus::Error),
+    // #[error("Prometheus Metric Error: {0}")]
+    // Metrics(#[from] prometheus::Error), // Commented out
 
     #[error("Generic Error: {0}")]
     Any(#[from] anyhow::Error), // Catch-all for other anyhow errors

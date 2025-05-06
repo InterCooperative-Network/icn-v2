@@ -7,21 +7,14 @@
 mod error;
 mod context;
 mod commands;
-mod metrics;
+// mod metrics; // Commented out
 use clap::{Parser, Subcommand};
 use context::CliContext;
 use error::CliError;
 use commands::handle_dag_command; // Import the specific handler
 use commands::handle_mesh_command; // Add handle_mesh_command
-use icn_identity_core::did::DidKey;
-use icn_types::dag::{memory::MemoryDagStore, DagError, DagStore, SignedDagNode};
-use icn_types::{anchor::AnchorRef, Did};
-use icn_types::bundle::TrustBundle;
-use icn_types::receipts::ExecutionReceipt;
 // use icn_types::ExecutionResult; // Needs locating
 use std::path::PathBuf;
-use icn_wallet::keystore::SimpleKeyStore;
-use thiserror::Error;
 use tokio;
 
 
@@ -38,9 +31,9 @@ struct Cli {
 
 // Placeholder structs for non-refactored commands
 // These will be moved to their respective command modules later
-#[derive(Subcommand, Debug, Clone)] enum BundleCommands { Temp }
-#[derive(Subcommand, Debug, Clone)] enum ReceiptCommands { Temp }
-#[derive(Subcommand, Debug, Clone)] enum DagSyncCommands { Temp }
+// #[derive(Subcommand, Debug, Clone)] enum BundleCommands { Temp } // REMOVED
+// #[derive(Subcommand, Debug, Clone)] enum ReceiptCommands { Temp } // REMOVED
+// #[derive(Subcommand, Debug, Clone)] enum DagSyncCommands { Temp } // REMOVED
 
 #[derive(Subcommand, Debug)] // Added Debug
 enum Commands {
@@ -58,18 +51,19 @@ enum Commands {
 
     /// TrustBundle commands
     #[command(subcommand)]
-    Bundle(BundleCommands), // Keep placeholder for now
+    Bundle(commands::bundle::BundleCommands), // Updated path
 
     /// ExecutionReceipt commands
     #[command(subcommand)]
-    Receipt(ReceiptCommands), // Keep placeholder for now
+    Receipt(commands::receipt::ReceiptCommands), // Updated path
     
     /// Advanced DAG sync commands with libp2p support
     #[command(subcommand)]
-    SyncP2P(DagSyncCommands), // Moved SyncP2P to top level?
+    SyncP2P(commands::sync_p2p::DagSyncCommands), // Updated path
 
     /// Interact with the ICN mesh network (libp2p)
-    Mesh(commands::mesh::MeshCommands), // Add this line
+    #[command(subcommand)]
+    Mesh(commands::mesh::MeshCommands),
 
     /// Manage trust policies
     Policy,
@@ -92,28 +86,25 @@ async fn main() -> Result<(), CliError> {
         Commands::Dag(cmd) => {
             handle_dag_command(&mut context, cmd).await?
         }
-        Commands::KeyGen { output } => {
+        Commands::KeyGen { output: _output } => {
             println!("Executing key-gen...");
             // TODO: Implement key-gen logic (could also be moved to commands/keygen.rs)
             unimplemented!("KeyGen handler")
         }
         Commands::Bundle(cmd) => {
-            println!("Bundle command placeholder...");
-            // TODO: Refactor Bundle commands
-            unimplemented!("Bundle handler placeholder")
+            // Call the handler from the bundle module
+            commands::bundle::handle_bundle_command(&mut context, cmd).await?
         }
          Commands::Receipt(cmd) => {
-            println!("Receipt command placeholder...");
-            // TODO: Refactor Receipt commands
-            unimplemented!("Receipt handler placeholder")
+            // Call the handler from the receipt module
+            commands::receipt::handle_receipt_command(&mut context, cmd).await?
         }
         Commands::Mesh(cmd) => {
             handle_mesh_command(&mut context, cmd).await?
         }
          Commands::SyncP2P(cmd) => {
-            println!("SyncP2P command placeholder...");
-            // TODO: Refactor SyncP2P commands (into commands/sync_p2p.rs?)
-            unimplemented!("SyncP2P handler placeholder")
+            // Call the handler from the sync_p2p module
+            commands::sync_p2p::handle_dag_sync_command(&mut context, cmd).await?
         }
         Commands::Policy => {
             todo!("Implement Policy commands")

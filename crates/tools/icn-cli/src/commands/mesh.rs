@@ -1,10 +1,10 @@
-use clap::{Args, Subcommand};
-use crate::{CliContext, error::{CliResult, CliError}};
-// use icn_types::{JobManifest, NodeCapability, Bid}; // Commented out - types need locating
+use clap::Subcommand;
+use crate::{CliContext, error::CliResult};
+use icn_types::mesh::{JobManifest, NodeCapability, Bid};
 use std::path::PathBuf;
 
 /// Commands for interacting with the ICN Mesh
-#[derive(Args, Debug)]
+#[derive(Subcommand, Debug)]
 pub enum MeshCommands {
     /// Submit a job manifest to the mesh
     SubmitJob {
@@ -34,8 +34,8 @@ pub async fn handle_mesh_command(context: &mut CliContext, cmd: &MeshCommands) -
     match cmd {
         MeshCommands::SubmitJob { manifest_path } => {
             println!("Submitting job from: {:?}", manifest_path);
+            let manifest: JobManifest = unimplemented!("Load manifest from {:?}", manifest_path);
             // TODO: Load manifest, interact with mesh scheduler
-            // let manifest: JobManifest = ... load from manifest_path ...;
             // let scheduler = context.get_scheduler()?; // Need a way to get scheduler
             // scheduler.submit_job(manifest).await?;
             unimplemented!("SubmitJob handler")
@@ -44,8 +44,8 @@ pub async fn handle_mesh_command(context: &mut CliContext, cmd: &MeshCommands) -
             println!("Listing mesh nodes...");
             // TODO: Interact with capability index/discovery service
             // let discovery = context.get_discovery()?; // Need discovery service
-            // let nodes: Vec<NodeCapability> = discovery.find_nodes(/* filter */).await?;
-            // println!("{:#?}", nodes);
+            let nodes: Vec<NodeCapability> = unimplemented!("Find nodes");
+            println!("{:#?}", nodes);
             unimplemented!("ListNodes handler")
         }
         MeshCommands::JobStatus { job_cid } => {
@@ -62,8 +62,8 @@ pub async fn handle_mesh_command(context: &mut CliContext, cmd: &MeshCommands) -
             // TODO: Query bids from scheduler/store
             // let cid = Cid::try_from(job_cid.as_str()).map_err(|e| CliError::InvalidCid(e.to_string()))?;
             // let scheduler = context.get_scheduler()?;
-            // let bids: Vec<Bid> = scheduler.get_job_bids(cid).await?;
-            // println!("{:#?}", bids);
+            let bids: Vec<Bid> = unimplemented!("Get bids for {}", job_cid);
+            println!("{:#?}", bids);
             unimplemented!("GetBids handler")
         }
     }

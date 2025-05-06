@@ -1,8 +1,7 @@
 use anyhow::{Result, Context};
-use icn_wallet::{verify_dispatch_credential, VerificationReport, TrustPolicyStore, TrustedDidEntry, TrustLevel};
+use icn_wallet::{verify_dispatch_credential, TrustPolicyStore, TrustedDidEntry, TrustLevel};
 use icn_types::dag::memory::MemoryDagStore;
 use std::fs;
-use std::path::PathBuf;
 use std::process;
 
 fn main() -> Result<()> {

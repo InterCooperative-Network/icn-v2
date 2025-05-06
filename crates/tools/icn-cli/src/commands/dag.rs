@@ -1,10 +1,10 @@
-use clap::{Parser, Subcommand};
+use clap::Subcommand;
 use crate::{CliContext, CliError};
 use std::path::PathBuf;
 use icn_types::Cid;
-use std::str::FromStr;
-use icn_types::dag::{PublicKeyResolver, DagStore, SignedDagNode, DagPayload, DagError};
+use icn_types::dag::{PublicKeyResolver, DagStore};
 use std::sync::Arc;
+use multibase; // Added for Cid parsing
 
 // Define the DagCommands enum here (or move it from main.rs)
 #[derive(Subcommand, Debug)]
@@ -163,8 +163,10 @@ pub async fn handle_dag_command(
             let resolver: Arc<dyn PublicKeyResolver + Send + Sync> = context.get_resolver_dyn(); // Get Arc<dyn ...>
 
             // 3. Parse CID
-            let start_cid = Cid::from_str(cid)
-                .map_err(|e| CliError::Input(format!("Invalid start CID: {}", e)))?;
+            let (_base, decoded_bytes) = multibase::decode(cid)
+                .map_err(|e| CliError::Input(format!("Invalid multibase encoding for start CID string '{}': {}", cid, e)))?;
+            let start_cid = Cid::from_bytes(&decoded_bytes)
+                .map_err(|e| CliError::Input(format!("Invalid start CID bytes from string '{}': {}", cid, e)))?;
 
             println!("Verifying branch from tip: {}", start_cid);
 

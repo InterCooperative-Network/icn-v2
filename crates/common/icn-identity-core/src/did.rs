@@ -43,6 +43,13 @@ impl DidKey {
         DidKey { signing_key, verifying_key: verifying_key.clone(), did }
     }
 
+    pub fn from_signing_key(signing_key: SigningKey) -> Self {
+        let mut csprng = OsRng;
+        let verifying_key = signing_key.verifying_key();
+        let did = Did::new(&verifying_key);
+        DidKey { signing_key, verifying_key: verifying_key.clone(), did }
+    }
+
     /// Get the DID associated with this keypair.
     pub fn did(&self) -> &Did {
         &self.did
