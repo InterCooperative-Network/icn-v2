@@ -20,6 +20,10 @@ pub mod sync;
 #[cfg(test)]
 mod tests;
 
+// Async tests module when the async feature is enabled
+#[cfg(all(test, feature = "async"))]
+mod tests_async;
+
 // Re-export sync types for easier access
 pub use sync::{DAGSyncBundle, DAGSyncService, FederationPeer, SyncError, VerificationResult};
 

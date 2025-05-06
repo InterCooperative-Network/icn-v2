@@ -186,7 +186,8 @@ enum ReceiptCommands {
     },
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match &cli.command {
@@ -223,13 +224,13 @@ fn main() -> Result<()> {
             Ok(())
         },
         
-        Commands::Dag(dag_cmd) => handle_dag_command(dag_cmd),
-        Commands::Bundle(bundle_cmd) => handle_bundle_command(bundle_cmd),
-        Commands::Receipt(receipt_cmd) => handle_receipt_command(receipt_cmd),
+        Commands::Dag(dag_cmd) => handle_dag_command(dag_cmd).await,
+        Commands::Bundle(bundle_cmd) => handle_bundle_command(bundle_cmd).await,
+        Commands::Receipt(receipt_cmd) => handle_receipt_command(receipt_cmd).await,
     }
 }
 
-fn handle_dag_command(cmd: &DagCommands) -> Result<()> {
+async fn handle_dag_command(cmd: &DagCommands) -> Result<()> {
     match cmd {
         DagCommands::SubmitAnchor { input, anchor_type, key, dag_dir } => {
             // Load the key file
@@ -250,7 +251,7 @@ fn handle_dag_command(cmd: &DagCommands) -> Result<()> {
             // We use sign method rather than directly accessing the private key field
             
             // Create DAG store
-            let mut dag_store = open_dag_store(dag_dir)?;
+            let mut dag_store = open_dag_store(dag_dir).await?;
             
             // Read input file
             let input_data = fs::read_to_string(input)
@@ -289,6 +290,7 @@ fn handle_dag_command(cmd: &DagCommands) -> Result<()> {
                         
                         // Add to the DAG store
                         dag_store.add_node(signed_node)
+                            .await
                             .map_err(|e| anyhow::anyhow!("Failed to add node to DAG: {}", e))?
                     };
                     
@@ -325,6 +327,7 @@ fn handle_dag_command(cmd: &DagCommands) -> Result<()> {
                         
                         // Add to the DAG store
                         dag_store.add_node(signed_node)
+                            .await
                             .map_err(|e| anyhow::anyhow!("Failed to add node to DAG: {}", e))?
                     };
                     
@@ -340,19 +343,19 @@ fn handle_dag_command(cmd: &DagCommands) -> Result<()> {
         
         DagCommands::Replay { cid, dag_dir } => {
             // Create DAG store
-            let dag_store = open_dag_store(dag_dir)?;
+            let dag_store = open_dag_store(dag_dir).await?;
             
             // Parse CID
             let cid_obj = parse_cid(cid)?;
             
             // Verify the branch
-            match dag_store.verify_branch(&cid_obj) {
+            match dag_store.verify_branch(&cid_obj).await {
                 Ok(true) => {
                     println!("Branch verification successful!");
                     println!("All nodes in the branch are valid and properly linked.");
                     
                     // Find all ancestors for additional info
-                    let node = dag_store.get_node(&cid_obj)?;
+                    let node = dag_store.get_node(&cid_obj).await?;
                     println!("\nNode info:");
                     println!("  Author: {}", node.node.author);
                     println!("  Timestamp: {}", node.node.metadata.timestamp);
@@ -377,7 +380,7 @@ fn handle_dag_command(cmd: &DagCommands) -> Result<()> {
         
         DagCommands::VerifyBundle { cid, dag_dir } => {
             // Create DAG store
-            let dag_store = open_dag_store(dag_dir)?;
+            let dag_store = open_dag_store(dag_dir).await?;
             
             // Parse CID
             let cid_obj = parse_cid(cid)?;
@@ -419,7 +422,7 @@ fn handle_dag_command(cmd: &DagCommands) -> Result<()> {
         
         DagCommands::ExportThread { from, to, dag_dir, output } => {
             // Create DAG store
-            let dag_store = open_dag_store(dag_dir)?;
+            let dag_store = open_dag_store(dag_dir).await?;
             
             // Parse CIDs
             let from_cid = parse_cid(from)?;
@@ -467,7 +470,7 @@ fn handle_dag_command(cmd: &DagCommands) -> Result<()> {
         
         DagCommands::Sync { peer, federation, peer_id, dag_dir, trust } => {
             // Create DAG store
-            let dag_store = open_dag_store(dag_dir)?;
+            let dag_store = open_dag_store(dag_dir).await?;
             
             // Create a federation peer
             let federation_peer = icn_types::dag::FederationPeer {
@@ -492,7 +495,7 @@ fn handle_dag_command(cmd: &DagCommands) -> Result<()> {
             println!("Federation: {}", federation);
             println!("Trust level: {}", trust);
             
-            match sync_service.sync_with_peer(&federation_peer) {
+            match sync_service.sync_with_peer(&federation_peer).await {
                 Ok(result) => {
                     println!("\nSync result:");
                     println!("  Valid: {}", result.is_valid);
@@ -511,7 +514,7 @@ fn handle_dag_command(cmd: &DagCommands) -> Result<()> {
     }
 }
 
-fn handle_bundle_command(cmd: &BundleCommands) -> Result<()> {
+async fn handle_bundle_command(cmd: &BundleCommands) -> Result<()> {
     match cmd {
         BundleCommands::Create { 
             state_cid, 
@@ -580,7 +583,7 @@ fn handle_bundle_command(cmd: &BundleCommands) -> Result<()> {
     }
 }
 
-fn handle_receipt_command(cmd: &ReceiptCommands) -> Result<()> {
+async fn handle_receipt_command(cmd: &ReceiptCommands) -> Result<()> {
     match cmd {
         ReceiptCommands::Create { 
             execution_cid, 
@@ -649,7 +652,7 @@ fn handle_receipt_command(cmd: &ReceiptCommands) -> Result<()> {
 }
 
 /// Open a DAG store at the specified path
-fn open_dag_store<P: AsRef<Path>>(path: P) -> Result<impl DagStore, DagError> {
+async fn open_dag_store<P: AsRef<Path>>(path: P) -> Result<impl DagStore, DagError> {
     // For simplicity, we'll use the in-memory store in the CLI
     // In a real implementation, we would use RocksDB with the persistence feature
     // let store = rocksdb::RocksDbDagStore::open(path)?;
