@@ -13,7 +13,7 @@ impl<T: HostContext + Send + Sync + 'static> WasmExecutor<T> { // Added Send + S
     /// Creates a new executor, linking host functions defined in the ABI.
     pub fn new() -> Result<Self> { // Return Result for potential linker errors
         let mut config = Config::new();
-        // config.async_support(true); // Keep sync for now based on bindings
+        config.async_support(true); // Keep sync for now based on bindings -- NOW ENABLED
         let engine = Engine::new(&config)?;
         let mut linker = Linker::new(&engine);
 
