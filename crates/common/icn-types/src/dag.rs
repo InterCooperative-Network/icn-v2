@@ -1,0 +1,248 @@
+use crate::anchor::AnchorRef;
+use crate::cid::Cid;
+use crate::identity::Did;
+use chrono::{DateTime, Utc};
+use ed25519_dalek::Signature;
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+// Include the RocksDB implementation
+#[cfg(feature = "persistence")]
+pub mod rocksdb;
+
+/// Error types related to DAG operations
+#[derive(Error, Debug)]
+pub enum DagError {
+    #[error("Node not found: {0}")]
+    NodeNotFound(Cid),
+    #[error("Invalid signature")]
+    InvalidSignature,
+    #[error("Invalid parent references")]
+    InvalidParentRefs,
+    #[error("Serialization error: {0}")]
+    SerializationError(#[from] serde_json::Error),
+    #[error("CID computation error: {0}")]
+    CidError(String),
+    #[error("Storage error: {0}")]
+    StorageError(String),
+    #[error("Invalid node data: {0}")]
+    InvalidNodeData(String),
+}
+
+/// Metadata associated with a DAG node
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct DagNodeMetadata {
+    /// Timestamp when the node was created
+    pub timestamp: DateTime<Utc>,
+    /// Optional sequence number for the author's chain
+    pub sequence: Option<u64>,
+    /// Optional federation identifier where this node originated
+    pub federation_id: Option<String>,
+    /// Optional label for categorizing the node
+    pub labels: Option<Vec<String>>,
+    /// Any additional metadata as JSON
+    pub extra: Option<serde_json::Value>,
+}
+
+/// Defines the content types that can be stored in a DAG node
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(tag = "type", content = "content")]
+pub enum DagPayload {
+    /// Raw binary data
+    Raw(Vec<u8>),
+    /// JSON data
+    Json(serde_json::Value),
+    /// A reference to another content-addressed object
+    Reference(Cid),
+    /// A TrustBundle reference
+    TrustBundle(Cid),
+    /// An execution receipt reference
+    ExecutionReceipt(Cid),
+}
+
+/// Represents a single node in the Directed Acyclic Graph
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct DagNode {
+    /// The payload/content of this DAG node
+    pub payload: DagPayload,
+    /// References to parent nodes this node builds upon
+    pub parents: Vec<Cid>,
+    /// The DID of the identity that created this node
+    pub author: Did,
+    /// Metadata associated with this node
+    pub metadata: DagNodeMetadata,
+}
+
+/// A signed DAG node ready for inclusion in the graph
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct SignedDagNode {
+    /// The unsigned DAG node
+    pub node: DagNode,
+    /// The author's signature over the canonical serialization of the node
+    pub signature: Signature,
+    /// The computed CID for this node (derived from its contents)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cid: Option<Cid>,
+}
+
+impl SignedDagNode {
+    /// Calculate the CID for this node based on its canonical serialization
+    pub fn calculate_cid(&self) -> Result<Cid, DagError> {
+        // For now, we'll implement a simple approach using JSON serialization
+        // In a production system, we would use a more efficient binary format and IPLD
+        
+        // First, serialize the node without the signature and cid fields
+        let canonical_node = serde_json::to_vec(&self.node)
+            .map_err(DagError::SerializationError)?;
+            
+        // Calculate CID using the canonical serialization
+        Cid::from_bytes(&canonical_node)
+            .map_err(|e| DagError::CidError(e.to_string()))
+    }
+    
+    /// Ensure the CID is computed and stored
+    pub fn ensure_cid(&mut self) -> Result<Cid, DagError> {
+        if self.cid.is_none() {
+            let cid = self.calculate_cid()?;
+            self.cid = Some(cid.clone());
+            Ok(cid)
+        } else {
+            Ok(self.cid.clone().unwrap())
+        }
+    }
+    
+    /// Create an AnchorRef from this node
+    pub fn to_anchor_ref(&mut self) -> Result<AnchorRef, DagError> {
+        let cid = self.ensure_cid()?;
+        let object_type = match &self.node.payload {
+            DagPayload::TrustBundle(_) => Some("TrustBundle".to_string()),
+            DagPayload::ExecutionReceipt(_) => Some("ExecutionReceipt".to_string()),
+            _ => None,
+        };
+        
+        Ok(AnchorRef {
+            cid,
+            object_type,
+            timestamp: self.node.metadata.timestamp,
+        })
+    }
+}
+
+/// Trait defining the interface for DAG storage backends
+pub trait DagStore {
+    /// Add a signed node to the DAG
+    fn add_node(&mut self, node: SignedDagNode) -> Result<Cid, DagError>;
+    
+    /// Retrieve a node by its CID
+    fn get_node(&self, cid: &Cid) -> Result<SignedDagNode, DagError>;
+    
+    /// Get a list of the current tip nodes (nodes with no children)
+    fn get_tips(&self) -> Result<Vec<Cid>, DagError>;
+    
+    /// Get all nodes in a topologically ordered sequence
+    fn get_ordered_nodes(&self) -> Result<Vec<SignedDagNode>, DagError>;
+    
+    /// Get all nodes by a specific author
+    fn get_nodes_by_author(&self, author: &Did) -> Result<Vec<SignedDagNode>, DagError>;
+    
+    /// Get nodes matching a specific payload type
+    fn get_nodes_by_payload_type(&self, payload_type: &str) -> Result<Vec<SignedDagNode>, DagError>;
+    
+    /// Find the path between two nodes (if one exists)
+    fn find_path(&self, from: &Cid, to: &Cid) -> Result<Vec<SignedDagNode>, DagError>;
+    
+    /// Verify all signatures and structural integrity of a DAG branch
+    fn verify_branch(&self, tip: &Cid) -> Result<bool, DagError>;
+}
+
+/// Builder for creating new DAG nodes
+pub struct DagNodeBuilder {
+    payload: Option<DagPayload>,
+    parents: Vec<Cid>,
+    author: Option<Did>,
+    metadata: DagNodeMetadata,
+}
+
+impl DagNodeBuilder {
+    /// Create a new DAG node builder with default values
+    pub fn new() -> Self {
+        Self {
+            payload: None,
+            parents: Vec::new(),
+            author: None,
+            metadata: DagNodeMetadata {
+                timestamp: Utc::now(),
+                sequence: None,
+                federation_id: None,
+                labels: None,
+                extra: None,
+            },
+        }
+    }
+    
+    /// Set the payload for this node
+    pub fn with_payload(mut self, payload: DagPayload) -> Self {
+        self.payload = Some(payload);
+        self
+    }
+    
+    /// Add a parent CID to this node
+    pub fn with_parent(mut self, parent: Cid) -> Self {
+        self.parents.push(parent);
+        self
+    }
+    
+    /// Add multiple parent CIDs to this node
+    pub fn with_parents(mut self, parents: Vec<Cid>) -> Self {
+        self.parents.extend(parents);
+        self
+    }
+    
+    /// Set the author's DID
+    pub fn with_author(mut self, author: Did) -> Self {
+        self.author = Some(author);
+        self
+    }
+    
+    /// Set the sequence number
+    pub fn with_sequence(mut self, sequence: u64) -> Self {
+        self.metadata.sequence = Some(sequence);
+        self
+    }
+    
+    /// Set the federation ID
+    pub fn with_federation_id(mut self, federation_id: String) -> Self {
+        self.metadata.federation_id = Some(federation_id);
+        self
+    }
+    
+    /// Add a label to this node
+    pub fn with_label(mut self, label: String) -> Self {
+        if self.metadata.labels.is_none() {
+            self.metadata.labels = Some(Vec::new());
+        }
+        if let Some(labels) = &mut self.metadata.labels {
+            labels.push(label);
+        }
+        self
+    }
+    
+    /// Set extra metadata
+    pub fn with_extra(mut self, extra: serde_json::Value) -> Self {
+        self.metadata.extra = Some(extra);
+        self
+    }
+    
+    /// Build the DAG node
+    pub fn build(self) -> Result<DagNode, DagError> {
+        let payload = self.payload.ok_or_else(|| DagError::InvalidNodeData("Payload is required".to_string()))?;
+        let author = self.author.ok_or_else(|| DagError::InvalidNodeData("Author is required".to_string()))?;
+        
+        Ok(DagNode {
+            payload,
+            parents: self.parents,
+            author,
+            metadata: self.metadata,
+        })
+    }
+} 

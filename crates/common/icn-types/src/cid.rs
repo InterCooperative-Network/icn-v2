@@ -5,10 +5,43 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::convert::TryFrom;
 use std::ops::Deref;
 use std::fmt;
+use thiserror::Error;
+
+/// Errors that can occur when working with CIDs
+#[derive(Error, Debug)]
+pub enum CidError {
+    #[error("Failed to parse CID from bytes: {0}")]
+    ParseError(String),
+}
 
 /// A wrapper around the `cid::Cid` type to provide Serialize/Deserialize implementations.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Cid(ExternalCid);
+
+impl Cid {
+    /// Create a temporary placeholder CID from bytes
+    /// 
+    /// Note: This is a temporary implementation. In a production system,
+    /// we would use a proper content-addressed hashing scheme.
+    pub fn from_bytes(data: &[u8]) -> Result<Self, CidError> {
+        // Hash the data using SHA-256 via the multihash crate
+        // In a real implementation, we would use IPLD properly
+        use multihash::{Code, MultihashDigest};
+        
+        // Generate a multihash using SHA-256
+        let hash = Code::Sha2_256.digest(data);
+        
+        // Create a CIDv1 with the hash using the RAW codec (0x55)
+        let cid = ExternalCid::new_v1(0x55, hash);
+        
+        Ok(Cid(cid))
+    }
+    
+    /// Get the raw bytes of this CID
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.0.to_bytes()
+    }
+}
 
 // --- Deref to access inner Cid methods --- 
 impl Deref for Cid {

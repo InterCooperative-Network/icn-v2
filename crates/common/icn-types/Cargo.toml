@@ -13,3 +13,12 @@ cid = { version = "0.10", features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 ed25519-dalek = { version = "2.0", features = ["serde"] }
 multibase = "0.9"
+rand = "0.8"
+rocksdb = { version = "0.20", optional = true }
+async-trait = "0.1"
+tokio = { version = "1.27", features = ["full"], optional = true }
+futures = { version = "0.3", optional = true }
+
+[features]
+default = []
+persistence = ["rocksdb", "tokio", "futures"]
