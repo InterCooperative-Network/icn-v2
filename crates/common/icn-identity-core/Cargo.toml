@@ -16,6 +16,8 @@ hex = "0.4"
 num_cpus = "1.16"
 sys-info = "0.9"
 icn-core-types = { path = "../icn-core-types" }
+sha2 = "0.10"
+icn-types = { path = "../icn-types" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "time"] }
