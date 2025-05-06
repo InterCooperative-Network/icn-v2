@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use crate::cid::Cid;
+use crate::Cid;
 use crate::dag::sync::bundle::DAGSyncBundle;
 use crate::dag::sync::network::{FederationPeer, SyncError}; // Use the types defined in network.rs
 use crate::dag::{DagError, DagStore};

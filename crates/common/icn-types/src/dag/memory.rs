@@ -1,6 +1,6 @@
-use crate::cid::Cid;
+use crate::Cid;
 use crate::dag::{DagError, DagStore, SignedDagNode, PublicKeyResolver};
-use crate::identity::Did;
+use crate::Did;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use tokio::sync::RwLock;

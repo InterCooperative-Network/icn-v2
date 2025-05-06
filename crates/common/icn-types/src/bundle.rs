@@ -1,8 +1,8 @@
 use crate::anchor::AnchorRef;
-use crate::cid::{Cid, CidError};
+use crate::{Cid, CidError};
 use crate::dag::{DagError, DagNode, DagNodeBuilder, DagPayload, DagStore, SignedDagNode};
-use crate::identity::Did;
-use crate::quorum::QuorumProof;
+use crate::Did;
+use crate::QuorumProof;
 use ed25519_dalek::{SigningKey, Signer};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

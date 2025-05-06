@@ -1,6 +1,7 @@
 use crate::anchor::AnchorRef;
-use crate::cid::Cid;
-use crate::identity::Did;
+use crate::Cid;
+use crate::Did;
+use crate::QuorumProof;
 use chrono::{DateTime, Utc};
 use ed25519_dalek::Signature;
 use serde::{Deserialize, Serialize};

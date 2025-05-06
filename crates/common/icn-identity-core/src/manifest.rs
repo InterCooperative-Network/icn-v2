@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
-use icn_types::identity::Did;
-use crate::vc::VerifiableCredential;
+use icn_core_types::Did;
 
 /// Architecture type of a node
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -1,7 +1,7 @@
 use ed25519_dalek::{
     Signature, Signer, SigningKey, Verifier, VerifyingKey, PUBLIC_KEY_LENGTH
 };
-use icn_types::identity::Did;
+use icn_core_types::Did;
 use rand::rngs::OsRng;
 use thiserror::Error;
 use multibase::Base;

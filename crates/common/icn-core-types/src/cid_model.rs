@@ -1,4 +1,9 @@
-use cid::Cid as ExternalCid; // This should refer to the external crate
+// extern crate cid; // Removed unnecessary extern crate
+
+use cid::{Cid as ExternalCid, Version}; // Removed Codec from import
+use multihash::Multihash;
+use sha2::{Sha256, Digest};
+
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::convert::TryFrom;
 use std::ops::Deref;
@@ -20,12 +25,21 @@ pub struct Cid(ExternalCid);
 impl Cid {
     /// Create a CID from raw bytes using a default hashing algorithm (SHA-256) and codec (Raw).
     pub fn from_bytes(data: &[u8]) -> Result<Self, CidError> {
-        use cid::multihash::{Code, MultihashDigest}; // from external cid crate
-        use cid::Version; // from external cid crate
-        use cid::Codec;   // from external cid crate - no :: needed now due to module rename
+        // Calculate hash using sha2 crate
+        let mut hasher = Sha256::new();
+        hasher.update(data);
+        let digest = hasher.finalize();
         
-        let hash = Code::Sha2_256.digest(data);
-        let cid = ExternalCid::new(Version::V1, Codec::Raw, hash) // Use imported Codec
+        // Wrap digest in a Multihash object
+        // 0x12 is the multicodec code for sha2-256
+        let mh = Multihash::wrap(0x12, &digest)
+            .map_err(|e| CidError::ParseError(format!("Multihash wrap error: {}", e)))?; 
+            
+        // Use raw u64 code for Codec::Raw (0x55)
+        let raw_codec_code = 0x55u64; 
+        
+        // Note: Cid::new expects MultihashGeneric<64>, check if Multihash::wrap provides compatible type
+        let cid = ExternalCid::new(Version::V1, raw_codec_code, mh) 
             .map_err(|e| CidError::ParseError(e.to_string()))?; 
         Ok(Cid(cid))
     }

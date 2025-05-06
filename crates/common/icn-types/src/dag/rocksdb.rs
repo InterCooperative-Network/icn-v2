@@ -1,8 +1,8 @@
 #![cfg(feature = "persistence")]
 
-use crate::cid::Cid;
+use crate::Cid;
 use crate::dag::{DagError, DagStore, SignedDagNode, PublicKeyResolver};
-use crate::identity::Did;
+use crate::Did;
 use rocksdb::{ColumnFamily, ColumnFamilyDescriptor, Options, DB, WriteBatch};
 use std::collections::{HashSet, HashMap, VecDeque};
 use std::path::Path;

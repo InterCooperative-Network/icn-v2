@@ -1,4 +1,4 @@
-use crate::cid::Cid;
+use crate::Cid;
 use crate::dag::{DagError, DagNode, DagStore};
 use crate::dag::sync::network::{DAGSyncService, FederationPeer, SyncError, VerificationResult};
 use crate::dag::sync::bundle::DAGSyncBundle;

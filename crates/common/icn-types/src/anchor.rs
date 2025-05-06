@@ -1,4 +1,4 @@
-use crate::cid::Cid;
+use crate::Cid;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 

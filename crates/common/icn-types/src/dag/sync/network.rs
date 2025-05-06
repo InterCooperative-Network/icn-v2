@@ -1,9 +1,9 @@
-use crate::cid::Cid;
+use crate::Cid;
 use crate::dag::DagNode;
 use crate::dag::sync::bundle::DAGSyncBundle;
 use crate::dag::sync::transport::DAGSyncTransport;
 use crate::dag::DagStore;
-use crate::identity::Did;
+use crate::Did;
 use async_trait::async_trait;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};

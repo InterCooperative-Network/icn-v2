@@ -9,7 +9,8 @@ thiserror = "1.0"
 ed25519-dalek = { version = "2.0", features = ["serde", "rand_core"] }
 rand = "0.8" # Needed for DidKey::new
 multibase = "0.9"
-cid = { version = "0.10.1", features = ["serde-codec", "std"] } # Updated to 0.10.1
-multihash = { version = "0.18", features = ["serde-codec", "sha2"] } # For wrapped Cid
+cid = { version = "0.11.1", features = ["serde-codec", "std"] } # Updated to 0.11.1
+multihash = { version = "0.19.0", features = ["std"] } # Depend only for struct/wrap, not features
+sha2 = "0.10" # Added sha2 crate
 serde_bytes = "0.11" # For QuorumProof
 serde_json = "1.0" # Added for QuorumProof metadata 
