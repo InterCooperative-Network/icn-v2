@@ -40,4 +40,7 @@ pub enum CliError {
 
     #[error("Generic Error: {0}")]
     Any(#[from] anyhow::Error), // Catch-all for other anyhow errors
-} 
+}
+
+// Define the standard Result type alias
+pub type CliResult<T = ()> = Result<T, CliError>; 

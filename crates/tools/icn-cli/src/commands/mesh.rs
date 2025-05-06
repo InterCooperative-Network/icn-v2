@@ -1,10 +1,10 @@
-use clap::Subcommand;
-use crate::{CliContext, CliResult, CliError};
-use icn_types::{JobManifest, NodeCapability, Bid};
+use clap::{Args, Subcommand};
+use crate::{CliContext, error::{CliResult, CliError}};
+// use icn_types::{JobManifest, NodeCapability, Bid}; // Commented out - types need locating
 use std::path::PathBuf;
 
 /// Commands for interacting with the ICN Mesh
-#[derive(Subcommand, Debug)]
+#[derive(Args, Debug)]
 pub enum MeshCommands {
     /// Submit a job manifest to the mesh
     SubmitJob {

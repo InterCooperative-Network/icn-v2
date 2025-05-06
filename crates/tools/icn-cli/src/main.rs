@@ -7,8 +7,7 @@
 mod error;
 mod context;
 mod commands;
-mod cli;
-
+mod metrics;
 use clap::{Parser, Subcommand};
 use context::CliContext;
 use error::CliError;
@@ -16,7 +15,10 @@ use commands::handle_dag_command; // Import the specific handler
 use commands::handle_mesh_command; // Add handle_mesh_command
 use icn_identity_core::did::DidKey;
 use icn_types::dag::{memory::MemoryDagStore, DagError, DagStore, SignedDagNode};
-use icn_types::{anchor::AnchorRef, Did, ExecutionReceipt, ExecutionResult, TrustBundle};
+use icn_types::{anchor::AnchorRef, Did};
+use icn_types::bundle::TrustBundle;
+use icn_types::receipts::ExecutionReceipt;
+// use icn_types::ExecutionResult; // Needs locating
 use std::path::PathBuf;
 use icn_wallet::keystore::SimpleKeyStore;
 use thiserror::Error;

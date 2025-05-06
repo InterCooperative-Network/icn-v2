@@ -1379,6 +1379,7 @@ dependencies = [
  "hyper",
  "icn-identity-core",
  "icn-types",
+ "icn-wallet",
  "lazy_static",
  "metrics",
  "metrics-exporter-prometheus",

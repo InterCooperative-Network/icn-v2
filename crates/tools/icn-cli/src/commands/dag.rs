@@ -1,9 +1,9 @@
-use clap::Subcommand;
+use clap::{Parser, Subcommand};
 use crate::{CliContext, CliError};
 use std::path::PathBuf;
-use icn_types::cid::Cid;
+use icn_types::Cid;
 use std::str::FromStr;
-use icn_types::dag::PublicKeyResolver;
+use icn_types::dag::{PublicKeyResolver, DagStore, SignedDagNode, DagPayload, DagError};
 use std::sync::Arc;
 
 // Define the DagCommands enum here (or move it from main.rs)

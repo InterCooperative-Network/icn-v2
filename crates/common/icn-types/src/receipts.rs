@@ -1,9 +1,9 @@
-#![cfg(not(feature = "async"))]
+// #![cfg(not(feature = "async"))] // Removed cfg
 
 use crate::anchor::AnchorRef;
-use crate::cid::Cid;
+use crate::Cid;
 use crate::dag::{DagError, DagNode, DagNodeBuilder, DagPayload, DagStore, SignedDagNode};
-use crate::identity::Did;
+use crate::Did;
 // use crate::quorum::QuorumProof; // Comment out unused import for now
 use ed25519_dalek::{SigningKey, Signer};
 use serde::{Deserialize, Serialize};

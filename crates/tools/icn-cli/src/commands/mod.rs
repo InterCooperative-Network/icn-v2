@@ -1,8 +1,8 @@
 pub mod dag;
-pub mod bundle;
-pub mod receipt;
+// pub mod bundle; // File missing
+// pub mod receipt; // File missing
 pub mod mesh;
-pub mod sync_p2p; // Assuming DagSyncCommands maps here
+// pub mod sync_p2p; // File missing // Assuming DagSyncCommands maps here
 
 // Re-export handlers for main.rs
 pub use dag::handle_dag_command;

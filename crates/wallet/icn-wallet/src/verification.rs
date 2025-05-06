@@ -1,12 +1,14 @@
 use anyhow::{Result, anyhow, Context};
 use serde::{Serialize, Deserialize};
-use icn_types::dag::{DagStore, Cid};
-use icn_identity_core::Did;
+use icn_types::{dag::DagStore, Cid, Did};
+use icn_identity_core::did::DidKey;
 use chrono::{DateTime, Utc};
 use std::str::FromStr;
 use hex::FromHex;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde_ipld_dagcbor;
+use std::path::PathBuf;
+use futures;
 
 /// A report on the verification status of a dispatch credential
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -310,15 +312,20 @@ pub fn verify_dispatch_credential(
     }
     
     // Step 2: Check if issuer is in the trust policy
-    let issuer_did = Did::from(credential.issuer.clone());
+    let issuer_did = Did::from_string(&credential.issuer)
+        .map_err(|e| anyhow!("Failed to parse issuer DID: {}", e))?;
     let is_trusted = policy_store.trusted_dids.iter()
         .any(|entry| {
-            let did = Did::from(entry.did.clone());
-            // Make sure it's a trusted scheduler or admin
-            did == issuer_did && 
-            (entry.level == TrustLevel::Full || entry.level == TrustLevel::Admin) &&
-            // Check expiration if present
-            entry.expires.map_or(true, |exp| exp > Utc::now())
+            match Did::from_string(&entry.did) {
+                Ok(did) => {
+                    // Make sure it's a trusted scheduler or admin
+                    did == issuer_did && 
+                    (entry.level == TrustLevel::Full || entry.level == TrustLevel::Admin) &&
+                    // Check expiration if present
+                    entry.expires.map_or(true, |exp| exp > Utc::now())
+                }
+                Err(_) => false, // If DID parsing fails, it's not a match
+            }
         });
     
     report.is_trusted = is_trusted;
@@ -404,12 +411,18 @@ fn verify_credential_signature(credential: &DispatchCredential) -> Result<bool> 
         .context("Failed to parse signature")?;
     
     // Get the public key from the DID
+    let did = Did::from_string(&credential.issuer)
+        .map_err(|e| anyhow!("Failed to parse issuer DID for signature: {}", e))?;
+    let pubkey_bytes = did.public_key_bytes();
+    
     let did = Did::from(credential.issuer.clone());
     let pubkey_bytes = did.public_key_bytes()
         .context("Failed to extract public key from DID")?;
     
-    let verifying_key = VerifyingKey::from_slice(&pubkey_bytes)
-        .context("Failed to create verifying key")?;
+    let pubkey_array: &[u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = pubkey_bytes[..].try_into()
+        .map_err(|_| anyhow!("Invalid public key length"))?;
+    let verifying_key = VerifyingKey::from_bytes(pubkey_array)
+        .map_err(|e| anyhow!("Failed to create verifying key: {}", e))?;
     
     // Verify the signature
     match verifying_key.verify(&canonical_bytes, &signature) {

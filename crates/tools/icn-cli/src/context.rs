@@ -1,10 +1,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use icn_types::dag::{DagStore, memory::MemoryDagStore, rocksdb::RocksDbDagStore, DagError, PublicKeyResolver};
-use icn_types::identity::Did;
+use icn_types::Did;
 use icn_identity_core::did::DidKey;
 use crate::error::CliError;
 use ed25519_dalek::VerifyingKey;
+use hex;
+use serde::Deserialize;
 
 // Simple resolver using only the loaded key (if applicable)
 #[derive(Clone)] // Clone needed for Arc
@@ -30,13 +32,18 @@ impl PublicKeyResolver for SimpleKeyResolver {
     }
 }
 
+// Define a struct for deserializing the key file
+#[derive(Deserialize)]
+struct KeyFileJson {
+    secret_key_hex: String,
+}
 
 pub struct CliContext {
     config_dir: PathBuf,
     default_key_path: PathBuf,
     dag_store: Option<Arc<dyn DagStore + Send + Sync>>,
-    loaded_key: Option<DidKey>,
-    key_resolver: Arc<SimpleKeyResolver>, // Use concrete type inside Arc
+    loaded_key: Option<Arc<DidKey>>,
+    key_resolver: Arc<SimpleKeyResolver>,
     verbose: bool,
 }
 
@@ -81,28 +88,37 @@ impl CliContext {
         Ok(self.dag_store.as_ref().unwrap().clone())
     }
 
-    pub fn get_key(&mut self, key_path_opt: Option<&PathBuf>) -> Result<DidKey, CliError> {
+    pub fn get_key(&mut self, key_path_opt: Option<&PathBuf>) -> Result<Arc<DidKey>, CliError> {
          if self.loaded_key.is_none() {
             let key_path = key_path_opt.unwrap_or(&self.default_key_path);
             if self.verbose { println!("Loading key from: {}", key_path.display()); }
              
-            let key_json = std::fs::read_to_string(key_path)
-                .map_err(|e| CliError::Io(e))?; // Map IO error
-                
-            let key: DidKey = serde_json::from_str(&key_json)
-                .map_err(|e| CliError::Json(e))?; // Map JSON error
+            // Read and parse JSON
+            let key_json_str = std::fs::read_to_string(key_path)
+                .map_err(|e| CliError::Io(e))?; 
+            let key_file: KeyFileJson = serde_json::from_str(&key_json_str)
+                .map_err(|e| CliError::Json(e))?; 
+            
+            // Decode hex secret key
+            let secret_bytes = hex::decode(&key_file.secret_key_hex)
+                .map_err(|e| CliError::Config(format!("Invalid hex in key file: {}", e)))?;
+            let secret_array: &[u8; 32] = secret_bytes.as_slice().try_into()
+                 .map_err(|_| CliError::Config("Invalid secret key length, expected 32 bytes".to_string()))?;
+            
+            // Construct keys
+            let signing_key = SigningKey::from_bytes(secret_array);
+            let verifying_key = signing_key.verifying_key(); // Get verifying key before moving signing_key
+            let did_key = DidKey::from_signing_key(signing_key); // Use new constructor
              
-            self.loaded_key = Some(key.clone());
+            let arc_did_key = Arc::new(did_key);
+            self.loaded_key = Some(arc_did_key.clone());
 
-            // Update the resolver now that the key is loaded
-            // Note: This assumes the key uses Ed25519 - might need checks/generalization
-             let public_bytes = key.public_key_bytes();
-             let verifying_key = VerifyingKey::from_bytes(&public_bytes)
-                .map_err(|e| CliError::DidKey(format!("Failed to create verifying key from loaded key: {}", e)))?;
+            // Update the resolver 
              self.key_resolver = Arc::new(SimpleKeyResolver { key: Some(verifying_key) });
 
-             Ok(key)
+             Ok(arc_did_key)
          } else {
+            // Return the cached Arc
             Ok(self.loaded_key.as_ref().unwrap().clone())
          }
     }

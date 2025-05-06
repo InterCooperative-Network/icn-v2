@@ -17,7 +17,7 @@ pub use anchor::AnchorRef;
 pub use dag::{DagError, DagNode, DagStore, SignedDagNode, PublicKeyResolver};
 // pub use identity::{Did, DidKey, DidKeyError}; // Removed: Use re-export from icn_core_types
 // pub use quorum::QuorumProof; // Removed: Use re-export from icn_core_types
-// pub use receipts::ExecutionReceipt; // Commented out due to cfg issues
+pub use receipts::ExecutionReceipt; // Uncommented
 
 // Re-export sync types
 pub use dag::sync::{DAGSyncBundle, DAGSyncService, FederationPeer, SyncError, VerificationResult};
