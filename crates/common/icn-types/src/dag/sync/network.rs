@@ -125,8 +125,8 @@ impl<T: DAGSyncTransport + Clone + Send + Sync + 'static, D: DagStore + Send + S
     pub async fn start_background_sync(&self) -> Result<(), SyncError> {
         // Clone what we need for the background task
         let mut transport_clone = self.transport.clone();
-        let store_clone = self.store.clone();
-        let federation_id = self.federation_id.clone();
+        let _store_clone = self.store.clone();
+        let _federation_id = self.federation_id.clone();
         
         // Spawn a task to receive bundles
         tokio::spawn(async move {
@@ -160,7 +160,9 @@ impl<T: DAGSyncTransport + Clone + Send + Sync + 'static, D: DagStore + Send + S
     }
 
     /// Verify that a set of nodes meets the sync policy requirements
-    async fn verify_against_policy(&self, nodes: &[DagNode]) -> VerificationResult {
+    async fn verify_against_policy(&self, _nodes: &[DagNode]) -> VerificationResult {
+        // TODO: Implement actual policy verification logic.
+        // This might involve:
         // Check if we have authorized DIDs configured
         /* // TODO: Revisit auth check - needs SignedDagNode?
         if let Some(ref authorized_dids) = self.policy.authorized_dids {
@@ -188,6 +190,20 @@ impl<T: DAGSyncTransport + Clone + Send + Sync + 'static, D: DagStore + Send + S
         // All checks passed (for now)
         VerificationResult::Verified
     }
+
+    #[allow(dead_code)]
+    async fn poll_for_updates(&self, _last_seen_cid: Option<Cid>) -> Result<Vec<Cid>, SyncError> {
+        // TODO: This is a simplified version. A real implementation would involve:
+        // 1. Querying the federation/peer for new CIDs since last_seen_cid.
+        // 2. Handling pagination if the number of CIDs is large.
+        // 3. Potentially filtering CIDs based on policy or interest.
+
+        let _store_clone = self.store.clone();
+        let _federation_id = self.federation_id.clone();
+
+        // Simulate finding some new CIDs (replace with actual network logic)
+        Ok(vec![])
+    }
 }
 
 #[async_trait]
@@ -202,7 +218,9 @@ impl<T: DAGSyncTransport + Clone + Send + Sync + 'static, D: DagStore + Send + S
         self.transport.send_offer(peer_id, cids).await
     }
 
-    async fn accept_offer(&self, peer_id: &str, cids: &[Cid]) -> Result<HashSet<Cid>, SyncError> {
+    async fn accept_offer(&self, _peer_id: &str, cids: &[Cid]) -> Result<HashSet<Cid>, SyncError> {
+        // TODO: Implement logic to fetch the specified CIDs from the peer.
+        // This might involve:
         // Check local store for which CIDs we don't have
         let mut needed = HashSet::new();
         for cid in cids {

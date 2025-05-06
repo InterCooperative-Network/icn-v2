@@ -158,8 +158,9 @@ impl ExecutionReceipt {
     }
     
     /// List all ExecutionReceipts in the DAG
-    pub async fn list_all(dag_store: &impl DagStore) -> Result<Vec<(Cid, ExecutionReceipt)>, ReceiptError> {
-        // TODO: Implement correctly by fetching referenced receipts
+    pub fn list_all(_dag_store: &impl DagStore) -> Result<Vec<(Cid, ExecutionReceipt)>, ReceiptError> {
+        // Placeholder: Needs actual implementation to iterate through stored receipts
+        // For now, returns an empty list or an error if not implemented.
         Ok(Vec::new()) // Return empty vec for now
     }
     

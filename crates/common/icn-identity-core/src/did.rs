@@ -36,15 +36,15 @@ impl DidKey {
 
     /// Generate a new DidKey using OS randomness.
     pub fn new() -> Self {
-        let mut csprng = OsRng;
-        let signing_key = SigningKey::generate(&mut csprng);
+        let _csprng = OsRng; // Corrected line
+        let signing_key: SigningKey = SigningKey::generate(&mut OsRng); // Corrected line
         let verifying_key = signing_key.verifying_key();
         let did = Did::new(&verifying_key);
-        DidKey { signing_key, verifying_key: verifying_key.clone(), did }
+        Self { signing_key, verifying_key, did }
     }
 
     pub fn from_signing_key(signing_key: SigningKey) -> Self {
-        let mut csprng = OsRng;
+        let _csprng = OsRng; // Also correct this one for consistency, though it wasn't warned
         let verifying_key = signing_key.verifying_key();
         let did = Did::new(&verifying_key);
         DidKey { signing_key, verifying_key: verifying_key.clone(), did }
@@ -140,7 +140,7 @@ mod tests {
     fn test_invalid_did_parsing() {
         assert!(DidKey::verifying_key_from_did("did:example:123").is_err());
         assert!(DidKey::verifying_key_from_did("did:key:abc").is_err()); // Invalid multibase prefix
-        let invalid_encoded = "z" .to_string() + &multibase::encode(multibase::Base::Base58Btc, &[0x01, 0x02]);
+        let invalid_encoded = "z".to_string() + &multibase::encode(multibase::Base::Base58Btc, &[0x01, 0x02]);
         assert!(DidKey::verifying_key_from_did(&format!("did:key:{}", invalid_encoded)).is_err());
     }
 } 

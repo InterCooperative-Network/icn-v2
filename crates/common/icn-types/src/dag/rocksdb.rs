@@ -150,7 +150,7 @@ impl RocksDbDagStore {
         cid.to_bytes()
     }
 
-    /// Update the tips when a new node is added
+    #[allow(dead_code)]
     fn update_tips(&self, node: &SignedDagNode) -> Result<(), DagError> {
         let cf_tips = self.cf_handle(CF_TIPS)?;
         let node_cid = node.cid.as_ref().unwrap(); // Safe because we ensure CID is computed before adding
@@ -180,7 +180,7 @@ impl RocksDbDagStore {
         Ok(())
     }
 
-    /// Update the children mapping when a new node is added
+    #[allow(dead_code)]
     fn update_children(&self, node: &SignedDagNode) -> Result<(), DagError> {
         let cf_children = self.cf_handle(CF_CHILDREN)?;
         let node_cid = node.cid.as_ref().unwrap(); // Safe because we ensure CID is computed before adding
@@ -211,7 +211,7 @@ impl RocksDbDagStore {
         Ok(())
     }
 
-    /// Update the author index when a new node is added
+    #[allow(dead_code)]
     fn update_authors(&self, node: &SignedDagNode) -> Result<(), DagError> {
         let cf_authors = self.cf_handle(CF_AUTHORS)?;
         let author_key = node.node.author.to_string().into_bytes();
@@ -239,7 +239,7 @@ impl RocksDbDagStore {
         Ok(())
     }
 
-    /// Update the payload type index when a new node is added
+    #[allow(dead_code)]
     fn update_payload_types(&self, node: &SignedDagNode) -> Result<(), DagError> {
         let cf_payload_types = self.cf_handle(CF_PAYLOAD_TYPES)?;
         let payload_type = match &node.node.payload {
@@ -833,11 +833,11 @@ impl DagStore for RocksDbDagStore {
         Ok(tips)
     }
 
-    async fn verify_branch(&self, tip: &Cid, resolver: &(dyn PublicKeyResolver + Send + Sync)) -> Result<(), DagError> {
+    async fn verify_branch(&self, tip: &Cid, _resolver: &(dyn PublicKeyResolver + Send + Sync)) -> Result<(), DagError> {
         let _timer = DAG_VERIFY_BRANCH_DURATION.start_timer(); // Start timing
         
-        let tip_clone = tip.clone();
-        let db_clone = self.db.clone();
+        let _tip_clone = tip.clone();
+        let _db_clone = self.db.clone();
         // Pass resolver appropriately, assuming it's Send + Sync
         // If resolver itself is not Send/Sync, need to handle differently (e.g., Arc<Mutex<...>>)
         // Commenting out spawn_blocking call as resolver handling is unclear

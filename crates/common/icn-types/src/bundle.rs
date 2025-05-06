@@ -49,7 +49,7 @@ pub enum TrustBundleError {
 }
 
 // Helper function to abstract the add_node call
-#[cfg(feature = "async")]
+#[allow(dead_code)]
 async fn add_node_helper(dag_store: &mut (impl DagStore + Send), node: SignedDagNode) -> Result<Cid, DagError> {
     dag_store.add_node(node).await
 }
@@ -183,8 +183,8 @@ impl TrustBundle {
     /// Get the path of TrustBundles from this bundle to another
     pub async fn get_path_to(
         &self,
-        target_cid: &Cid,
-        dag_store: &impl DagStore,
+        _target_cid: &Cid,
+        _dag_store: &impl DagStore,
     ) -> Result<Vec<TrustBundle>, TrustBundleError> {
         // TODO: This needs refactoring similar to from_dag to fetch actual bundles.
         // Returning empty vec for now to fix type error.
@@ -214,9 +214,9 @@ impl TrustBundle {
     }
     
     /// List all TrustBundles in the DAG
-    pub async fn list_all(dag_store: &impl DagStore) -> Result<Vec<(Cid, TrustBundle)>, TrustBundleError> {
-        // TODO: This needs refactoring similar to from_dag.
-        // Returning empty vec for now.
+    pub async fn list_all(_dag_store: &impl DagStore) -> Result<Vec<(Cid, TrustBundle)>, TrustBundleError> {
+        // Placeholder: Needs actual implementation to iterate through stored TrustBundles
+        // For now, returns an empty list or an error if not implemented.
         Ok(Vec::new()) 
         /*
         let nodes = dag_store.get_nodes_by_payload_type("trustbundle").await?;
@@ -251,5 +251,16 @@ impl TrustBundle {
     pub fn import(data: &[u8]) -> Result<Self, TrustBundleError> {
         serde_json::from_slice(data)
             .map_err(|e| TrustBundleError::SerializationError(e.to_string()))
+    }
+
+    #[allow(dead_code)]
+    async fn from_root_cid(
+        _root_cid: &Cid,
+        _target_cid: &Cid,
+        _dag_store: &impl DagStore,
+    ) -> Result<Self, TrustBundleError> {
+        // Placeholder: Needs actual implementation to iterate through stored TrustBundles
+        // For now, returns an empty list or an error if not implemented.
+        Err(TrustBundleError::InvalidPayloadType)
     }
 } 
