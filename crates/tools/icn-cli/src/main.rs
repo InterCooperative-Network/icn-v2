@@ -638,6 +638,42 @@ enum MeshCommands {
         #[arg(long)]
         export_results: Option<PathBuf>,
     },
+    
+    /// Manage trusted DID policies for federation governance
+    #[command(name = "policy")]
+    Policy {
+        /// Action to perform (anchor, show, update, verify)
+        #[arg(long)]
+        action: String,
+        
+        /// Path to trusted DIDs policy file (TOML)
+        #[arg(long)]
+        file: Option<PathBuf>,
+        
+        /// Path to key file for signing
+        #[arg(long)]
+        key: PathBuf,
+        
+        /// Path to DAG storage
+        #[arg(long)]
+        dag_dir: PathBuf,
+        
+        /// Federation ID
+        #[arg(long)]
+        federation: String,
+        
+        /// CID of the previous policy (for updates)
+        #[arg(long)]
+        prev_policy_cid: Option<String>,
+        
+        /// Show policy history/lineage
+        #[arg(long)]
+        history: bool,
+        
+        /// Export policy to file
+        #[arg(long)]
+        export: Option<PathBuf>,
+    },
 }
 
 /// Parse a key=value pair
@@ -3359,6 +3395,442 @@ async fn handle_mesh_command(cmd: &MeshCommands) -> Result<()> {
                 },
                 _ => {
                     return Err(anyhow::anyhow!("Unknown audit type: {}. Expected 'dispatch', 'manifest', or 'requirements'", audit_type));
+                }
+            }
+            
+            Ok(())
+        },
+        MeshCommands::Policy { action, file, key, dag_dir, federation, prev_policy_cid, history, export } => {
+            // Create DAG store
+            let store = Arc::new(icn_types::dag::rocksdb::RocksDbDagStore::new(dag_dir)?);
+            
+            // Load the key file
+            let key_data = fs::read_to_string(key)
+                .context("Failed to read key file")?;
+            let key_json: Value = serde_json::from_str(&key_data)
+                .context("Failed to parse key file as JSON")?;
+            let did_str = key_json["did"].as_str()
+                .context("Key file missing 'did' field")?;
+            
+            // In a real implementation, we would load the private key from the file
+            // For demo purposes, we'll create a DidKey to simulate signing
+            let did_key = DidKey::new();
+            let did = Did::from(did_str.to_string());
+            
+            match action.as_str() {
+                "anchor" => {
+                    // Both file and key are required for anchoring
+                    if file.is_none() {
+                        return Err(anyhow::anyhow!("--file parameter is required for anchor action"));
+                    }
+                    
+                    // Load the policy file
+                    let policy_path = file.unwrap();
+                    let factory = planetary_mesh::trusted_did_policy::TrustPolicyFactory::new();
+                    let policy = factory.from_file(policy_path)?;
+                    
+                    println!("Anchoring trust policy for federation: {}", federation);
+                    
+                    // Publish to DAG
+                    let cid = planetary_mesh::trusted_did_policy::publish_trust_policy_to_dag(
+                        &policy,
+                        &did_str,
+                        &did_key,
+                        &store,
+                        prev_policy_cid.as_deref(),
+                    ).await?;
+                    
+                    println!("Trust policy anchored to DAG with CID: {}", cid);
+                    
+                    // Show policy summary
+                    let trusted_count = policy.to_config().trusted_dids.len();
+                    println!("  Federation: {}", federation);
+                    println!("  Trusted DIDs: {}", trusted_count);
+                    if let Some(prev_cid) = &prev_policy_cid {
+                        println!("  Previous policy: {}", prev_cid);
+                    }
+                    println!("  Issuer: {}", did_str);
+                    
+                    // Export if requested
+                    if let Some(export_path) = export {
+                        // Export to TOML
+                        policy.save_to_file(&export_path)?;
+                        println!("Policy exported to: {}", export_path.display());
+                    }
+                },
+                "show" => {
+                    // If a CID is specified, show that policy
+                    if let Some(policy_cid) = &prev_policy_cid {
+                        // Parse CID
+                        let cid_obj = parse_cid(policy_cid)?;
+                        
+                        // Verify the policy lineage
+                        println!("Verifying policy lineage...");
+                        let valid = planetary_mesh::trusted_did_policy::TrustedDidPolicy::verify_policy_lineage(
+                            &store,
+                            &cid_obj,
+                        ).await?;
+                        
+                        if !valid {
+                            println!("⚠️ Policy lineage verification FAILED");
+                        }
+                        
+                        // Load the policy
+                        let policy = match planetary_mesh::trusted_did_policy::TrustedDidPolicy::from_dag(
+                            &store,
+                            &cid_obj,
+                        ).await {
+                            Ok(p) => p,
+                            Err(e) => {
+                                return Err(anyhow::anyhow!("Failed to load policy from DAG: {}", e));
+                            }
+                        };
+                        
+                        // Get the credential from the DAG
+                        let node = store.get_node(&cid_obj).await?;
+                        
+                        if let icn_types::dag::DagPayload::Json(payload) = &node.node.payload {
+                            if payload.get("type").and_then(|t| t.as_str()) == Some("TrustPolicyRecord") {
+                                if let Some(credential_value) = payload.get("policy") {
+                                    // Parse the credential
+                                    let credential: planetary_mesh::trusted_did_policy::TrustPolicyCredential = 
+                                        serde_json::from_value(credential_value.clone())
+                                        .context("Failed to parse policy credential")?;
+                                    
+                                    // Display policy information
+                                    println!("\nTrust Policy (CID: {})", policy_cid);
+                                    println!("  Valid: {}", if valid { "✅ Yes" } else { "❌ No" });
+                                    println!("  Federation: {}", policy.federation_id);
+                                    println!("  Issuer: {}", credential.issuer);
+                                    println!("  Issuance date: {}", credential.issuanceDate);
+                                    
+                                    if let Some(prev) = &credential.credentialSubject.previousPolicyId {
+                                        println!("  Previous policy: {}", prev);
+                                    }
+                                    
+                                    if let Some(exp) = &credential.credentialSubject.expirationDate {
+                                        println!("  Expires: {}", exp);
+                                        
+                                        if *exp < chrono::Utc::now() {
+                                            println!("  Status: ⚠️ EXPIRED");
+                                        }
+                                    }
+                                    
+                                    // Show trusted DIDs
+                                    let config = policy.to_config();
+                                    
+                                    // Group by trust level
+                                    let mut full_trust = Vec::new();
+                                    let mut manifest_providers = Vec::new();
+                                    let mut requestors = Vec::new();
+                                    let mut workers = Vec::new();
+                                    let mut admins = Vec::new();
+                                    
+                                    for entry in &config.trusted_dids {
+                                        match entry.level {
+                                            planetary_mesh::trusted_did_policy::TrustLevel::Full => {
+                                                full_trust.push(entry);
+                                            },
+                                            planetary_mesh::trusted_did_policy::TrustLevel::ManifestProvider => {
+                                                manifest_providers.push(entry);
+                                            },
+                                            planetary_mesh::trusted_did_policy::TrustLevel::Requestor => {
+                                                requestors.push(entry);
+                                            },
+                                            planetary_mesh::trusted_did_policy::TrustLevel::Worker => {
+                                                workers.push(entry);
+                                            },
+                                            planetary_mesh::trusted_did_policy::TrustLevel::Admin => {
+                                                admins.push(entry);
+                                            },
+                                        }
+                                    }
+                                    
+                                    println!("\nTrusted DIDs ({}):", config.trusted_dids.len());
+                                    
+                                    if !full_trust.is_empty() {
+                                        println!("\n  Full Trust ({}):", full_trust.len());
+                                        for (i, entry) in full_trust.iter().enumerate() {
+                                            println!("    {}. {}", i + 1, entry.did);
+                                            if let Some(notes) = &entry.notes {
+                                                println!("       Notes: {}", notes);
+                                            }
+                                            if let Some(expires) = &entry.expires {
+                                                println!("       Expires: {}", expires);
+                                            }
+                                        }
+                                    }
+                                    
+                                    if !manifest_providers.is_empty() {
+                                        println!("\n  Manifest Providers ({}):", manifest_providers.len());
+                                        for (i, entry) in manifest_providers.iter().enumerate() {
+                                            println!("    {}. {}", i + 1, entry.did);
+                                            if let Some(notes) = &entry.notes {
+                                                println!("       Notes: {}", notes);
+                                            }
+                                            if let Some(expires) = &entry.expires {
+                                                println!("       Expires: {}", expires);
+                                            }
+                                        }
+                                    }
+                                    
+                                    if !requestors.is_empty() {
+                                        println!("\n  Requestors ({}):", requestors.len());
+                                        for (i, entry) in requestors.iter().enumerate() {
+                                            println!("    {}. {}", i + 1, entry.did);
+                                            if let Some(notes) = &entry.notes {
+                                                println!("       Notes: {}", notes);
+                                            }
+                                            if let Some(expires) = &entry.expires {
+                                                println!("       Expires: {}", expires);
+                                            }
+                                        }
+                                    }
+                                    
+                                    if !workers.is_empty() {
+                                        println!("\n  Workers ({}):", workers.len());
+                                        for (i, entry) in workers.iter().enumerate() {
+                                            println!("    {}. {}", i + 1, entry.did);
+                                            if let Some(notes) = &entry.notes {
+                                                println!("       Notes: {}", notes);
+                                            }
+                                            if let Some(expires) = &entry.expires {
+                                                println!("       Expires: {}", expires);
+                                            }
+                                        }
+                                    }
+                                    
+                                    if !admins.is_empty() {
+                                        println!("\n  Admins ({}):", admins.len());
+                                        for (i, entry) in admins.iter().enumerate() {
+                                            println!("    {}. {}", i + 1, entry.did);
+                                            if let Some(notes) = &entry.notes {
+                                                println!("       Notes: {}", notes);
+                                            }
+                                            if let Some(expires) = &entry.expires {
+                                                println!("       Expires: {}", expires);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Show lineage if requested
+                            if history {
+                                println!("\nPolicy lineage:");
+                                
+                                // Traverse the lineage
+                                let mut current_cid = cid_obj.clone();
+                                let mut depth = 0;
+                                
+                                loop {
+                                    let node = match store.get_node(&current_cid).await {
+                                        Ok(n) => n,
+                                        Err(_) => break,
+                                    };
+                                    
+                                    if let icn_types::dag::DagPayload::Json(payload) = &node.node.payload {
+                                        if payload.get("type").and_then(|t| t.as_str()) == Some("TrustPolicyRecord") {
+                                            if let Some(credential_value) = payload.get("policy") {
+                                                if let Ok(credential) = serde_json::from_value::<planetary_mesh::trusted_did_policy::TrustPolicyCredential>(credential_value.clone()) {
+                                                    println!("  {}. CID: {} ({})", depth, current_cid, credential.issuanceDate);
+                                                    println!("     Issuer: {}", credential.issuer);
+                                                    
+                                                    if let Some(prev_cid) = &credential.credentialSubject.previousPolicyId {
+                                                        // Update to the previous CID
+                                                        if let Ok(prev) = icn_types::cid::Cid::try_from(prev_cid.as_str()) {
+                                                            current_cid = prev;
+                                                            depth += 1;
+                                                            continue;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    
+                                    // If we get here, we've reached the end of the lineage
+                                    break;
+                                }
+                            }
+                        }
+                    } else {
+                        // List all policies for this federation
+                        println!("Showing all trust policies for federation: {}", federation);
+                        
+                        // Get all nodes
+                        let nodes = store.get_ordered_nodes().await?;
+                        
+                        // Filter for policies in this federation
+                        let policies: Vec<_> = nodes.iter()
+                            .filter(|node| node.node.federation_id == federation)
+                            .filter(|node| {
+                                if let icn_types::dag::DagPayload::Json(payload) = &node.node.payload {
+                                    payload.get("type").and_then(|t| t.as_str()) == Some("TrustPolicyRecord")
+                                } else {
+                                    false
+                                }
+                            })
+                            .collect();
+                        
+                        if policies.is_empty() {
+                            println!("No trust policies found for federation: {}", federation);
+                        } else {
+                            println!("Found {} policies:", policies.len());
+                            
+                            for (i, node) in policies.iter().enumerate() {
+                                let cid = node.cid.as_ref().unwrap();
+                                println!("{}. CID: {}", i + 1, cid);
+                                println!("   Author: {}", node.node.author);
+                                println!("   Timestamp: {}", node.node.metadata.timestamp);
+                                
+                                // Extract basic info
+                                if let icn_types::dag::DagPayload::Json(payload) = &node.node.payload {
+                                    if let Some(credential) = payload.get("policy") {
+                                        if let Ok(cred) = serde_json::from_value::<planetary_mesh::trusted_did_policy::TrustPolicyCredential>(credential.clone()) {
+                                            println!("   Issuer: {}", cred.issuer);
+                                            
+                                            if let Some(prev) = &cred.credentialSubject.previousPolicyId {
+                                                println!("   Previous policy: {}", prev);
+                                            }
+                                            
+                                            // Count DIDs by trust level
+                                            let mut full_count = 0;
+                                            let mut manifest_count = 0;
+                                            let mut requestor_count = 0;
+                                            let mut worker_count = 0;
+                                            let mut admin_count = 0;
+                                            
+                                            for entry in &cred.credentialSubject.trustedEntities {
+                                                match entry.level {
+                                                    planetary_mesh::trusted_did_policy::TrustLevel::Full => {
+                                                        full_count += 1;
+                                                    },
+                                                    planetary_mesh::trusted_did_policy::TrustLevel::ManifestProvider => {
+                                                        manifest_count += 1;
+                                                    },
+                                                    planetary_mesh::trusted_did_policy::TrustLevel::Requestor => {
+                                                        requestor_count += 1;
+                                                    },
+                                                    planetary_mesh::trusted_did_policy::TrustLevel::Worker => {
+                                                        worker_count += 1;
+                                                    },
+                                                    planetary_mesh::trusted_did_policy::TrustLevel::Admin => {
+                                                        admin_count += 1;
+                                                    },
+                                                }
+                                            }
+                                            
+                                            println!("   Trusted DIDs: {} total", cred.credentialSubject.trustedEntities.len());
+                                            println!("     Full: {}, Manifest: {}, Requestor: {}, Worker: {}, Admin: {}", 
+                                                full_count, manifest_count, requestor_count, worker_count, admin_count);
+                                        }
+                                    }
+                                }
+                                
+                                // Verify the lineage
+                                let valid = planetary_mesh::trusted_did_policy::TrustedDidPolicy::verify_policy_lineage(
+                                    &store,
+                                    cid,
+                                ).await.unwrap_or(false);
+                                
+                                println!("   Valid: {}", if valid { "✅ Yes" } else { "❌ No" });
+                                println!("");
+                            }
+                            
+                            // Find the latest valid policy
+                            if !policies.is_empty() {
+                                let latest_attempts: Vec<_> = policies.iter()
+                                    .filter_map(|node| {
+                                        if let Some(cid) = &node.cid {
+                                            Some(cid.clone())
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect();
+                                
+                                if !latest_attempts.is_empty() {
+                                    for cid in latest_attempts {
+                                        match planetary_mesh::trusted_did_policy::TrustedDidPolicy::find_latest_valid_policy(
+                                            &store,
+                                            &cid,
+                                        ).await {
+                                            Ok(Some((latest_cid, _))) => {
+                                                println!("\nLatest valid policy CID: {}", latest_cid);
+                                                println!("Use `icn mesh policy --action show --prev-policy-cid {}` to view", latest_cid);
+                                                break;
+                                            },
+                                            _ => continue,
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "verify" => {
+                    if let Some(policy_cid) = &prev_policy_cid {
+                        // Parse CID
+                        let cid_obj = parse_cid(policy_cid)?;
+                        
+                        // Verify the policy lineage
+                        match planetary_mesh::trusted_did_policy::TrustedDidPolicy::verify_policy_lineage(
+                            &store,
+                            &cid_obj,
+                        ).await {
+                            Ok(true) => {
+                                println!("✅ Policy verification SUCCESSFUL");
+                                println!("Policy CID: {}", policy_cid);
+                                
+                                // Find the latest valid policy
+                                match planetary_mesh::trusted_did_policy::TrustedDidPolicy::find_latest_valid_policy(
+                                    &store,
+                                    &cid_obj,
+                                ).await {
+                                    Ok(Some((latest_cid, _))) => {
+                                        if latest_cid != cid_obj {
+                                            println!("\nℹ️ A newer valid policy exists: {}", latest_cid);
+                                        } else {
+                                            println!("\nℹ️ This is the latest valid policy");
+                                        }
+                                    },
+                                    _ => {},
+                                }
+                            },
+                            Ok(false) => {
+                                println!("❌ Policy verification FAILED");
+                                println!("Policy CID: {}", policy_cid);
+                                println!("\nPossible reasons:");
+                                println!("  - Invalid signature");
+                                println!("  - Expired policy");
+                                println!("  - Broken lineage");
+                                println!("  - Unauthorized issuer");
+                            },
+                            Err(e) => {
+                                println!("❌ Policy verification ERROR: {}", e);
+                            }
+                        }
+                    } else if file.is_some() {
+                        // Verify a policy file
+                        let policy_path = file.unwrap();
+                        let factory = planetary_mesh::trusted_did_policy::TrustPolicyFactory::new();
+                        match factory.from_file(policy_path) {
+                            Ok(policy) => {
+                                println!("✅ Policy file is valid");
+                                println!("Federation: {}", policy.federation_id);
+                                println!("Trusted DIDs: {}", policy.to_config().trusted_dids.len());
+                            },
+                            Err(e) => {
+                                println!("❌ Policy file is invalid: {}", e);
+                            }
+                        }
+                    } else {
+                        return Err(anyhow::anyhow!("Either --prev-policy-cid or --file is required for verify action"));
+                    }
+                },
+                _ => {
+                    return Err(anyhow::anyhow!("Unknown action: {}. Allowed actions: anchor, show, verify", action));
                 }
             }
             

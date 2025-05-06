@@ -12,6 +12,7 @@ pub mod scheduler;
 pub mod manifest_verifier;
 pub mod dispatch_credential;
 pub mod trusted_did_policy;
+pub mod revocation_notice;
 
 // Re-export common types
 pub use node::MeshNode;
