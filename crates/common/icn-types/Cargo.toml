@@ -11,7 +11,7 @@ thiserror = "1.0"
 base64 = { version = "0.22", optional = true }
 multihash = { version = "0.18", features = ["serde-codec", "sha2", "sha3", "blake2b", "blake3"] }
 cid = { version = "0.10", features = ["serde-codec"] }
-chrono = { version = "0.4", features = ["serde"], optional = true }
+chrono = { version = "0.4", features = ["serde"] }
 ed25519-dalek = { version = "2.0", features = ["serde"], optional = true }
 rand = { version = "0.8", optional = true }
 multibase = "0.9"
@@ -45,6 +45,6 @@ default = ["identity", "dag-cbor", "async", "persistence", "metrics"]
 dag-cbor = ["dep:serde_ipld_dagcbor", "cid/serde-codec", "multihash/serde-codec"]
 async = ["dep:async-trait", "dep:tokio", "dep:tracing", "dep:futures"]
 persistence = ["dep:rocksdb", "dep:lazy_static", "async"] # Persistence implies async
-identity = ["dep:ed25519-dalek", "dep:rand", "dep:base64", "dep:chrono"]
+identity = ["dep:ed25519-dalek", "dep:rand", "dep:base64"]
 metrics = ["dep:prometheus", "dep:lazy_static"]
 networking = ["dep:libp2p", "dep:libp2p-identity", "dep:libp2p-swarm", "dep:tokio", "dep:futures", "dep:async-trait"]

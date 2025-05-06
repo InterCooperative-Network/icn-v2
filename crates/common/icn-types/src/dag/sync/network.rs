@@ -9,11 +9,14 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use thiserror::Error;
 use serde::{Deserialize, Serialize};
+use chrono::{DateTime, Utc};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FederationPeer {
-    pub peer_id: String, 
-    pub address: Option<String>, 
+    pub peer_id: String,
+    pub addresses: Vec<String>,
+    pub last_seen: Option<DateTime<Utc>>,
+    pub metadata: HashMap<String, String>,
 }
 
 #[derive(Error, Debug, Clone, Serialize, Deserialize)]

@@ -2,10 +2,12 @@ use crate::cid::Cid;
 use crate::dag::{DagError, DagStore, SignedDagNode, PublicKeyResolver};
 use crate::identity::Did;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use async_trait::async_trait;
 
 /// An in-memory implementation of the DagStore trait for testing
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct MemoryDagStore {
     /// Map of CID -> SignedDagNode
     nodes: Arc<RwLock<HashMap<String, SignedDagNode>>>,
@@ -48,293 +50,37 @@ impl MemoryDagStore {
     }
 }
 
-// Synchronous implementation
-#[cfg(not(feature = "async"))]
-impl DagStore for MemoryDagStore {
-    fn add_node(&mut self, mut node: SignedDagNode) -> Result<Cid, DagError> {
-        // Ensure the node has a CID
-        let cid = node.ensure_cid()?;
-        let cid_key = Self::cid_to_key(&cid);
-        
-        // Acquire write locks
-        let mut nodes = self.nodes.write().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire nodes lock: {}", e)))?;
-        let mut tips = self.tips.write().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire tips lock: {}", e)))?;
-        let mut children = self.children.write().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire children lock: {}", e)))?;
-        let mut author_nodes = self.author_nodes.write().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire author_nodes lock: {}", e)))?;
-        let mut payload_types = self.payload_types.write().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire payload_types lock: {}", e)))?;
-        
-        // Check if the node already exists
-        if nodes.contains_key(&cid_key) {
-            return Ok(cid.clone());
-        }
-        
-        // Validate parent references
-        for parent_cid in &node.node.parents {
-            let parent_key = Self::cid_to_key(parent_cid);
-            if !nodes.contains_key(&parent_key) {
-                return Err(DagError::ParentNotFound { child: cid.clone(), parent: parent_cid.clone() });
-            }
-        }
-        
-        // Store the node
-        nodes.insert(cid_key.clone(), node.clone());
-        
-        // Update tips
-        tips.insert(cid_key.clone());
-        for parent_cid in &node.node.parents {
-            let parent_key = Self::cid_to_key(parent_cid);
-            tips.remove(&parent_key);
-            
-            // Update children map
-            children
-                .entry(parent_key)
-                .or_insert_with(HashSet::new)
-                .insert(cid_key.clone());
-        }
-        
-        // Update author_nodes
-        let author_key = node.node.author.to_string();
-        author_nodes
-            .entry(author_key)
-            .or_insert_with(HashSet::new)
-            .insert(cid_key.clone());
-        
-        // Update payload_types
-        let payload_type = Self::get_payload_type(&node);
-        payload_types
-            .entry(payload_type)
-            .or_insert_with(HashSet::new)
-            .insert(cid_key);
-        
-        Ok(cid)
-    }
-
-    fn get_node(&self, cid: &Cid) -> Result<SignedDagNode, DagError> {
-        let cid_key = Self::cid_to_key(cid);
-        let nodes = self.nodes.read().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire nodes lock: {}", e)))?;
-        
-        nodes.get(&cid_key)
-            .cloned()
-            .ok_or_else(|| DagError::NodeNotFound(cid.clone()))
-    }
-
-    fn get_tips(&self) -> Result<Vec<Cid>, DagError> {
-        let tips = self.tips.read().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire tips lock: {}", e)))?;
-        
-        Ok(tips.iter()
-            .filter_map(|key| Cid::from_bytes(key.as_bytes()).ok())
-            .collect())
-    }
-
-    fn get_ordered_nodes(&self) -> Result<Vec<SignedDagNode>, DagError> {
-        let nodes = self.nodes.read().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire nodes lock: {}", e)))?;
-        let children = self.children.read().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire children lock: {}", e)))?;
-        
-        // Count incoming edges for each node
-        let mut incoming_count: HashMap<String, usize> = HashMap::new();
-        for (node_key, _) in nodes.iter() {
-            incoming_count.insert(node_key.clone(), 0);
-        }
-        
-        for (_, child_set) in children.iter() {
-            for child_key in child_set {
-                if let Some(count) = incoming_count.get_mut(child_key) {
-                    *count += 1;
-                }
-            }
-        }
-        
-        // Find nodes with no incoming edges (sources)
-        let mut queue: VecDeque<String> = incoming_count.iter()
-            .filter_map(|(key, count)| if *count == 0 { Some(key.clone()) } else { None })
-            .collect();
-        
-        // Perform topological sort
-        let mut sorted_nodes = Vec::new();
-        
-        while let Some(current) = queue.pop_front() {
-            // Add the current node to the sorted list
-            if let Some(node) = nodes.get(&current) {
-                sorted_nodes.push(node.clone());
-            }
-            
-            // Process children of the current node
-            if let Some(child_set) = children.get(&current) {
-                for child_key in child_set {
-                    if let Some(count) = incoming_count.get_mut(child_key) {
-                        *count -= 1;
-                        if *count == 0 {
-                            queue.push_back(child_key.clone());
-                        }
-                    }
-                }
-            }
-        }
-        
-        // Check for cycles
-        if sorted_nodes.len() != nodes.len() {
-            return Err(DagError::InvalidNodeData("DAG contains cycles".to_string()));
-        }
-        
-        Ok(sorted_nodes)
-    }
-
-    fn get_nodes_by_author(&self, author: &Did) -> Result<Vec<SignedDagNode>, DagError> {
-        let author_key = author.to_string();
-        let author_nodes = self.author_nodes.read().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire author_nodes lock: {}", e)))?;
-        let nodes = self.nodes.read().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire nodes lock: {}", e)))?;
-        
-        let result = match author_nodes.get(&author_key) {
-            Some(cids) => {
-                cids.iter()
-                    .filter_map(|cid_key| nodes.get(cid_key).cloned())
-                    .collect()
-            }
-            None => Vec::new(),
-        };
-        
-        Ok(result)
-    }
-
-    fn get_nodes_by_payload_type(&self, payload_type: &str) -> Result<Vec<SignedDagNode>, DagError> {
-        let payload_types = self.payload_types.read().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire payload_types lock: {}", e)))?;
-        let nodes = self.nodes.read().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire nodes lock: {}", e)))?;
-        
-        let result = match payload_types.get(payload_type) {
-            Some(cids) => {
-                cids.iter()
-                    .filter_map(|cid_key| nodes.get(cid_key).cloned())
-                    .collect()
-            }
-            None => Vec::new(),
-        };
-        
-        Ok(result)
-    }
-
-    fn find_path(&self, from: &Cid, to: &Cid) -> Result<Vec<SignedDagNode>, DagError> {
-        let from_key = Self::cid_to_key(from);
-        let to_key = Self::cid_to_key(to);
-        
-        let nodes = self.nodes.read().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire nodes lock: {}", e)))?;
-        let children = self.children.read().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire children lock: {}", e)))?;
-        
-        // Check if nodes exist
-        if !nodes.contains_key(&from_key) {
-            return Err(DagError::NodeNotFound(from.clone()));
-        }
-        if !nodes.contains_key(&to_key) {
-            return Err(DagError::NodeNotFound(to.clone()));
-        }
-        
-        // Special case: from and to are the same
-        if from_key == to_key {
-            return Ok(vec![nodes.get(&from_key).unwrap().clone()]);
-        }
-        
-        // BFS search
-        let mut queue = VecDeque::new();
-        queue.push_back(from_key.clone());
-        
-        let mut visited = HashSet::new();
-        let mut predecessors: HashMap<String, String> = HashMap::new();
-        
-        visited.insert(from_key.clone());
-        
-        while let Some(current_key) = queue.pop_front() {
-            // Check if we've reached the target
-            if current_key == to_key {
-                break;
-            }
-            
-            // Process children
-            if let Some(child_set) = children.get(&current_key) {
-                for child_key in child_set {
-                    if !visited.contains(child_key) {
-                        visited.insert(child_key.clone());
-                        predecessors.insert(child_key.clone(), current_key.clone());
-                        queue.push_back(child_key.clone());
-                    }
-                }
-            }
-        }
-        
-        // Reconstruct the path if found
-        if !predecessors.contains_key(&to_key) && from_key != to_key {
-            return Ok(Vec::new()); // No path found
-        }
-        
-        // Reconstruct the path
-        let mut path = Vec::new();
-        let mut current = to_key.clone();
-        
-        while current != from_key {
-            path.push(nodes.get(&current).unwrap().clone());
-            current = predecessors.get(&current).unwrap().clone();
-        }
-        
-        // Add the starting node
-        path.push(nodes.get(&from_key).unwrap().clone());
-        
-        // Reverse to get the path from start to end
-        path.reverse();
-        
-        Ok(path)
-    }
-
-    // --- Sync verify_branch ---
-    #[cfg(not(feature = "async"))]
-    fn verify_branch(&self, tip: &Cid, resolver: &(dyn PublicKeyResolver + Send + Sync)) -> Result<(), DagError> {
-        // TODO: Implement sync verification logic
-        Ok(()) // Assume valid for now
-    }
-}
-
-// Asynchronous implementation
+// Asynchronous implementation ONLY
 #[cfg(feature = "async")]
-#[async_trait::async_trait]
+#[async_trait]
 impl DagStore for MemoryDagStore {
     async fn add_node(&mut self, mut node: SignedDagNode) -> Result<Cid, DagError> {
         // Ensure the node has a CID
         let cid = node.ensure_cid()?;
         let cid_key = Self::cid_to_key(&cid);
         
-        // Acquire write locks
-        let mut nodes = self.nodes.write().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire nodes lock: {}", e)))?;
-        let mut tips = self.tips.write().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire tips lock: {}", e)))?;
-        let mut children = self.children.write().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire children lock: {}", e)))?;
-        let mut author_nodes = self.author_nodes.write().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire author_nodes lock: {}", e)))?;
-        let mut payload_types = self.payload_types.write().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire payload_types lock: {}", e)))?;
+        // Acquire write locks asynchronously
+        let mut nodes = self.nodes.write().await;
+        let mut tips = self.tips.write().await;
+        let mut children = self.children.write().await;
+        let mut author_nodes = self.author_nodes.write().await;
+        let mut payload_types = self.payload_types.write().await;
         
         // Check if the node already exists
         if nodes.contains_key(&cid_key) {
             return Ok(cid.clone());
         }
         
-        // Validate parent references
+        // Validate parent references (must hold nodes lock)
         for parent_cid in &node.node.parents {
             let parent_key = Self::cid_to_key(parent_cid);
             if !nodes.contains_key(&parent_key) {
+                // Drop locks before returning error to avoid deadlock potential if caller retries
+                drop(nodes);
+                drop(tips);
+                drop(children);
+                drop(author_nodes);
+                drop(payload_types);
                 return Err(DagError::ParentNotFound { child: cid.clone(), parent: parent_cid.clone() });
             }
         }
@@ -368,14 +114,15 @@ impl DagStore for MemoryDagStore {
             .entry(payload_type)
             .or_insert_with(HashSet::new)
             .insert(cid_key);
-        
+            
+        // Locks are dropped automatically when guards go out of scope
         Ok(cid)
     }
 
     async fn get_node(&self, cid: &Cid) -> Result<SignedDagNode, DagError> {
         let cid_key = Self::cid_to_key(cid);
-        let nodes = self.nodes.read().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire nodes lock: {}", e)))?;
+        // Acquire read lock asynchronously
+        let nodes = self.nodes.read().await;
         
         nodes.get(&cid_key)
             .cloned()
@@ -383,181 +130,212 @@ impl DagStore for MemoryDagStore {
     }
 
     async fn get_tips(&self) -> Result<Vec<Cid>, DagError> {
-        let tips = self.tips.read().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire tips lock: {}", e)))?;
+        // Acquire read lock asynchronously
+        let tips = self.tips.read().await;
         
-        Ok(tips.iter()
-            .filter_map(|key| Cid::from_bytes(key.as_bytes()).ok())
-            .collect())
+        // Attempt to convert keys back to Cids
+        let result: Result<Vec<Cid>, _> = tips.iter()
+            .map(|key| Cid::from_bytes(key.as_bytes())) // Use from_bytes
+            .collect();
+            
+        result.map_err(|e| DagError::CidError(format!("Failed to parse CID from key: {}", e)))
     }
 
     async fn get_ordered_nodes(&self) -> Result<Vec<SignedDagNode>, DagError> {
-        let nodes = self.nodes.read().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire nodes lock: {}", e)))?;
-        let children = self.children.read().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire children lock: {}", e)))?;
-        
-        // Count incoming edges for each node
-        let mut incoming_count: HashMap<String, usize> = HashMap::new();
-        for (node_key, _) in nodes.iter() {
-            incoming_count.insert(node_key.clone(), 0);
+        // 1. Clone data under lock
+        let (nodes_clone, children_clone) = {
+             let nodes_guard = self.nodes.read().await;
+             let children_guard = self.children.read().await;
+            (nodes_guard.clone(), children_guard.clone())
+        }; // Locks are dropped here
+
+        // 2. Build graph structure from cloned data (no locks needed)
+        let mut in_degree: HashMap<String, usize> = HashMap::new();
+        for node_key in nodes_clone.keys() {
+            in_degree.insert(node_key.clone(), 0);
         }
-        
-        for (_, child_set) in children.iter() {
-            for child_key in child_set {
-                if let Some(count) = incoming_count.get_mut(child_key) {
-                    *count += 1;
-                }
-            }
+
+        // Use the cloned children map to build adj_list and update in_degree
+        let mut adj_list: HashMap<String, Vec<String>> = HashMap::new(); 
+        for (parent_key, child_set) in &children_clone {
+             let children_vec: Vec<String> = child_set.iter().cloned().collect();
+             adj_list.insert(parent_key.clone(), children_vec.clone());
+             for child_key in child_set {
+                 if let Some(count) = in_degree.get_mut(child_key) {
+                     *count += 1;
+                 } else {
+                     let cid_from_key = Cid::from_bytes(child_key.as_bytes()).map(|c| c.to_string()).unwrap_or_else(|_| child_key.clone());
+                     return Err(DagError::StorageError(format!(
+                        "Inconsistent state: Child {} found but not present in nodes map.", cid_from_key
+                    )));
+                 }
+             }
         }
-        
-        // Find nodes with no incoming edges (sources)
-        let mut queue: VecDeque<String> = incoming_count.iter()
+
+        // 3. Perform Kahn's Algorithm (no locks needed)
+        let mut sorted_list = Vec::with_capacity(nodes_clone.len());
+        let mut queue: VecDeque<String> = in_degree.iter()
             .filter_map(|(key, count)| if *count == 0 { Some(key.clone()) } else { None })
             .collect();
-        
-        // Perform topological sort
-        let mut sorted_nodes = Vec::new();
-        
-        while let Some(current) = queue.pop_front() {
-            // Add the current node to the sorted list
-            if let Some(node) = nodes.get(&current) {
-                sorted_nodes.push(node.clone());
+
+        if nodes_clone.is_empty() {
+            return Ok(sorted_list);
+        }
+
+        if queue.is_empty() && !nodes_clone.is_empty() {
+            return Err(DagError::StorageError("Cycle detected in DAG or no root nodes found".to_string()));
+        }
+
+        while let Some(cid_key) = queue.pop_front() {
+            if let Some(node) = nodes_clone.get(&cid_key) {
+                sorted_list.push(node.clone());
+            } else {
+                 return Err(DagError::StorageError(format!("Node key {} found in queue but not in cloned map", cid_key)));
             }
-            
-            // Process children of the current node
-            if let Some(child_set) = children.get(&current) {
-                for child_key in child_set {
-                    if let Some(count) = incoming_count.get_mut(child_key) {
-                        *count -= 1;
-                        if *count == 0 {
+
+            if let Some(children_keys) = adj_list.get(&cid_key) {
+                for child_key in children_keys {
+                    if let Some(degree) = in_degree.get_mut(child_key) {
+                        *degree -= 1;
+                        if *degree == 0 {
                             queue.push_back(child_key.clone());
                         }
+                    } else {
+                         return Err(DagError::StorageError(format!("Child key {} of {} not found in in-degree map", child_key, cid_key)));
                     }
                 }
             }
         }
-        
-        // Check for cycles
-        if sorted_nodes.len() != nodes.len() {
-            return Err(DagError::InvalidNodeData("DAG contains cycles".to_string()));
+
+        // 4. Check for cycles and return result
+        if sorted_list.len() != nodes_clone.len() {
+            Err(DagError::StorageError(format!(
+                "Cycle detected in DAG. Processed {} nodes, expected {}.",
+                sorted_list.len(),
+                nodes_clone.len()
+            )))
+        } else {
+            Ok(sorted_list)
         }
-        
-        Ok(sorted_nodes)
     }
 
     async fn get_nodes_by_author(&self, author: &Did) -> Result<Vec<SignedDagNode>, DagError> {
         let author_key = author.to_string();
-        let author_nodes = self.author_nodes.read().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire author_nodes lock: {}", e)))?;
-        let nodes = self.nodes.read().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire nodes lock: {}", e)))?;
         
-        let result = match author_nodes.get(&author_key) {
-            Some(cids) => {
-                cids.iter()
-                    .filter_map(|cid_key| nodes.get(cid_key).cloned())
-                    .collect()
-            }
-            None => Vec::new(),
+        let cid_keys_to_fetch: Option<HashSet<String>> = {
+            let author_nodes_guard = self.author_nodes.read().await;
+            author_nodes_guard.get(&author_key).cloned()
         };
-        
-        Ok(result)
+
+        match cid_keys_to_fetch {
+            Some(cid_keys) => {
+                let nodes_guard = self.nodes.read().await;
+                let result = cid_keys.iter()
+                    .filter_map(|key| nodes_guard.get(key).cloned())
+                    .collect();
+                Ok(result)
+            }
+            None => Ok(Vec::new()),
+        }
     }
 
     async fn get_nodes_by_payload_type(&self, payload_type: &str) -> Result<Vec<SignedDagNode>, DagError> {
-        let payload_types = self.payload_types.read().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire payload_types lock: {}", e)))?;
-        let nodes = self.nodes.read().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire nodes lock: {}", e)))?;
-        
-        let result = match payload_types.get(payload_type) {
-            Some(cids) => {
-                cids.iter()
-                    .filter_map(|cid_key| nodes.get(cid_key).cloned())
-                    .collect()
-            }
-            None => Vec::new(),
+        let cid_keys_to_fetch: Option<HashSet<String>> = {
+            let payload_types_guard = self.payload_types.read().await;
+            payload_types_guard.get(payload_type).cloned()
         };
-        
-        Ok(result)
+
+        match cid_keys_to_fetch {
+            Some(cid_keys) => {
+                let nodes_guard = self.nodes.read().await;
+                let result = cid_keys.iter()
+                    .filter_map(|key| nodes_guard.get(key).cloned())
+                    .collect();
+                Ok(result)
+            }
+            None => Ok(Vec::new()),
+        }
     }
 
     async fn find_path(&self, from: &Cid, to: &Cid) -> Result<Vec<SignedDagNode>, DagError> {
         let from_key = Self::cid_to_key(from);
         let to_key = Self::cid_to_key(to);
         
-        let nodes = self.nodes.read().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire nodes lock: {}", e)))?;
-        let children = self.children.read().map_err(|e| 
-            DagError::StorageError(format!("Failed to acquire children lock: {}", e)))?;
-        
-        // Check if nodes exist
-        if !nodes.contains_key(&from_key) {
-            return Err(DagError::NodeNotFound(from.clone()));
-        }
-        if !nodes.contains_key(&to_key) {
-            return Err(DagError::NodeNotFound(to.clone()));
-        }
-        
-        // Special case: from and to are the same
-        if from_key == to_key {
-            return Ok(vec![nodes.get(&from_key).unwrap().clone()]);
-        }
-        
-        // BFS search
+        let nodes_clone = {
+            let nodes_guard = self.nodes.read().await;
+            if !nodes_guard.contains_key(&from_key) {
+                return Err(DagError::NodeNotFound(from.clone()));
+            }
+            if !nodes_guard.contains_key(&to_key) {
+                 return Err(DagError::NodeNotFound(to.clone()));
+            }
+            if from_key == to_key {
+                return Ok(vec![nodes_guard.get(&from_key).unwrap().clone()]); 
+            }
+            nodes_guard.clone()
+        };
+
         let mut queue = VecDeque::new();
-        queue.push_back(from_key.clone());
-        
         let mut visited = HashSet::new();
-        let mut predecessors: HashMap<String, String> = HashMap::new();
-        
+        let mut predecessors = HashMap::new();
+
+        queue.push_back(from_key.clone());
         visited.insert(from_key.clone());
-        
+        let mut target_found = false;
+
         while let Some(current_key) = queue.pop_front() {
-            // Check if we've reached the target
             if current_key == to_key {
+                target_found = true;
                 break;
             }
-            
-            // Process children
-            if let Some(child_set) = children.get(&current_key) {
-                for child_key in child_set {
-                    if !visited.contains(child_key) {
-                        visited.insert(child_key.clone());
-                        predecessors.insert(child_key.clone(), current_key.clone());
-                        queue.push_back(child_key.clone());
+
+            if let Some(signed_node) = nodes_clone.get(&current_key) {
+                for parent_cid in &signed_node.node.parents {
+                    let parent_key = Self::cid_to_key(parent_cid);
+                    if nodes_clone.contains_key(&parent_key) && visited.insert(parent_key.clone()) {
+                        predecessors.insert(parent_key.clone(), current_key.clone());
+                        queue.push_back(parent_key.clone());
                     }
                 }
             }
         }
-        
-        // Reconstruct the path if found
-        if !predecessors.contains_key(&to_key) && from_key != to_key {
-            return Ok(Vec::new()); // No path found
+
+        if !target_found {
+            return Ok(Vec::new());
         }
-        
-        // Reconstruct the path
-        let mut path = Vec::new();
-        let mut current = to_key.clone();
-        
-        while current != from_key {
-            path.push(nodes.get(&current).unwrap().clone());
-            current = predecessors.get(&current).unwrap().clone();
+
+        let mut path_nodes = VecDeque::new();
+        let mut current_key = to_key.clone();
+        while current_key != from_key {
+             if let Some(node) = nodes_clone.get(&current_key) {
+                 path_nodes.push_front(node.clone());
+             } else {
+                 return Err(DagError::StorageError(format!("Path reconstruction failed: node {} not found in cloned map", current_key)));
+             }
+            
+            match predecessors.get(&current_key) {
+                Some(pred_key) => current_key = pred_key.clone(),
+                None => {
+                    return Err(DagError::StorageError("Path reconstruction failed: predecessor not found".to_string()));
+                }
+            }
         }
-        
-        // Add the starting node
-        path.push(nodes.get(&from_key).unwrap().clone());
-        
-        // Reverse to get the path from start to end
-        path.reverse();
-        
-        Ok(path)
+        if let Some(start_node) = nodes_clone.get(&from_key) {
+             path_nodes.push_front(start_node.clone());
+        } else {
+             return Err(DagError::StorageError(format!("Path reconstruction failed: start node {} not found", from_key)));
+        }
+
+        Ok(path_nodes.into())
     }
 
-    // --- Async verify_branch ---
     async fn verify_branch(&self, tip: &Cid, resolver: &(dyn PublicKeyResolver + Send + Sync)) -> Result<(), DagError> {
-        // TODO: Implement async verification logic
+        // TODO: Implement async verification logic. This will likely involve cloning node data under lock,
+        // then performing the traversal and signature checks outside the lock.
+        // Need to be careful about how the resolver is used (can it be called concurrently?).
+        let _tip = tip; // Mark as used
+        let _resolver = resolver; // Mark as used
+        println!("Warning: MemoryDagStore::verify_branch is not fully implemented.");
         Ok(()) // Assume valid for now
     }
 } 
