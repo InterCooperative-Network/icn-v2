@@ -20,6 +20,10 @@ tokio = { version = "1.27", features = ["full"], optional = true }
 futures = { version = "0.3", optional = true }
 serde_ipld_dagcbor = "0.2"
 
+# Metrics
+prometheus = { version = "0.13", features = ["process"] }
+lazy_static = "1.4"
+
 # Optional libp2p dependencies
 libp2p = { version = "0.53", features = ["tokio", "noise", "gossipsub", "mdns", "kad", "identify", "ping", "request-response"], optional = true }
 libp2p-identity = { version = "0.2", features = ["ed25519"], optional = true }

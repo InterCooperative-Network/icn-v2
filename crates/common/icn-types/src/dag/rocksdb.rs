@@ -9,6 +9,40 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use ed25519_dalek::VerifyingKey;
 
+// --- Prometheus Metrics --- 
+use lazy_static::lazy_static;
+use prometheus::{register_histogram, register_int_counter, register_int_gauge, Histogram, IntCounter, IntGauge, opts, register_histogram_vec, HistogramVec};
+
+lazy_static! {
+    static ref DAG_ADD_NODE_DURATION: Histogram = register_histogram!(
+        "dag_add_node_duration_seconds",
+        "Time taken to add a node to the RocksDB DAG store",
+        vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0]
+    ).unwrap();
+
+    static ref DAG_VERIFY_BRANCH_DURATION: Histogram = register_histogram!(
+        "dag_verify_branch_duration_seconds",
+        "Time taken to verify a DAG branch in RocksDB"
+        // Add buckets appropriate for potentially longer verification times
+    ).unwrap(); // Default buckets for now
+
+    static ref DAG_NODE_VERIFICATION_FAILURES: IntCounter = register_int_counter!(
+        "dag_node_verification_failures_total",
+        "Total number of DAG node verification failures (signature, CID, missing parent)"
+    ).unwrap();
+
+    static ref DAG_TIP_COUNT: IntGauge = register_int_gauge!(
+        "dag_tip_count",
+        "Current number of tips in the RocksDB DAG"
+    ).unwrap();
+
+    static ref DAG_NODES_TOTAL: IntGauge = register_int_gauge!(
+        "dag_nodes_total",
+        "Total number of nodes in the RocksDB DAG"
+    ).unwrap();
+}
+// --- End Prometheus Metrics ---
+
 /// ColumnFamily names for different types of data
 const CF_NODES: &str = "nodes";
 const CF_TIPS: &str = "tips";
@@ -50,6 +84,9 @@ impl RocksDbDagStore {
 
         // Initialize the non_tips cache
         store.initialize_non_tips_cache()?;
+        
+        // Initialize total nodes gauge (approximation on open)
+        store.update_nodes_total_gauge()?; 
 
         Ok(store)
     }
@@ -236,23 +273,38 @@ impl RocksDbDagStore {
 
         Ok(())
     }
+
+    /// Helper to update total nodes gauge
+    fn update_nodes_total_gauge(&self) -> Result<(), DagError> {
+         let cf_nodes = self.cf_handle(CF_NODES)?;
+         let mut count = 0;
+         let iter = self.db.iterator_cf(cf_nodes, rocksdb::IteratorMode::Start);
+         for _ in iter {
+            count += 1;
+         }
+         DAG_NODES_TOTAL.set(count);
+         Ok(())
+    }
 }
 
 // Synchronous implementation
 #[cfg(not(feature = "async"))]
 impl DagStore for RocksDbDagStore {
     fn add_node(&mut self, mut node: SignedDagNode) -> Result<Cid, DagError> {
-        let node_cid = node.ensure_cid()?; // Ensure CID is computed before serialization
+        let _timer = DAG_ADD_NODE_DURATION.start_timer(); // Start timing
+
+        let node_cid = node.ensure_cid()?; 
         let node_key = Self::cid_to_key(&node_cid);
+        
+        // Check if node already exists to avoid re-incrementing counter etc.
+        let cf_nodes = self.cf_handle(CF_NODES)?;
+        let node_exists = self.db.get_cf(cf_nodes, &node_key)?.is_some();
+
         let node_bytes = Self::serialize_node(&node)?;
 
-        // --- Start Atomic Write Batch ---
         let mut batch = WriteBatch::default();
-
-        // 1. Add node data
-        let cf_nodes = self.cf_handle(CF_NODES)?;
         batch.put_cf(cf_nodes, &node_key, &node_bytes);
-
+        
         // 2. Update tips
         let cf_tips = self.cf_handle(CF_TIPS)?;
         // Add this node as a potential tip
@@ -348,6 +400,15 @@ impl DagStore for RocksDbDagStore {
             }
         } // Lock guard dropped here
 
+        // Increment node count only if it was a new node
+        if !node_exists {
+             DAG_NODES_TOTAL.inc();
+        }
+
+        // Note: Updating tip count here accurately is complex.
+        // It depends on whether parents were already tips.
+        // Deferring tip count update to get_tips or a periodic task.
+
         Ok(node_cid)
     }
 
@@ -376,6 +437,8 @@ impl DagStore for RocksDbDagStore {
             tips.push(cid);
         }
         
+        // Update the gauge when tips are fetched
+        DAG_TIP_COUNT.set(tips.len() as i64);
         Ok(tips)
     }
 
@@ -590,57 +653,67 @@ impl DagStore for RocksDbDagStore {
     }
 
     fn verify_branch(&self, tip: &Cid, resolver: &dyn PublicKeyResolver) -> Result<(), DagError> {
+        let _timer = DAG_VERIFY_BRANCH_DURATION.start_timer(); // Start timing
+
         let tip_key = Self::cid_to_key(tip);
         let cf_nodes = self.cf_handle(CF_NODES)?;
         
         // Check if tip exists
         if self.db.get_cf(cf_nodes, &tip_key)?.is_none() {
+            // Don't count "not found" as a verification failure, it's a pre-condition fail
             return Err(DagError::NodeNotFound(tip.clone()));
         }
         
-        // Perform a BFS traversal starting from the tip, verifying each node
         let mut queue = VecDeque::new();
         let mut visited = HashSet::new();
-        
         queue.push_back(tip_key.clone());
         visited.insert(tip_key);
         
         while let Some(current_key) = queue.pop_front() {
-            // Get the current node
             let node_data = self.db.get_cf(cf_nodes, &current_key)?
-                .ok_or_else(|| DagError::StorageError(format!("Node data missing for visited key {:?}", current_key)))?;
+                .ok_or_else(|| { 
+                    // This case indicates DB inconsistency if visited key is missing
+                    DAG_NODE_VERIFICATION_FAILURES.inc(); 
+                    DagError::StorageError(format!("Node data missing for visited key {:?}", current_key))
+                })?;
             let signed_node = Self::deserialize_node(&node_data)?;
-            let node_cid = signed_node.cid.as_ref().ok_or_else(|| 
-                DagError::InvalidNodeData(format!("Missing CID in deserialized node for key {:?}", current_key))
-            )?.clone();
+            let node_cid = match signed_node.cid.as_ref() {
+                Some(cid) => cid.clone(),
+                None => {
+                    DAG_NODE_VERIFICATION_FAILURES.inc();
+                    return Err(DagError::InvalidNodeData(format!("Missing CID in deserialized node for key {:?}", current_key)));
+                }
+            };
 
             // 1. Verify CID calculation matches stored CID
             let calculated_cid = signed_node.calculate_cid()?;
             if calculated_cid != node_cid {
+                DAG_NODE_VERIFICATION_FAILURES.inc();
                 return Err(DagError::CidMismatch(node_cid));
             }
 
             // 2. Verify the signature
-            // Resolve the public key
-            let verifying_key = resolver.resolve(&signed_node.node.author)?;
-            // Get canonical bytes (must serialize the inner 'node' field)
+            let verifying_key = match resolver.resolve(&signed_node.node.author) {
+                Ok(key) => key,
+                Err(e) => {
+                    DAG_NODE_VERIFICATION_FAILURES.inc(); // Count resolution errors as verification failures
+                    return Err(e);
+                }
+            };
             let canonical_bytes = serde_ipld_dagcbor::to_vec(&signed_node.node)
                 .map_err(|e| DagError::SerializationError(format!("DAG-CBOR serialization error during verify: {}", e)))?;
-            // Perform verification
-            verifying_key.verify(&canonical_bytes, &signed_node.signature)
-                .map_err(|_| DagError::InvalidSignature(node_cid.clone()))?;
+            if let Err(_) = verifying_key.verify(&canonical_bytes, &signed_node.signature) {
+                DAG_NODE_VERIFICATION_FAILURES.inc();
+                return Err(DagError::InvalidSignature(node_cid.clone()));
+            }
 
             // 3. Check parent existence and add to queue
             for parent_cid in &signed_node.node.parents {
                 let parent_key = Self::cid_to_key(parent_cid);
-                
-                // Check if the parent exists in the database
                 if self.db.get_cf(cf_nodes, &parent_key)?.is_none() {
-                    // Parent referenced by a valid node is missing
+                    DAG_NODE_VERIFICATION_FAILURES.inc();
                     return Err(DagError::MissingParent(parent_cid.clone()));
                 }
-                
-                // Add parent to queue if not already visited
                 if !visited.contains(&parent_key) {
                     visited.insert(parent_key.clone());
                     queue.push_back(parent_key);
@@ -648,7 +721,6 @@ impl DagStore for RocksDbDagStore {
             }
         }
         
-        // All nodes in the branch were visited and verified successfully
         Ok(())
     }
 }
@@ -658,29 +730,20 @@ impl DagStore for RocksDbDagStore {
 #[async_trait::async_trait]
 impl DagStore for RocksDbDagStore {
     async fn add_node(&mut self, mut node: SignedDagNode) -> Result<Cid, DagError> {
-        let node_cid = node.ensure_cid()?; // Ensure CID is computed before serialization
+        let _timer = DAG_ADD_NODE_DURATION.start_timer(); // Start timing
+
+        let node_cid = node.ensure_cid()?;
         let node_key = Self::cid_to_key(&node_cid);
-        
-        // Serialize node using DAG-CBOR outside of spawn_blocking if possible
         let node_bytes = Self::serialize_node(&node)?;
         
-        // Prepare data needed for the batch outside spawn_blocking
-        let parent_cids = node.node.parents.clone();
-        let author_key = node.node.author.to_string().into_bytes();
-        let payload_type_str = match &node.node.payload {
-             crate::dag::DagPayload::Raw(_) => "raw",
-             crate::dag::DagPayload::Json(_) => "json",
-             crate::dag::DagPayload::Reference(_) => "reference",
-             crate::dag::DagPayload::TrustBundle(_) => "TrustBundle",
-             crate::dag::DagPayload::ExecutionReceipt(_) => "ExecutionReceipt",
+        // Check existence before spawn_blocking to correctly update counter
+        let node_exists = {
+            let cf_nodes = self.cf_handle(CF_NODES)?;
+            self.db.get_cf(cf_nodes, &node_key)?.is_some()
         };
-        let payload_type_key = payload_type_str.as_bytes().to_vec(); // Clone for sending to task
 
-
-        // Clone necessary Arcs for sending to the blocking task
         let db_clone = Arc::clone(&self.db);
         
-        // --- Perform DB Reads and Batch Construction in blocking task ---
         let batch_result = tokio::task::spawn_blocking(move || {
             let mut batch = WriteBatch::default();
 
@@ -702,14 +765,14 @@ impl DagStore for RocksDbDagStore {
             // 2. Update tips
             batch.put_cf(cf_tips, &node_key, &[1]);
             let mut parent_keys = Vec::new(); // Collect parent keys for cache update later
-            for parent_cid in &parent_cids {
+            for parent_cid in &node.node.parents {
                 let parent_key = Self::cid_to_key(parent_cid);
                 batch.delete_cf(cf_tips, &parent_key);
                 parent_keys.push(parent_key);
             }
 
             // 3. Update children index (using DAG-CBOR)
-            for parent_cid in &parent_cids {
+            for parent_cid in &node.node.parents {
                  let parent_key = Self::cid_to_key(parent_cid);
                  let existing = db_clone.get_cf(cf_children, &parent_key)
                      .map_err(|e| DagError::StorageError(format!("Failed to get children: {}", e)))?;
@@ -725,6 +788,7 @@ impl DagStore for RocksDbDagStore {
             }
 
             // 4. Update author index (using DAG-CBOR)
+            let author_key = node.node.author.to_string().into_bytes();
             let existing_author_nodes = db_clone.get_cf(cf_authors, &author_key)
                  .map_err(|e| DagError::StorageError(format!("Failed to get author nodes: {}", e)))?;
             let mut author_nodes: Vec<Vec<u8>> = match existing_author_nodes {
@@ -738,6 +802,14 @@ impl DagStore for RocksDbDagStore {
             batch.put_cf(cf_authors, &author_key, &serialized_author_nodes);
 
              // 5. Update payload type index (using DAG-CBOR)
+            let payload_type_str = match &node.node.payload {
+                crate::dag::DagPayload::Raw(_) => "raw",
+                crate::dag::DagPayload::Json(_) => "json",
+                crate::dag::DagPayload::Reference(_) => "reference",
+                crate::dag::DagPayload::TrustBundle(_) => "TrustBundle",
+                crate::dag::DagPayload::ExecutionReceipt(_) => "ExecutionReceipt",
+            };
+            let payload_type_key = payload_type_str.as_bytes().to_vec();
             let existing_payload_nodes = db_clone.get_cf(cf_payload_types, &payload_type_key)
                  .map_err(|e| DagError::StorageError(format!("Failed to get payload type nodes: {}", e)))?;
             let mut payload_nodes: Vec<Vec<u8>> = match existing_payload_nodes {
@@ -772,6 +844,11 @@ impl DagStore for RocksDbDagStore {
             }
         } // Lock guard dropped here
 
+        // Increment node count only if it was a new node
+        if !node_exists {
+             DAG_NODES_TOTAL.inc();
+        }
+        // Deferring tip count update
 
         Ok(node_cid)
     }
@@ -818,36 +895,13 @@ impl DagStore for RocksDbDagStore {
     }
 
     async fn verify_branch(&self, tip: &Cid, resolver: &dyn PublicKeyResolver) -> Result<(), DagError> {
-        // Note: This async implementation assumes the PublicKeyResolver is Sync + Send.
-        // If the resolver itself needs to be async, the trait and implementation need adjustments.
+        let _timer = DAG_VERIFY_BRANCH_DURATION.start_timer(); // Start timing
         
         let tip_clone = tip.clone();
         let db_clone = self.db.clone();
-        
-        // We need a way to pass the resolver logic into spawn_blocking.
-        // Directly passing `resolver` works if it's `Sync + Send`.
-        // If not, we might need to pre-resolve keys or use a different async strategy.
-        
-        // For now, assuming resolver is Sync + Send. This is common for simple resolvers.
-        // We cannot pass the trait object directly, need a concrete type or Arc.
-        // Let's assume the caller wraps the resolver in an Arc if needed for async.
-        // *** This part needs careful consideration based on actual resolver implementation ***
-        // *** A simpler approach for now might be to make the resolver method blocking ***
-        // *** or require the async trait to implement it differently. ***
-        
-        // --- Simplified Approach: Perform resolution outside spawn_blocking if possible? --- 
-        // This is difficult because we discover DIDs *during* the traversal within spawn_blocking.
-        
-        // --- Alternative: Redesign resolver or accept limitations --- 
-        // Let's proceed assuming a Sync+Send resolver can be used, but acknowledge complexity.
-        // The easiest path might be to make the synchronous `resolve` method callable
-        // from the blocking thread.
+        // TODO: Properly handle passing resolver
 
-        // TODO: Properly handle passing and using the resolver in the async context.
-        // This placeholder just calls the sync version within spawn_blocking, assuming
-        // the resolver is Sync+Send and its `resolve` is blocking-safe.
-
-        tokio::task::spawn_blocking(move || {
+        let verification_result = tokio::task::spawn_blocking(move || {
             let tip_key = Self::cid_to_key(&tip_clone);
             let cf_nodes = db_clone.cf_handle(CF_NODES)?;
             
@@ -862,11 +916,15 @@ impl DagStore for RocksDbDagStore {
             
             while let Some(current_key) = queue.pop_front() {
                 let node_data = db_clone.get_cf(cf_nodes, &current_key)?
-                     .ok_or_else(|| DagError::StorageError(format!("Node data missing for visited key {:?}", current_key)))?;
+                     .ok_or_else(|| { 
+                        // Don't inc counter here, let the outer handler do it
+                        DagError::StorageError(format!("Node data missing for visited key {:?}", current_key))
+                     })?;
                 let signed_node = Self::deserialize_node(&node_data)?;
-                let node_cid = signed_node.cid.as_ref().ok_or_else(|| 
-                    DagError::InvalidNodeData(format!("Missing CID in deserialized node for key {:?}", current_key))
-                )?.clone();
+                let node_cid = match signed_node.cid.as_ref() {
+                     Some(cid) => cid.clone(),
+                     None => return Err(DagError::InvalidNodeData(format!("Missing CID in deserialized node for key {:?}", current_key)))
+                };
 
                 // 1. Verify CID
                 let calculated_cid = signed_node.calculate_cid()?;
@@ -874,7 +932,7 @@ impl DagStore for RocksDbDagStore {
                     return Err(DagError::CidMismatch(node_cid));
                 }
 
-                // 2. Verify Signature (using resolver passed into blocking task)
+                // 2. Verify Signature
                 let verifying_key = resolver.resolve(&signed_node.node.author)?;
                 let canonical_bytes = serde_ipld_dagcbor::to_vec(&signed_node.node)
                      .map_err(|e| DagError::SerializationError(format!("DAG-CBOR serialization error during verify: {}", e)))?;
@@ -894,8 +952,20 @@ impl DagStore for RocksDbDagStore {
                  }
             }
             Ok(())
-        }).await.map_err(|e| DagError::JoinError(e.to_string()))??;
+        }).await.map_err(|e| DagError::JoinError(e.to_string()));
         
-        Ok(())
+        // Handle result and increment counter on specific errors from the blocking task
+        match verification_result {
+            Ok(Ok(())) => Ok(()), // Inner Ok(()) means success
+            Ok(Err(e @ DagError::CidMismatch(_)))
+            | Ok(Err(e @ DagError::InvalidSignature(_)))
+            | Ok(Err(e @ DagError::MissingParent(_)))
+            | Ok(Err(e @ DagError::PublicKeyResolutionError(_, _))) => {
+                DAG_NODE_VERIFICATION_FAILURES.inc();
+                Err(e)
+            },
+            Ok(Err(e)) => Err(e), // Other errors (Storage, Serialization, etc.)
+            Err(join_err) => Err(join_err), // JoinError
+        }
     }
 } 
