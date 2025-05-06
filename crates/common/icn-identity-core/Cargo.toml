@@ -8,7 +8,7 @@ ed25519-dalek = { version = "2.0", features = ["serde"] }
 rand = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-serde_ipld_dagcbor = { version = "0.5", features = ["derive"] }
+serde_ipld_dagcbor = { version = "0.5" }
 thiserror = "1.0"
 multibase = "0.9"
 base64 = "0.22"
@@ -18,11 +18,13 @@ num_cpus = "1.16"
 sys-info = "0.9"
 icn-core-types = { path = "../icn-core-types" }
 sha2 = "0.10"
-icn-types = { path = "../icn-types" }
+icn-types = { path = "../icn-types", features = ["ipld"] }
 async-trait = "0.1"
 tokio = { version = "1", features = ["sync", "time", "macros", "rt-multi-thread"] }
 # Optional dependencies
 rocksdb = { version = "0.21", optional = true }
+cid = { version = "0.10" }
+multihash = { version = "0.18" }
 
 [features]
 default = []

@@ -1,4 +1,4 @@
-use crate::identity::Did;
+use crate::Did;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)] // Added PartialEq for consistency

@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use thiserror::Error;
+use serde::{Serialize, Deserialize};
 
 mod memory;
 #[cfg(feature = "rocksdb")]
@@ -32,21 +33,35 @@ pub enum StorageError {
     InvalidFederation(String),
 }
 
+/// Represents a TrustBundle as it is stored, potentially with extra store-specific metadata like an ID.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StoredTrustBundle {
+    pub id: String,
+    pub federation_id: Option<String>,
+    pub bundle_type: String,
+    pub bundle_content: TrustBundle,
+    pub created_at: String,
+    pub anchored_cid: Option<String>,
+}
+
 /// Trait defining the interface for TrustBundle storage backends
 #[async_trait]
 pub trait TrustBundleStore: Send + Sync {
-    /// Store a TrustBundle, returning its CID (or an internally generated ID if no CID exists)
-    async fn store(&self, bundle: TrustBundle) -> Result<String, StorageError>;
-    
-    /// Retrieve a TrustBundle by its CID or ID
-    async fn get(&self, bundle_id: &str) -> Result<TrustBundle, StorageError>;
-    
-    /// Delete a TrustBundle (if supported by the storage backend)
-    async fn delete(&self, bundle_id: &str) -> Result<(), StorageError>;
-    
-    /// List all TrustBundles for a federation
-    async fn list_by_federation(&self, federation_id: &str) -> Result<Vec<TrustBundle>, StorageError>;
-    
-    /// Get the latest TrustBundle for a federation
-    async fn get_latest(&self, federation_id: &str) -> Result<TrustBundle, StorageError>;
+    /// Save a bundle
+    async fn save_bundle(&self, bundle: &StoredTrustBundle) -> Result<(), StorageError>;
+
+    /// Get a bundle
+    async fn get_bundle(&self, id: &str) -> Result<Option<StoredTrustBundle>, StorageError>;
+
+    /// List bundles by federation
+    async fn list_bundles_by_federation(&self, federation_id: &str) -> Result<Vec<StoredTrustBundle>, StorageError>;
+
+    /// Get the latest bundle ID by federation
+    async fn get_latest_bundle_id_by_federation(&self, federation_id: &str) -> Result<Option<String>, StorageError>;
+
+    /// Get the latest bundle by federation
+    async fn get_latest_bundle_by_federation(&self, federation_id: &str) -> Result<Option<StoredTrustBundle>, StorageError>;
+
+    /// Remove a bundle
+    async fn remove_bundle(&self, bundle_id: &str) -> Result<(), StorageError>;
 } 

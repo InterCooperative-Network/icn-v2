@@ -43,7 +43,7 @@ pub use event::*;
 pub use event_type::*;
 pub use event_id::*;
 pub use payload::*;
-pub use node::*;
+// pub use node::*; // Commented out unused import
 
 /// Error types related to DAG operations
 #[derive(Error, Debug)]
@@ -193,6 +193,13 @@ pub trait DagStore {
     
     #[cfg(not(feature = "async"))]
     fn get_node(&self, cid: &Cid) -> Result<SignedDagNode, DagError>;
+    
+    /// Retrieve raw block data by its CID
+    #[cfg(feature = "async")]
+    async fn get_data(&self, cid: &Cid) -> Result<Option<Vec<u8>>, DagError>;
+    
+    #[cfg(not(feature = "async"))]
+    fn get_data(&self, cid: &Cid) -> Result<Option<Vec<u8>>, DagError>;
     
     /// Get a list of the current tip nodes (nodes with no children)
     #[cfg(feature = "async")]

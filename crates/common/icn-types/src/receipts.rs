@@ -229,7 +229,7 @@ impl QuorumProof {
         let mut valid_signatures_count = 0;
         let mut unique_authorized_signers = std::collections::HashSet::new();
 
-        for (signer_did, signature_bytes) in &self.signatures {
+        for (signer_did, _signature_bytes) in &self.signatures {
             // 1. Check if signer is authorized
             if !config.authorized_signers.contains(signer_did) {
                 // Optionally, instead of hard error, just ignore this signature for quorum count

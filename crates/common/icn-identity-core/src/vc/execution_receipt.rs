@@ -9,6 +9,9 @@ use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
 use thiserror::Error;
 use multihash::{MultihashDigest, Code as MultihashCode};
 use serde_ipld_dagcbor;
+use icn_core_types::{Did, Cid as IcnCid};
+use cid::Cid as RawCid;
+use std::collections::BTreeMap;
 
 const DAG_CBOR_CODEC: u64 = 0x71;
 

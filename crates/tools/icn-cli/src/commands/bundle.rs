@@ -9,6 +9,7 @@ use icn_types::bundle::TrustBundle;
 use icn_types::Cid;
 use icn_types::anchor::AnchorRef;
 use icn_types::QuorumProof;
+use icn_types::governance::QuorumConfig;
 use icn_identity_core::did::{Did, DidKey};
 use chrono::{DateTime, Utc};
 
@@ -35,6 +36,10 @@ pub enum BundleCommands {
 
 #[derive(Args, Debug, Clone)]
 pub struct CreateBundleArgs {
+    /// Type of the bundle (e.g., "federation_policy", "node_attestation").
+    #[arg(long)]
+    pub bundle_type: String,
+
     /// CID of the state data associated with this bundle.
     #[arg(long)]
     pub state_cid: String,
@@ -100,6 +105,10 @@ pub struct VerifyBundleArgs {
     #[arg(long)]
     pub cid: String,
 
+    /// Path to the JSON file containing the QuorumConfig for verification.
+    #[arg(long, value_hint = ValueHint::FilePath)]
+    pub quorum_config: PathBuf,
+
     /// Optional path to the DAG storage directory.
     #[arg(long, short = 'd', value_hint = ValueHint::DirPath)]
     pub dag_dir: Option<PathBuf>,
@@ -111,9 +120,9 @@ pub struct ExportBundleArgs {
     #[arg(long)]
     pub cid: String,
 
-    /// Output file path to save the exported TrustBundle (JSON format).
+    /// Output file path to save the exported TrustBundle (JSON format). Defaults to stdout if not provided.
     #[arg(short, long, value_hint = ValueHint::FilePath)]
-    pub output: PathBuf,
+    pub output: Option<PathBuf>,
 
     /// Optional path to the DAG storage directory.
     #[arg(long, short = 'd', value_hint = ValueHint::DirPath)]
@@ -163,7 +172,7 @@ async fn handle_create_bundle(context: &mut CliContext, args: &CreateBundleArgs)
     let proof_file = File::open(&args.state_proof_file)
         .map_err(|e| CliError::Io(e))?;
     let reader = BufReader::new(proof_file);
-    let state_proof: QuorumProof = serde_json::from_reader(reader)
+    let state_proof: Option<QuorumProof> = serde_json::from_reader(reader)
         .map_err(|e| CliError::Json(e))?;
 
     // 3. Parse prev_anchors
@@ -183,7 +192,13 @@ async fn handle_create_bundle(context: &mut CliContext, args: &CreateBundleArgs)
     };
 
     // 5. Call TrustBundle::new(...)
-    let trust_bundle = TrustBundle::new(state_cid, state_proof, prev_anchors_vec, metadata);
+    let trust_bundle = TrustBundle::new(
+        args.bundle_type.clone(), 
+        state_cid, 
+        state_proof,
+        prev_anchors_vec, 
+        metadata
+    );
 
     // 6. Write to args.output
     let output_file = File::create(&args.output).map_err(|e| CliError::Io(e))?;
@@ -284,14 +299,93 @@ async fn handle_show_bundle(context: &mut CliContext, args: &ShowBundleArgs) -> 
     Ok(())
 }
 
-async fn handle_verify_bundle(_context: &mut CliContext, args: &VerifyBundleArgs) -> CliResult {
-    println!("Executing bundle verify with args: {:?}", args);
-    // TODO: Implement logic to get DAG store, call TrustBundle::from_dag, then TrustBundle::verify_anchors and verify proof.
-    Err(CliError::Unimplemented("bundle verify".to_string()))
+async fn handle_verify_bundle(context: &mut CliContext, args: &VerifyBundleArgs) -> CliResult {
+    if context.verbose {
+        println!("Verifying bundle with args: {:?}", args);
+    }
+
+    // 1. Parse Anchor CID
+    let anchor_cid = Cid::try_from(args.cid.as_str())
+        .map_err(|e| CliError::InvalidArgument(format!("Invalid anchor CID '{}': {}", args.cid, e)))?;
+
+    // 2. Load QuorumConfig file (now mandatory)
+    let quorum_config_file = File::open(&args.quorum_config)
+        .map_err(|e| CliError::Io(format!("Failed to open quorum config file '{}': {}", args.quorum_config.display(), e)))?;
+    let reader = BufReader::new(quorum_config_file);
+    let quorum_cfg: QuorumConfig = serde_json::from_reader(reader)
+        .map_err(|e| CliError::Json(format!("Failed to parse quorum config from '{}': {}", args.quorum_config.display(), e)))?;
+
+    // 3. Open DAG store
+    let mut dag_store = context.get_dag_store(args.dag_dir.as_deref())?;
+
+    // 4. Load the bundle with TrustBundle::from_dag
+    if context.verbose {
+        println!("Attempting to load bundle {} from DAG...", anchor_cid);
+    }
+    let bundle = TrustBundle::from_dag(&anchor_cid, &mut *dag_store) // Deref Arc<Box<dyn DagStore>>
+        .await
+        .map_err(|e| CliError::Dag(format!("Failed to load bundle {}: {}", anchor_cid, e)))?;
+    
+    if context.verbose {
+        println!("Bundle loaded successfully. Bundle details: {:?}", bundle);
+        println!("Verifying bundle against quorum config: {:?}", quorum_cfg);
+    }
+
+    // 5. Run verification
+    // TrustBundle::verify expects &QuorumConfig
+    match bundle.verify(&*dag_store, &quorum_cfg).await { // Deref Arc<Box<dyn DagStore>>
+        Ok(_) => {
+            println!("✅ Bundle {} verified successfully.", anchor_cid);
+            Ok(())
+        }
+        Err(e) => {
+            // Consider a more specific CliError variant for verification failure if needed.
+            eprintln!("❌ Bundle {} verification failed: {}", anchor_cid, e);
+            // Return a generic error or a specific verification error type
+            // For now, using CliError::Other and printing to stderr.
+            // Exiting with a non-zero status code is typically handled by main returning the CliError.
+            Err(CliError::Other(Box::new(e))) 
+        }
+    }
 }
 
-async fn handle_export_bundle(_context: &mut CliContext, args: &ExportBundleArgs) -> CliResult {
-    println!("Executing bundle export with args: {:?}", args);
-    // TODO: Implement logic to get DAG store, call TrustBundle::from_dag, serialize, and save.
-    Err(CliError::Unimplemented("bundle export".to_string()))
+async fn handle_export_bundle(context: &mut CliContext, args: &ExportBundleArgs) -> CliResult {
+    if context.verbose {
+        println!("Exporting bundle with args: {:?}", args);
+    }
+
+    // 1. Parse Anchor CID
+    let anchor_cid = Cid::try_from(args.cid.as_str())
+        .map_err(|e| CliError::InvalidArgument(format!("Invalid anchor CID '{}': {}", args.cid, e)))?;
+
+    // 2. Open DAG store
+    let mut dag_store = context.get_dag_store(args.dag_dir.as_deref())?;
+
+    // 3. Load the bundle with TrustBundle::from_dag
+    if context.verbose {
+        println!("Attempting to load bundle {} from DAG for export...", anchor_cid);
+    }
+    let bundle = TrustBundle::from_dag(&anchor_cid, &mut *dag_store) // Deref Arc<Box<dyn DagStore>>
+        .await
+        .map_err(|e| CliError::Dag(format!("Failed to load bundle {}: {}", anchor_cid, e)))?;
+
+    // 4. Serialize to pretty JSON
+    let json_output = serde_json::to_string_pretty(&bundle)
+        .map_err(|e| CliError::Json(format!("Failed to serialize bundle to JSON: {}", e)))?;
+
+    // 5. Write to file or stdout
+    if let Some(output_path) = &args.output {
+        fs::write(output_path, json_output.as_bytes())
+            .map_err(|e| CliError::Io(format!("Failed to write bundle to file '{}': {}", output_path.display(), e)))?;
+        if context.verbose {
+            println!("Bundle {} exported successfully to {}.
+", anchor_cid, output_path.display());
+        }
+        println!("Exported bundle {} to {}.
+", anchor_cid, output_path.display());
+    } else {
+        println!("{}", json_output);
+    }
+
+    Ok(())
 } 

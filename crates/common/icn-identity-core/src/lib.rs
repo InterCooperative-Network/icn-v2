@@ -11,7 +11,7 @@ pub mod trustbundle;
 
 // Re-export key structs/functions
 // pub use did::{DidKey, DidKeyError};
-pub use quorum::{QuorumValidator, QuorumError};
+// pub use quorum::{QuorumValidator, QuorumError}; // Commenting out unresolved re-exports
 pub use quorum::{QuorumEngine, QuorumTally, QuorumOutcome, QuorumEngineError};
 pub use vc::{VerifiableCredential, VcIssuer};
 pub use trustbundle::{TrustBundle, QuorumConfig, QuorumType, QuorumProof, TrustError};

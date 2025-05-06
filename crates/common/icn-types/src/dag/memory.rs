@@ -338,4 +338,17 @@ impl DagStore for MemoryDagStore {
         println!("Warning: MemoryDagStore::verify_branch is not fully implemented.");
         Ok(()) // Assume valid for now
     }
+
+    #[cfg(feature = "async")]
+    async fn get_data(&self, _cid: &Cid) -> Result<Option<Vec<u8>>, DagError> {
+        // Placeholder implementation
+        // A real implementation would look up raw block bytes if stored separately,
+        // or get the node and serialize its payload if that's how data is stored.
+        unimplemented!("get_data not yet implemented for MemoryDagStore")
+    }
+
+    #[cfg(not(feature = "async"))]
+    fn get_data(&self, _cid: &Cid) -> Result<Option<Vec<u8>>, DagError> {
+        unimplemented!("get_data not yet implemented for MemoryDagStore")
+    }
 } 

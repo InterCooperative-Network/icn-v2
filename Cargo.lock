@@ -514,17 +514,30 @@ dependencies = [
 ]
 
 [[package]]
-name = "cid"
-version = "0.8.6"
+name = "ciborium"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6ed9c8b2d17acb8110c46f1da5bf4a696d745e1474a16db0cd2b49cd0249bf2"
+checksum = "42e69ffd6f0917f5c029256a24d0161db17cea3997d185db0d35926308770f0e"
 dependencies = [
- "core2",
- "multibase",
- "multihash 0.16.3",
+ "ciborium-io",
+ "ciborium-ll",
  "serde",
- "serde_bytes",
- "unsigned-varint 0.7.2",
+]
+
+[[package]]
+name = "ciborium-io"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05afea1e0a06c9be33d539b876f1ce3692f4afea2cb41f740e7743225ed1c757"
+
+[[package]]
+name = "ciborium-ll"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57663b653d948a338bfb3eeba9bb2fd5fcfaecb9e199e87e1eda4d9e8b240fd9"
+dependencies = [
+ "ciborium-io",
+ "half",
 ]
 
 [[package]]
@@ -807,6 +820,12 @@ name = "crossbeam-utils"
 version = "0.8.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
+
+[[package]]
+name = "crunchy"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43da5946c66ffcc7745f48db692ffbb10a83bfe0afd96235c5c2a4fb23994929"
 
 [[package]]
 name = "crypto-common"
@@ -1280,6 +1299,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "half"
+version = "2.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "459196ed295495a68f7d7fe1d84f6c4b7ff0e21fe3017b2f283c6fac3ad803c9"
+dependencies = [
+ "cfg-if",
+ "crunchy",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1467,6 +1496,7 @@ dependencies = [
  "metrics-exporter-prometheus",
  "multibase",
  "multihash 0.18.1",
+ "planetary-mesh",
  "predicates",
  "prometheus",
  "rand",
@@ -1502,20 +1532,40 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "chrono",
+ "cid 0.10.1",
  "ed25519-dalek",
  "hex",
  "icn-core-types",
  "icn-types",
  "multibase",
+ "multihash 0.18.1",
  "num_cpus",
  "rand",
  "rocksdb",
  "serde",
+ "serde_ipld_dagcbor",
  "serde_json",
  "sha2",
  "sys-info",
  "thiserror 1.0.69",
  "tokio",
+]
+
+[[package]]
+name = "icn-integration-tests"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "icn-cli",
+ "icn-identity-core",
+ "icn-runtime",
+ "icn-types",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -1538,6 +1588,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "chrono",
+ "ciborium",
  "cid 0.10.1",
  "ed25519-dalek",
  "futures",
@@ -1555,7 +1606,7 @@ dependencies = [
  "rocksdb",
  "serde",
  "serde_bytes",
- "serde_ipld_dagcbor 0.2.2",
+ "serde_ipld_dagcbor",
  "serde_json",
  "sha2",
  "thiserror 1.0.69",
@@ -1577,7 +1628,7 @@ dependencies = [
  "log",
  "multibase",
  "serde",
- "serde_ipld_dagcbor 0.5.0",
+ "serde_ipld_dagcbor",
  "serde_json",
  "thiserror 1.0.69",
  "uniffi",
@@ -2325,19 +2376,6 @@ dependencies = [
 
 [[package]]
 name = "multihash"
-version = "0.16.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c346cf9999c631f002d8f977c4eaeaa0e6386f16007202308d0b3757522c2cc"
-dependencies = [
- "core2",
- "multihash-derive",
- "serde",
- "serde-big-array",
- "unsigned-varint 0.7.2",
-]
-
-[[package]]
-name = "multihash"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfd8a792c1694c6da4f68db0a9d707c72bd260994da179e6030a5dcee00bb815"
@@ -2560,6 +2598,21 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 [[package]]
 name = "planetary-mesh"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "futures",
+ "icn-identity-core",
+ "icn-types",
+ "num_cpus",
+ "rand",
+ "serde",
+ "serde_json",
+ "sys-info",
+ "thiserror 1.0.69",
+ "tokio",
+]
 
 [[package]]
 name = "portable-atomic"
@@ -3052,18 +3105,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.101",
-]
-
-[[package]]
-name = "serde_ipld_dagcbor"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c1e23de7a4a18dff77ab9531f279a882500b8cf3549fde044d4e10481b411f1e"
-dependencies = [
- "cbor4ii",
- "cid 0.8.6",
- "scopeguard",
- "serde",
 ]
 
 [[package]]

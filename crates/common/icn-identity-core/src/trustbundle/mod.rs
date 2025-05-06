@@ -3,8 +3,9 @@ use thiserror::Error;
 use icn_types::dag::{DagEvent, EventId};
 use icn_core_types::{Did, Cid};
 use std::collections::HashMap;
-use ed25519_dalek::{VerifyingKey, Signature, Verifier};
+use ed25519_dalek::{VerifyingKey, Signature, Verifier, SIGNATURE_LENGTH};
 use sha2::{Sha256, Digest};
+use std::convert::TryInto;
 
 pub mod storage;
 
@@ -28,6 +29,9 @@ pub enum TrustError {
     
     #[error("unknown error: {0}")]
     Unknown(String),
+    
+    #[error("duplicate signature: {0}")]
+    DuplicateSignature(String),
 }
 
 /// Types of quorum requirements
@@ -120,12 +124,17 @@ impl QuorumProof {
                 .ok_or_else(|| TrustError::PublicKeyNotFound(did.clone()))?;
             
             // Convert to ed25519_dalek::Signature
-            let signature = Signature::from_bytes(sig_bytes.as_slice())
-                .map_err(|e| TrustError::InvalidSignature(e.to_string()))?;
+            let signature_array: [u8; SIGNATURE_LENGTH] = sig_bytes.as_slice().try_into()
+                .map_err(|_| TrustError::InvalidSignature("Signature is not 64 bytes long".to_string()))?;
+            let signature = Signature::from_bytes(&signature_array);
             
             // Verify the signature
             verifying_key.verify(message_digest, &signature)
                 .map_err(|e| TrustError::InvalidSignature(e.to_string()))?;
+            
+            if valid_signers.contains(&did) {
+                return Err(TrustError::DuplicateSignature(did.to_string()));
+            }
             
             valid_signers.push(did);
         }

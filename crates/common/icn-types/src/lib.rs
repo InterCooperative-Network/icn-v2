@@ -24,7 +24,7 @@ pub use receipts::ExecutionReceipt; // Uncommented
 pub use dag::sync::{DAGSyncBundle, DAGSyncService, FederationPeer, SyncError, VerificationResult};
 
 // Re-export core types from icn-core-types for convenience
-pub use icn_core_types::{Cid, CidError, Did, QuorumProof};
+pub use icn_core_types::{Cid, CidError, Did}; // Removed QuorumProof from here
 pub use icn_core_types::did::DidParseError;
 
 // Re-export types from modules
@@ -43,5 +43,6 @@ pub use dag::sync::*;
 pub use dag::rocksdb::RocksDbDagStore;
 
 pub use governance::QuorumConfig;
-pub use receipts::{QuorumProof, ReceiptError, ReceiptProof, VoteReceipt, SignedVoteReceipt};
-pub use resources::{ResourceOffer, ResourceType as EconomicResourceType, MeteringProof};
+// Commented out problematic re-exports for now
+pub use receipts::{QuorumProof, ReceiptError}; // Removed ReceiptProof, VoteReceipt, SignedVoteReceipt
+pub use resources::{ResourceOffer, ResourceType as EconomicResourceType}; // Removed MeteringProof

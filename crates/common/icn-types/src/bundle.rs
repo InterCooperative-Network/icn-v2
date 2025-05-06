@@ -1,26 +1,42 @@
-use crate::anchor::{AnchorRef, TrustBundleAnchor};
-use crate::cid::{Cid, CidError};
+use crate::{
+    Cid,
+    CidError,
+    Did,
+    QuorumConfig,
+    QuorumProof,
+    AnchorRef
+}; // Consolidated crate-level imports
 use crate::dag::{DagError, DagNode, DagNodeBuilder, DagPayload, DagStore, SignedDagNode};
-use crate::Did;
-use crate::QuorumProof;
 use ed25519_dalek::{SigningKey, Signer};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use crate::governance::QuorumConfig;
-use crate::identity::Did;
-use crate::receipts::QuorumProof;
-use crate::utils::timestamp;
-use std::collections::BTreeSet;
-use super::anchor::{AnchorRef, TrustBundleAnchor};
+// N.B. crate::governance::QuorumConfig is not needed here if QuorumConfig is from crate::QuorumConfig
+// N.B. crate::identity::Did is not needed here if Did is from crate::Did
+// N.B. crate::receipts::QuorumProof is not needed here if QuorumProof is from crate::QuorumProof
+// N.B. use crate::utils::timestamp; // Still commented out
+// N.B. use std::collections::BTreeSet; // Not used in current file content, remove if truly unused
+// N.B. use super::anchor::{AnchorRef, TrustBundleAnchor}; // Removed, AnchorRef is from crate::, TrustBundleAnchor defined below
+
+
+// Definition for TrustBundleAnchor, based on usage in verify method
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct TrustBundleAnchor {
+    pub bundle_cid: Cid,
+    pub bundle_type: String,
+    pub author_did: Option<Did>,
+    pub timestamp: u64, // Using u64 as timestamp was from utils::timestamp before
+}
+
 
 /// A core data structure in ICN, representing a stateful object anchored to the DAG
 /// and secured by a quorum proof.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct TrustBundle {
+    pub bundle_type: String, // Added field
     /// The Content ID of the current state data associated with this bundle.
     pub state_cid: Cid,
     /// Proof that the current state is valid according to the governing policy.
-    pub state_proof: QuorumProof,
+    pub state_proof: Option<QuorumProof>, // Changed to Option<QuorumProof>
     /// References to previous TrustBundles or other relevant DAG nodes this bundle builds upon.
     pub previous_anchors: Vec<AnchorRef>,
     /// Optional metadata about the bundle itself.
@@ -34,6 +50,8 @@ pub enum TrustBundleError {
     SerializationError(String),
     #[error("Deserialization error: {0}")]
     Deserialization(String),
+    #[error("Ciborium deserialization error: {0}")]
+    CiboriumError(#[from] ciborium::de::Error<std::io::Error>),
     #[error("Signing error: {0}")]
     SigningError(String),
     #[error("DAG store error: {0}")]
@@ -48,7 +66,7 @@ pub enum TrustBundleError {
     NodeBuildError(String),
     #[error("Invalid previous anchors")]
     InvalidPreviousAnchors,
-    #[error("Invalid quorum proof")]
+    #[error("Invalid quorum proof structure")]
     InvalidQuorumProofStructure,
     #[error("Bundle not found in DAG: {0}")]
     BundleNotFound(Cid),
@@ -69,7 +87,9 @@ pub enum TrustBundleError {
     #[error("Missing state data in DAG for CID: {0}")]
     MissingStateData(Cid),
     #[error("State proof verification failed: {0}")]
-    InvalidStateProof(String),
+    InvalidStateProof(String), // This might be redundant if QuorumVerificationError is comprehensive
+    #[error("Quorum verification error: {0}")]
+    QuorumVerificationError(#[from] crate::receipts::QuorumError),
 }
 
 // Helper function to abstract the add_node call
@@ -86,12 +106,14 @@ fn add_node_helper(dag_store: &mut impl DagStore, node: SignedDagNode) -> Result
 impl TrustBundle {
     /// Create a new TrustBundle
     pub fn new(
+        bundle_type: String,
         state_cid: Cid,
-        state_proof: QuorumProof,
+        state_proof: Option<QuorumProof>,
         previous_anchors: Vec<AnchorRef>,
         metadata: Option<serde_json::Value>,
     ) -> Self {
         Self {
+            bundle_type,
             state_cid,
             state_proof,
             previous_anchors,
@@ -160,10 +182,6 @@ impl TrustBundle {
             cid: None, // Let the store calculate or calculate explicitly before adding
         };
         
-        // Optional: Calculate and set CID explicitly if store doesn't do it
-        // let node_cid = signed_node.calculate_cid().map_err(DagError::from)?;
-        // signed_node.cid = Some(node_cid);
-
         // 4. Add SignedDagNode to DAG store
         let final_cid = dag_store.add_node(signed_node).await?;
 
@@ -302,48 +320,39 @@ impl TrustBundle {
     ) -> Result<(), TrustBundleError> {
         // 1. Verify previous anchors
         for anchor_ref in &self.previous_anchors {
-            match dag_store.get(&anchor_ref.cid).await
-                .map_err(|e| TrustBundleError::DagAccessError(format!("Failed to get previous anchor {}: {}", anchor_ref.cid, e)))?
+            match dag_store.get_data(&anchor_ref.cid).await 
+                .map_err(|e| TrustBundleError::DagAccessError(format!("Failed to get previous anchor data {}: {}", anchor_ref.cid, e)))?
             {
                 Some(anchor_bytes) => {
                     let prev_anchor: TrustBundleAnchor =
                         ciborium::from_reader(&anchor_bytes[..])
-                            .map_err(|e| TrustBundleError::Deserialization(format!("Failed to deserialize previous anchor {}: {}", anchor_ref.cid, e)))?;
+                            .map_err(TrustBundleError::CiboriumError)?;
                     
                     if prev_anchor.bundle_type != self.bundle_type {
                         return Err(TrustBundleError::AnchorMismatch(format!(
-                            "Previous anchor {} (for bundle {}) has type {:?} but current bundle type is {:?}",
+                            "Previous anchor {} (for bundle {}) has type {} but current bundle type is {}",
                             anchor_ref.cid, prev_anchor.bundle_cid, prev_anchor.bundle_type, self.bundle_type
                         )));
                     }
-                    // TODO: Optionally verify signature on prev_anchor if present and author_did is known/resolvable.
-                    // This would involve DID resolution and cryptographic verification against prev_anchor.author_did.
                 }
                 None => {
-                    return Err(TrustBundleError::MissingAnchor(anchor_ref.cid));
+                    return Err(TrustBundleError::DataNotFound(anchor_ref.cid.clone()));
                 }
             }
         }
 
         // 2. Verify state_proof against state_cid
-        if let Some(state_proof) = &self.state_proof {
-            let state_data_bytes = match dag_store.get(&self.state_cid).await
+        if let Some(proof_to_verify) = &self.state_proof {
+            let state_data_bytes = match dag_store.get_data(&self.state_cid).await
                 .map_err(|e| TrustBundleError::DagAccessError(format!("Failed to get state data {}: {}", self.state_cid, e)))?
             {
                 Some(bytes) => bytes,
-                None => return Err(TrustBundleError::MissingStateData(self.state_cid)),
+                None => return Err(TrustBundleError::MissingStateData(self.state_cid.clone())),
             };
 
-            // Assumes QuorumProof::verify method exists with signature:
-            // pub fn verify(&self, content_cid: &Cid, signed_data: &[u8], quorum_config: &QuorumConfig) -> bool
-            if !state_proof.verify(&self.state_cid, &state_data_bytes, quorum_config) {
-                 return Err(TrustBundleError::InvalidStateProof("State proof verification failed using provided quorum configuration.".to_string()));
-            }
+            proof_to_verify.verify(&state_data_bytes, quorum_config)
+                .map_err(TrustBundleError::QuorumVerificationError)?;
         }
-        // If state_proof is None, no verification of it is performed here.
-        // The significance of state_cid without a state_proof depends on the bundle's semantics.
-
-        // 3. (Optional) Verify metadata if any specific rules apply to self.metadata based on bundle_type or other context.
 
         Ok(())
     }
