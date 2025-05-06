@@ -1,14 +1,15 @@
 use anyhow::{Result, anyhow, Context};
 use serde::{Serialize, Deserialize};
 use icn_types::{dag::DagStore, Cid, Did};
-use icn_identity_core::did::DidKey;
+// use icn_identity_core::did::DidKey; // Unused import
 use chrono::{DateTime, Utc};
-use std::str::FromStr;
+// use std::str::FromStr; // Unused import
 use hex::FromHex;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde_ipld_dagcbor;
-use std::path::PathBuf;
-use futures;
+// use std::path::PathBuf; // Unused import
+// use futures; // Unused import - futures::executor::block_on is used directly
+use multibase; // Added for Cid string parsing
 
 /// A report on the verification status of a dispatch credential
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -415,10 +416,6 @@ fn verify_credential_signature(credential: &DispatchCredential) -> Result<bool> 
         .map_err(|e| anyhow!("Failed to parse issuer DID for signature: {}", e))?;
     let pubkey_bytes = did.public_key_bytes();
     
-    let did = Did::from(credential.issuer.clone());
-    let pubkey_bytes = did.public_key_bytes()
-        .context("Failed to extract public key from DID")?;
-    
     let pubkey_array: &[u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = pubkey_bytes[..].try_into()
         .map_err(|_| anyhow!("Invalid public key length"))?;
     let verifying_key = VerifyingKey::from_bytes(pubkey_array)
@@ -437,11 +434,11 @@ fn check_revocation_status(dag_store: &impl DagStore, credential: &DispatchCrede
     // For now, we'll implement a simplified version that looks for RevocationRecord nodes
     
     // Get ordered nodes to find the most recent revocations
-    let nodes = dag_store.get_ordered_nodes()
+    let nodes = futures::executor::block_on(dag_store.get_ordered_nodes())
         .context("Failed to get DAG nodes")?;
     
     for node in nodes {
-        if let Some(cid) = &node.cid {
+        if let Some(_cid) = &node.cid {
             if let icn_types::dag::DagPayload::Json(payload) = &node.node.payload {
                 // Check if it's a revocation record
                 if payload.get("type").and_then(|t| t.as_str()) == Some("RevocationRecord") {
@@ -479,15 +476,20 @@ fn check_revocation_status(dag_store: &impl DagStore, credential: &DispatchCrede
 
 /// Verify the trust policy lineage starting from a specific CID
 fn verify_policy_lineage(dag_store: &impl DagStore, policy_cid_str: &str) -> Result<bool> {
-    // Parse the CID
-    let cid = Cid::from_str(policy_cid_str)
-        .context("Invalid policy CID format")?;
+    // Parse the CID string
+    // 1. Decode from multibase string (e.g., "bafy...") to bytes
+    let (_base, decoded_bytes) = multibase::decode(policy_cid_str)
+        .map_err(|e| anyhow!("Invalid multibase encoding for policy CID string '{}': {}", policy_cid_str, e))?;
+    
+    // 2. Create Cid from decoded bytes
+    let cid = Cid::from_bytes(&decoded_bytes)
+        .map_err(|e| anyhow!("Invalid policy CID bytes from string '{}': {}", policy_cid_str, e))?;
     
     // Get the node from the DAG
-    let node = dag_store.get_node(&cid)
+    let node = futures::executor::block_on(dag_store.get_node(&cid))
         .context("Failed to get policy node from DAG")?;
     
-    // Check if it's a TrustPolicy record
+    // Check if it's a TrustPolicyRecord
     if let icn_types::dag::DagPayload::Json(payload) = &node.node.payload {
         if payload.get("type").and_then(|t| t.as_str()) == Some("TrustPolicyRecord") {
             // Check the signature on this node
@@ -607,7 +609,6 @@ pub fn verify_dispatch_credential_json(json: &str) -> Result<String> {
 mod tests {
     use super::*;
     use chrono::Utc;
-    use icn_identity_core::did::DidKey;
     
     #[test]
     fn test_verification_report_serialization() {

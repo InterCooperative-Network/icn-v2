@@ -19,10 +19,11 @@ log = "0.4"
 uuid = { version = "1.4", features = ["v4"] }
 serde_ipld_dagcbor = "0.5"
 futures = "0.3"
+multibase = "0.9"
 
 # ICN internal crates
 icn-types = { path = "../../common/icn-types" }
-icn-identity-core = { path = "../../identity/core/icn-identity-core" }
+icn-identity-core = { path = "../../common/icn-identity-core" }
 
 [features]
 default = []

@@ -1462,7 +1462,7 @@ dependencies = [
  "rocksdb",
  "serde",
  "serde_bytes",
- "serde_ipld_dagcbor",
+ "serde_ipld_dagcbor 0.2.2",
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
@@ -1476,12 +1476,14 @@ dependencies = [
  "anyhow",
  "chrono",
  "ed25519-dalek",
+ "futures",
  "hex",
  "icn-identity-core",
  "icn-types",
  "log",
+ "multibase",
  "serde",
- "serde_ipld_dagcbor",
+ "serde_ipld_dagcbor 0.5.0",
  "serde_json",
  "thiserror 1.0.69",
  "uniffi",
@@ -1661,6 +1663,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e0242819d153cba4b4b05a5a8f2a7e9bbf97b6055b2a002b395c96b5ff3c0222"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "ipld-core"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f11e58f441b08619fccfa54c237d418b8937e29407e36c57e60ac2bc0bd1c75e"
+dependencies = [
+ "cid 0.11.1",
+ "serde",
+ "serde_bytes",
 ]
 
 [[package]]
@@ -2900,6 +2913,18 @@ checksum = "c1e23de7a4a18dff77ab9531f279a882500b8cf3549fde044d4e10481b411f1e"
 dependencies = [
  "cbor4ii",
  "cid 0.8.6",
+ "scopeguard",
+ "serde",
+]
+
+[[package]]
+name = "serde_ipld_dagcbor"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb0e0bd7befb28ff014740ae0d0969b1ec6deaa82f34d1ddf0285bcbf9857dbe"
+dependencies = [
+ "cbor4ii",
+ "ipld-core",
  "scopeguard",
  "serde",
 ]
