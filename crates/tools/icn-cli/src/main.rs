@@ -24,6 +24,11 @@ use commands::handle_key_gen; // Add keygen handler
 use std::path::PathBuf;
 use tokio;
 
+// Add command handlers
+use commands::coop::CoopCommands;
+use commands::coop::handle_coop_command;
+use commands::community::CommunityCommands;
+use commands::community::handle_community_command;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -91,6 +96,14 @@ enum Commands {
     /// Voting commands
     #[command(subcommand)]
     Vote(commands::vote::VoteCommands),
+
+    /// Cooperative commands
+    #[command(subcommand)]
+    Coop(commands::coop::CoopCommands),
+    
+    /// Community commands
+    #[command(subcommand)]
+    Community(commands::community::CommunityCommands),
 }
 
 // Removed DagCommands enum definition from here (moved to commands/dag.rs)
@@ -140,6 +153,12 @@ async fn main() -> Result<(), CliError> {
         Commands::Vote(cmd) => {
             handle_vote_commands(cmd.clone(), &mut context).await?
         }
+        Commands::Coop(cmd) => {
+            handle_coop_command(cmd, &mut context).await?
+        },
+        Commands::Community(cmd) => {
+            handle_community_command(cmd, &mut context).await?
+        },
     }
     
     Ok(())

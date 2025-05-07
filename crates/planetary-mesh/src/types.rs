@@ -1,26 +1,85 @@
 use serde::{Deserialize, Serialize};
 use icn_core_types::{Cid, Did}; // Updated from use crate::{Did, Cid}
 
-/// Placeholder for defining compute/storage/network resource requirements.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum ResourceType {
-    CpuCores(u32),
-    RamMb(u64),
-    StorageGb(u64),
-    Gpu(String), // e.g., "NVIDIA_RTX_3080", "Any"
-    NetworkBandwidthMbps(u32),
-    // Add other resource types as needed
+/// Job status enum
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum JobStatus {
+    /// Job has been submitted but not yet scheduled
+    Submitted,
+    /// Job has been scheduled and is waiting for execution
+    Scheduled,
+    /// Job is currently executing
+    Running,
+    /// Job has completed successfully
+    Completed,
+    /// Job has failed
+    Failed,
+    /// Job has been canceled
+    Canceled,
 }
 
-/// Placeholder definition for a Job Manifest.
+/// Resource types that can be requested for a job
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceType {
+    /// RAM in MB
+    RamMb(u64),
+    /// CPU cores
+    CpuCores(u64),
+    /// GPU cores
+    GpuCores(u64),
+    /// Disk space in MB
+    StorageMb(u64),
+}
+
+/// Node capability for resource matching
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeCapability {
+    /// Type of capability
+    pub resource_type: ResourceType,
+    /// Whether this resource is currently available
+    pub available: bool,
+    /// When this capability was last updated
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Bid for a job execution
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Bid {
+    /// Node ID making the bid
+    pub node_id: String,
+    /// Cooperative ID this node belongs to
+    pub coop_id: String,
+    /// Price of the bid in compute units
+    pub price: u64,
+    /// Expected completion time 
+    pub eta: chrono::DateTime<chrono::Utc>,
+    /// Submitted at timestamp
+    pub submitted_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Job manifest for execution
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobManifest {
-    pub id: String, // Or perhaps Cid?
-    pub wasm_module_cid: Cid,
+    /// Job ID
+    pub id: String,
+    /// Federation ID
+    pub federation_id: String,
+    /// Cooperative ID that submitted this job
+    pub origin_coop_id: String,
+    /// CID of the WASM module to execute
+    pub wasm_module_cid: String,
+    /// Resource requirements
     pub resource_requirements: Vec<ResourceType>,
+    /// Job parameters as JSON
     pub parameters: serde_json::Value,
-    pub owner: Did, // Added owner DID
-    pub deadline: Option<chrono::DateTime<chrono::Utc>>, // Added optional deadline
+    /// Owner DID
+    pub owner: String,
+    /// Optional deadline
+    pub deadline: Option<chrono::DateTime<chrono::Utc>>,
+    /// Optional maximum compute units willing to spend
+    pub max_compute_units: Option<u64>,
 }
 
 /// Placeholder definition for a Node Capability advertisement.
@@ -30,27 +89,4 @@ pub struct NodeCapability {
      pub node_id: Did,
      pub available_resources: Vec<ResourceType>, // Simplified representation
      pub supported_features: Vec<String>, // e.g., "wasm", "sgx"
-}
-
-
-/// Placeholder definition for a Bid on a job.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Bid {
-    pub job_manifest_cid: Cid,
-    pub bidder_node_id: Did,
-    pub price: u64, // Price in some token unit
-    pub confidence: f32, // Placeholder for scoring metric (0.0 - 1.0)
-    pub offered_capabilities: Vec<ResourceType>, // What the node *offers* for this bid
-    pub expires_at: Option<chrono::DateTime<chrono::Utc>>, // Bid expiration
-}
-
-/// Represents the status of a job in the mesh network.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum JobStatus {
-    Pending,
-    Scheduled,
-    Running { progress_percent: u8 },
-    Completed { result_cid: Option<Cid> }, // Cid from icn_core_types (imported at top of file)
-    Failed { error_message: String },
-    NotFound, // Used if the job_cid doesn't correspond to a known job
 } 

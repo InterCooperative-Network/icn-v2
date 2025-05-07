@@ -9,6 +9,9 @@ pub mod proposal;
 pub mod vote;
 pub mod policy;
 pub mod keygen;
+pub mod coop;
+pub mod community;
+pub mod scope;
 
 // Re-export handlers for main.rs
 pub use dag::handle_dag_command;
@@ -21,4 +24,16 @@ pub use bundle::handle_bundle_command;
 pub use receipt::handle_receipt_command;
 pub use sync_p2p::handle_dag_sync_command;
 pub use policy::handle_policy_command;
-pub use keygen::handle_key_gen; 
+pub use keygen::handle_key_gen;
+
+// Export coop module components
+pub use coop::CoopCommands;
+pub use coop::handle_coop_command;
+
+// Export community module components
+pub use community::CommunityCommands;
+pub use community::handle_community_command;
+
+// Export scope module components
+pub use scope::ScopeCommands;
+pub use scope::handle_scope_command; 

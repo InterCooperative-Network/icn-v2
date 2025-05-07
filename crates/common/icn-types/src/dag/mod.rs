@@ -83,19 +83,36 @@ pub trait PublicKeyResolver: Send + Sync {
     // async fn resolve_async(&self, did: &Did) -> Result<VerifyingKey, DagError>;
 }
 
+/// Defines the scope of a DAG node
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub enum NodeScope {
+    /// Node belongs to a Cooperative's DAG
+    Cooperative,
+    /// Node belongs to a Community's DAG
+    Community,
+    /// Node belongs to a Federation's DAG
+    Federation,
+}
+
+impl Default for NodeScope {
+    fn default() -> Self {
+        Self::Federation
+    }
+}
+
 /// Metadata associated with a DAG node
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct DagNodeMetadata {
-    /// Timestamp when the node was created
+    /// Federation ID this node belongs to
+    pub federation_id: String,
+    /// Timestamp when this node was created
     pub timestamp: DateTime<Utc>,
-    /// Optional sequence number for the author's chain
-    pub sequence: Option<u64>,
-    /// Optional federation identifier where this node originated
-    pub federation_id: Option<String>,
-    /// Optional label for categorizing the node
-    pub labels: Option<Vec<String>>,
-    /// Any additional metadata as JSON
-    pub extra: Option<serde_json::Value>,
+    /// Optional label for the node
+    pub label: Option<String>,
+    /// Scope of this node (Cooperative, Community, or Federation)
+    pub scope: NodeScope,
+    /// ID of the scope (coop_id or community_id), null for Federation scope
+    pub scope_id: Option<String>,
 }
 
 /// Defines the content types that can be stored in a DAG node
@@ -263,11 +280,11 @@ impl DagNodeBuilder {
             parents: Vec::new(),
             author: None,
             metadata: DagNodeMetadata {
+                federation_id: String::new(),
                 timestamp: Utc::now(),
-                sequence: None,
-                federation_id: None,
-                labels: None,
-                extra: None,
+                label: None,
+                scope: NodeScope::default(),
+                scope_id: None,
             },
         }
     }
@@ -296,32 +313,27 @@ impl DagNodeBuilder {
         self
     }
     
-    /// Set the sequence number
-    pub fn with_sequence(mut self, sequence: u64) -> Self {
-        self.metadata.sequence = Some(sequence);
-        self
-    }
-    
     /// Set the federation ID
     pub fn with_federation_id(mut self, federation_id: String) -> Self {
-        self.metadata.federation_id = Some(federation_id);
+        self.metadata.federation_id = federation_id;
         self
     }
     
-    /// Add a label to this node
+    /// Set a label for this node
     pub fn with_label(mut self, label: String) -> Self {
-        if self.metadata.labels.is_none() {
-            self.metadata.labels = Some(Vec::new());
-        }
-        if let Some(labels) = &mut self.metadata.labels {
-            labels.push(label);
-        }
+        self.metadata.label = Some(label);
         self
     }
     
-    /// Set extra metadata
-    pub fn with_extra(mut self, extra: serde_json::Value) -> Self {
-        self.metadata.extra = Some(extra);
+    /// Set the scope for this node
+    pub fn with_scope(mut self, scope: NodeScope) -> Self {
+        self.metadata.scope = scope;
+        self
+    }
+    
+    /// Set the scope ID for this node (cooperative or community ID)
+    pub fn with_scope_id(mut self, scope_id: String) -> Self {
+        self.metadata.scope_id = Some(scope_id);
         self
     }
     
@@ -329,6 +341,16 @@ impl DagNodeBuilder {
     pub fn build(self) -> Result<DagNode, DagError> {
         let payload = self.payload.ok_or_else(|| DagError::InvalidNodeData("Payload is required".to_string()))?;
         let author = self.author.ok_or_else(|| DagError::InvalidNodeData("Author is required".to_string()))?;
+        
+        if self.metadata.federation_id.is_empty() {
+            return Err(DagError::InvalidNodeData("Federation ID is required".to_string()));
+        }
+        
+        // If scope is Cooperative or Community, scope_id must be provided
+        if (self.metadata.scope == NodeScope::Cooperative || self.metadata.scope == NodeScope::Community) 
+            && self.metadata.scope_id.is_none() {
+            return Err(DagError::InvalidNodeData(format!("Scope ID is required for {:?} scope", self.metadata.scope)));
+        }
         
         Ok(DagNode {
             payload,

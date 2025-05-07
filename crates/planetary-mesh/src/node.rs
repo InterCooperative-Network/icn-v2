@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use icn_identity_core::did::{DidKey, DidKeyError};
 use icn_identity_core::manifest::NodeManifest;
 use icn_types::Did;
-use icn_types::dag::{DagNodeBuilder, DagPayload, SharedDagStore, SignedDagNode};
+use icn_types::dag::{DagNodeBuilder, DagPayload, SharedDagStore, SignedDagNode, NodeScope};
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -60,11 +60,46 @@ impl GossipsubProtocol {
         }
     }
     
+    /// Create a new GossipsubProtocol with the appropriate topic based on scope
+    pub fn new_scoped(federation_id: &str, scope: NodeScope, scope_id: Option<&str>) -> Self {
+        let topic = match scope {
+            NodeScope::Federation => format!("icn/{}/mesh", federation_id),
+            NodeScope::Cooperative => {
+                if let Some(coop_id) = scope_id {
+                    format!("icn/{}/{}/mesh", federation_id, coop_id)
+                } else {
+                    format!("icn/{}/mesh", federation_id)
+                }
+            },
+            NodeScope::Community => {
+                if let Some(community_id) = scope_id {
+                    format!("icn/{}/{}/mesh", federation_id, community_id)
+                } else {
+                    format!("icn/{}/mesh", federation_id)
+                }
+            },
+        };
+        
+        Self { topic }
+    }
+    
+    /// Create a new GossipsubProtocol for trade messages
+    pub fn new_trade(federation_id: &str) -> Self {
+        Self {
+            topic: format!("icn/{}/trade", federation_id),
+        }
+    }
+    
     /// Publish a message to the gossipsub topic
     pub async fn publish(&self, message: &str) -> Result<(), MeshNodeError> {
         // In a real implementation, this would use libp2p gossipsub
         println!("Publishing to topic {}: {}", self.topic, message);
         Ok(())
+    }
+    
+    /// Get the topic for this protocol
+    pub fn topic(&self) -> &str {
+        &self.topic
     }
 }
 

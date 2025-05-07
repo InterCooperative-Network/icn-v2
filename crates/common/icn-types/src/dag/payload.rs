@@ -9,6 +9,24 @@ pub enum EventPayload {
     Vote { proposal_id: String, choice: String },
     Execution { receipt_cid: String },
     Receipt { receipt_cid: Cid },
+    // New federation join flow payloads
+    JoinRequest { 
+        scope_type: String,  // "Cooperative" or "Community"
+        scope_id: String, 
+        scope_genesis_cid: String,
+        federation_id: String,
+        federation_genesis_cid: String 
+    },
+    JoinVote { 
+        join_request_cid: String, 
+        choice: String, 
+        reason: Option<String> 
+    },
+    JoinApproval { 
+        join_request_cid: String,
+        attestation_cid: String,
+        lineage_cid: String 
+    },
     Custom { fields: serde_json::Value },
 }
 
@@ -46,6 +64,49 @@ impl EventPayload {
     /// Create a Receipt payload
     pub fn receipt(receipt_cid: Cid) -> Self {
         EventPayload::Receipt { receipt_cid }
+    }
+    
+    /// Create a join request payload
+    pub fn join_request(
+        scope_type: impl Into<String>,
+        scope_id: impl Into<String>, 
+        scope_genesis_cid: impl Into<String>,
+        federation_id: impl Into<String>,
+        federation_genesis_cid: impl Into<String>
+    ) -> Self {
+        EventPayload::JoinRequest {
+            scope_type: scope_type.into(),
+            scope_id: scope_id.into(),
+            scope_genesis_cid: scope_genesis_cid.into(),
+            federation_id: federation_id.into(),
+            federation_genesis_cid: federation_genesis_cid.into(),
+        }
+    }
+    
+    /// Create a join vote payload
+    pub fn join_vote(
+        join_request_cid: impl Into<String>, 
+        choice: impl Into<String>,
+        reason: Option<String>
+    ) -> Self {
+        EventPayload::JoinVote {
+            join_request_cid: join_request_cid.into(),
+            choice: choice.into(),
+            reason,
+        }
+    }
+    
+    /// Create a join approval payload
+    pub fn join_approval(
+        join_request_cid: impl Into<String>,
+        attestation_cid: impl Into<String>,
+        lineage_cid: impl Into<String>
+    ) -> Self {
+        EventPayload::JoinApproval {
+            join_request_cid: join_request_cid.into(),
+            attestation_cid: attestation_cid.into(),
+            lineage_cid: lineage_cid.into(),
+        }
     }
     
     /// Create a Custom payload

@@ -25,6 +25,12 @@ use crate::manifest_verifier::{ManifestVerifier, ManifestVerificationError};
 // Use our own Architecture and EnergyInfo types to avoid conflicts
 use crate::cap_index::CapabilitySelector as MeshCapabilitySelector;
 
+use icn_types::dag::NodeScope;
+use icn_economics::token::{ResourceType as EconomicResourceType};
+use icn_economics::storage::TokenStore;
+use icn_economics::transaction::{ResourceTransaction, TransactionType};
+use crate::types::ResourceType as MeshResourceType;
+
 /// Architecture type with Default implementation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Architecture {
@@ -352,6 +358,22 @@ impl CapabilityIndex {
     }
 }
 
+/// Match result with cooperative context
+#[derive(Debug, Clone)]
+pub struct ScopedMatchResult {
+    /// Original match result
+    pub base: MatchResult,
+    
+    /// Origin cooperative ID
+    pub origin_coop: String,
+    
+    /// Executor cooperative ID
+    pub executor_coop: String,
+    
+    /// Transaction CIDs for resource tracking
+    pub transaction_cids: Vec<String>,
+}
+
 /// Mesh scheduler for task-node matching
 pub struct Scheduler {
     /// Federation ID this scheduler belongs to
@@ -368,6 +390,9 @@ pub struct Scheduler {
     
     /// Scheduler's DID key for signing
     did_key: Option<DidKey>,
+    
+    /// Token store for resource accounting
+    token_store: Option<Arc<dyn TokenStore + Send + Sync>>,
 }
 
 impl Scheduler {
@@ -384,6 +409,7 @@ impl Scheduler {
             dag_store,
             scheduler_did,
             did_key: None,
+            token_store: None,
         }
     }
     
@@ -401,7 +427,31 @@ impl Scheduler {
             dag_store,
             scheduler_did,
             did_key: Some(did_key),
+            token_store: None,
         }
+    }
+    
+    /// Create a new scheduler with token store for resource accounting
+    pub fn new_with_token_store(
+        federation_id: String,
+        cap_index: Arc<CapabilityIndex>,
+        dag_store: SharedDagStore,
+        scheduler_did: Did,
+        token_store: Arc<dyn TokenStore + Send + Sync>,
+    ) -> Self {
+        Self {
+            federation_id,
+            cap_index,
+            dag_store,
+            scheduler_did,
+            did_key: None,
+            token_store: Some(token_store),
+        }
+    }
+    
+    /// Set the token store for resource accounting
+    pub fn set_token_store(&mut self, token_store: Arc<dyn TokenStore + Send + Sync>) {
+        self.token_store = Some(token_store);
     }
     
     /// Listen for incoming task requests and bids
@@ -695,6 +745,211 @@ impl Scheduler {
         info!("Accepted bid {} from {}", result.bid_cid, result.bid.bidder);
         
         Ok(())
+    }
+    
+    /// Dispatch a job across cooperatives
+    pub async fn dispatch_cross_coop(
+        &self,
+        request: TaskRequest,
+        origin_coop: String,
+    ) -> Result<ScopedMatchResult> {
+        // Verify the origin cooperative has enough resource tokens
+        self.verify_resource_budget(&request, &origin_coop).await?;
+        
+        // Find the best node for the job
+        let match_result = self.dispatch(&request, None).await?;
+        
+        // Get the executor cooperative ID from the selected node's manifest
+        let executor_coop = self.get_coop_for_node(&match_result.bid.bidder).await?;
+        
+        // Create a resource debit transaction for the origin cooperative
+        let resource_cost = self.calculate_resource_cost(&request)?;
+        let debit_tx = ResourceTransaction::new_debit(
+            EconomicResourceType::ComputeUnit,
+            resource_cost,
+            &origin_coop,
+            &self.federation_id,
+            self.scheduler_did.clone(),
+        );
+        
+        // Create a resource credit transaction for the executor cooperative
+        let execution_fee = self.calculate_execution_fee(&request)?;
+        let credit_tx = ResourceTransaction::new_credit(
+            EconomicResourceType::ComputeUnit,
+            execution_fee,
+            &executor_coop,
+            &self.federation_id,
+            self.scheduler_did.clone(),
+        );
+        
+        // Record the transactions in the DAG
+        let mut transaction_cids = Vec::new();
+        
+        // Record debit in origin cooperative's DAG
+        let debit_node = DagNodeBuilder::new()
+            .with_payload(DagPayload::Json(serde_json::to_value(&debit_tx)?))
+            .with_author(self.scheduler_did.clone())
+            .with_federation_id(self.federation_id.clone())
+            .with_scope(NodeScope::Cooperative)
+            .with_scope_id(origin_coop.clone())
+            .with_label("ResourceDebit".to_string())
+            .build()?;
+        
+        let signed_debit_node = if let Some(key) = &self.did_key {
+            create_signed_node(debit_node, key)?
+        } else {
+            create_empty_signed_node(debit_node)
+        };
+        
+        let debit_cid = self.dag_store.add_node(signed_debit_node).await?;
+        transaction_cids.push(debit_cid.to_string());
+        
+        // Record credit in executor cooperative's DAG
+        let credit_node = DagNodeBuilder::new()
+            .with_payload(DagPayload::Json(serde_json::to_value(&credit_tx)?))
+            .with_author(self.scheduler_did.clone())
+            .with_federation_id(self.federation_id.clone())
+            .with_scope(NodeScope::Cooperative)
+            .with_scope_id(executor_coop.clone())
+            .with_label("ResourceCredit".to_string())
+            .build()?;
+        
+        let signed_credit_node = if let Some(key) = &self.did_key {
+            create_signed_node(credit_node, key)?
+        } else {
+            create_empty_signed_node(credit_node)
+        };
+        
+        let credit_cid = self.dag_store.add_node(signed_credit_node).await?;
+        transaction_cids.push(credit_cid.to_string());
+        
+        // Record cross-cooperative transaction in federation DAG
+        let cross_coop_tx = ResourceTransaction::new_transfer(
+            EconomicResourceType::ComputeUnit,
+            resource_cost,
+            &origin_coop,
+            &executor_coop,
+            &self.federation_id,
+            self.scheduler_did.clone(),
+        );
+        
+        let transfer_node = DagNodeBuilder::new()
+            .with_payload(DagPayload::Json(serde_json::to_value(&cross_coop_tx)?))
+            .with_author(self.scheduler_did.clone())
+            .with_federation_id(self.federation_id.clone())
+            .with_scope(NodeScope::Federation)
+            .with_label("CrossCoopTransaction".to_string())
+            .build()?;
+        
+        let signed_transfer_node = if let Some(key) = &self.did_key {
+            create_signed_node(transfer_node, key)?
+        } else {
+            create_empty_signed_node(transfer_node)
+        };
+        
+        let transfer_cid = self.dag_store.add_node(signed_transfer_node).await?;
+        transaction_cids.push(transfer_cid.to_string());
+        
+        // Apply transactions to the token store if available
+        if let Some(token_store) = &self.token_store {
+            token_store.apply_transaction(&debit_tx).await.map_err(|e| 
+                anyhow!("Failed to apply debit transaction: {}", e)
+            )?;
+            
+            token_store.apply_transaction(&credit_tx).await.map_err(|e| 
+                anyhow!("Failed to apply credit transaction: {}", e)
+            )?;
+        }
+        
+        // Create the scoped match result
+        let scoped_result = ScopedMatchResult {
+            base: match_result,
+            origin_coop,
+            executor_coop,
+            transaction_cids,
+        };
+        
+        Ok(scoped_result)
+    }
+    
+    /// Verify that a cooperative has sufficient resources for a job
+    async fn verify_resource_budget(&self, request: &TaskRequest, coop_id: &str) -> Result<bool> {
+        if let Some(token_store) = &self.token_store {
+            let required_tokens = self.calculate_resource_cost(request)?;
+            let available_tokens = token_store
+                .get_balance(coop_id, &EconomicResourceType::ComputeUnit)
+                .await
+                .map_err(|e| anyhow!("Failed to get balance: {}", e))?;
+            
+            if available_tokens < required_tokens {
+                return Err(anyhow!("Insufficient compute units. Required: {}, Available: {}", 
+                    required_tokens, available_tokens));
+            }
+            
+            Ok(true)
+        } else {
+            // If no token store is available, just approve the job
+            Ok(true)
+        }
+    }
+    
+    /// Calculate resource cost based on task requirements
+    fn calculate_resource_cost(&self, request: &TaskRequest) -> Result<u64> {
+        // Base cost for any job
+        let mut cost: u64 = 10;
+        
+        // Add cost for memory
+        cost += request.memory_mb / 10;
+        
+        // Add cost for cores
+        cost += request.cores * 5;
+        
+        // Add cost for priority (1-100 scale)
+        cost += (request.priority as u64).max(1);
+        
+        Ok(cost)
+    }
+    
+    /// Calculate execution fee (what the executor cooperative receives)
+    fn calculate_execution_fee(&self, request: &TaskRequest) -> Result<u64> {
+        // Executor gets 80% of the total cost
+        let total_cost = self.calculate_resource_cost(request)?;
+        let fee = (total_cost * 80) / 100;
+        Ok(fee)
+    }
+    
+    /// Get the cooperative ID for a node
+    async fn get_coop_for_node(&self, node_did: &Did) -> Result<String> {
+        let manifest_opt = self.cap_index.get_manifest(node_did).await;
+        
+        if let Some((manifest, _)) = manifest_opt {
+            // In a real implementation, we would have a field in the manifest for the cooperative ID
+            // For now, derive it from the metadata or another field
+            if let Some(metadata) = manifest.metadata {
+                if let Some(coop_id) = metadata.get("coop_id") {
+                    return Ok(coop_id.as_str().unwrap_or("unknown").to_string());
+                }
+            }
+            
+            // Fallback: use the first part of the DID as the coop ID
+            let did_str = node_did.to_string();
+            let parts: Vec<&str> = did_str.split(':').collect();
+            if parts.len() >= 3 {
+                let possible_coop = parts[2];
+                if possible_coop.contains('-') {
+                    let coop_parts: Vec<&str> = possible_coop.split('-').collect();
+                    if !coop_parts.is_empty() {
+                        return Ok(coop_parts[0].to_string());
+                    }
+                }
+                return Ok(possible_coop.to_string());
+            }
+            
+            // Ultimate fallback
+            Ok("unknown-coop".to_string())
+        } else {
+            Err(anyhow!("Could not find manifest for node {}", node_did))
+        }
     }
 }
 
