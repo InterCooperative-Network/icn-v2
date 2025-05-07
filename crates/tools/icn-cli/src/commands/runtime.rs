@@ -1,8 +1,17 @@
 use clap::{Arg, Args, Subcommand, ArgMatches, ValueHint};
 use crate::context::CliContext;
 use crate::error::{CliError, CliResult};
-use icn_runtime::config::ExecutionConfig;
-use std::path::PathBuf;
+use icn_runtime::{
+    config::ExecutionConfig,
+    ModernWasmExecutor,
+    engine::executor::ContextExtension,
+    abi::context::HostContext
+};
+use icn_types::{Cid, Did, dag::{EventId, DagStore}};
+use std::path::{PathBuf, Path};
+use std::sync::Arc;
+use std::str::FromStr;
+use anyhow::Context as AnyhowContext;
 
 #[derive(Subcommand, Debug)]
 pub enum RuntimeCommands {
@@ -60,61 +69,229 @@ pub struct ValidateModuleArgs {
     pub policy_file: Option<PathBuf>,
 }
 
+/// Context implementation for our WASM executor
+struct RuntimeExecutionContext {
+    execution_config: ExecutionConfig,
+    log_enabled: bool,
+}
+
+impl RuntimeExecutionContext {
+    fn new(config: ExecutionConfig, verbose: bool) -> Self {
+        Self {
+            execution_config: config,
+            log_enabled: verbose,
+        }
+    }
+}
+
+impl ContextExtension for RuntimeExecutionContext {
+    fn get_execution_config(&self) -> &ExecutionConfig {
+        &self.execution_config
+    }
+    
+    fn get_dag_store_mut(&mut self) -> Option<&mut (dyn DagStore + Send + Sync)> {
+        None // We don't have a DAG store in this simple implementation
+    }
+    
+    fn node_did(&self) -> Option<&Did> {
+        None // We don't have a node DID in this simple implementation
+    }
+    
+    fn federation_did(&self) -> Option<&Did> {
+        None // We don't have a federation DID in this simple implementation
+    }
+}
+
+impl HostContext for RuntimeExecutionContext {
+    fn log_message(&self, message: &str) {
+        if self.log_enabled {
+            println!("[WASM] {}", message);
+        }
+    }
+    
+    fn get_caller_did(&self) -> &Did {
+        // This is a placeholder - in a real implementation, we'd have a valid DID
+        static DUMMY_DID: Did = Did::new_unchecked("did:icn:placeholder");
+        &DUMMY_DID
+    }
+}
+
 pub async fn handle_runtime_command(
     context: &mut CliContext, 
     cmd: &RuntimeCommands,
 ) -> CliResult {
     if context.verbose { println!("Handling Runtime command: {:?}", cmd); }
     match cmd {
-        RuntimeCommands::Run(args) => {
-            println!("Executing runtime command: Run");
-            println!("  Module Path: {}", args.module_path);
-            if let Some(cid) = &args.module_cid { println!("  Module CID: {}", cid); }
-            if let Some(path) = &args.input_data_path { println!("  Input Data Path: {}", path); }
-            if let Some(id) = &args.trigger_event_id { println!("  Trigger Event ID: {}", id); }
-
-            let mut execution_config = ExecutionConfig::default();
-            if args.no_auto_receipt {
-                execution_config.auto_issue_receipts = false;
-                execution_config.anchor_receipts = false; 
-            }
-            if args.no_anchor_receipt {
-                execution_config.anchor_receipts = false;
-            }
-            if let Some(dir) = &args.receipt_dir {
-                execution_config.receipt_export_dir = Some(dir.clone());
-            } else if args.no_auto_receipt {
-                execution_config.receipt_export_dir = None;
-            }
-
-            println!("  Effective ExecutionConfig for receipts:");
-            println!("    Auto-issue:     {}", execution_config.auto_issue_receipts);
-            println!("    Anchor receipts:  {}", execution_config.anchor_receipts);
-            if let Some(dir) = &execution_config.receipt_export_dir {
-                println!("    Export directory: {}", dir.display());
-            } else {
-                println!("    Export directory: None");
-            }
-            println!("Runtime execution logic (placeholder)... Arguments processed.");
-            // TODO: Implement actual Wasm execution
-            Ok(())
-        }
+        RuntimeCommands::Run(args) => handle_run_module(context, args).await,
         RuntimeCommands::Inspect(args) => handle_inspect_module(context, args).await,
         RuntimeCommands::Validate(args) => handle_validate_module(context, args).await,
     }
 }
 
+async fn handle_run_module(context: &mut CliContext, args: &RunModuleArgs) -> CliResult {
+    println!("Executing WASM module: {}", args.module_path);
+    
+    // Create execution configuration
+    let mut execution_config = ExecutionConfig::default();
+    if args.no_auto_receipt {
+        execution_config.auto_issue_receipts = false;
+        execution_config.anchor_receipts = false; 
+    }
+    
+    if args.no_anchor_receipt {
+        execution_config.anchor_receipts = false;
+    }
+    
+    if let Some(dir) = &args.receipt_dir {
+        execution_config.receipt_export_dir = Some(dir.clone());
+    }
+    
+    // Create runtime context with our execution config
+    let runtime_ctx = RuntimeExecutionContext::new(execution_config, context.verbose);
+    let runtime_ctx = Arc::new(runtime_ctx);
+    
+    // Create the executor
+    let executor = ModernWasmExecutor::new()
+        .map_err(|e| CliError::Other(format!("Failed to create WASM executor: {}", e).into()))?;
+    
+    // Load the WASM module
+    let wasm_bytes = executor.load_module_from_file(&args.module_path)
+        .map_err(|e| CliError::Other(format!("Failed to load WASM module: {}", e).into()))?;
+    
+    println!("Module loaded: {} bytes", wasm_bytes.len());
+    
+    // Generate or use the provided module CID
+    let module_cid = if let Some(cid_str) = &args.module_cid {
+        Cid::from_str(cid_str)
+            .map_err(|_| CliError::InvalidArgument(format!("Invalid CID format: {}", cid_str)))?
+    } else {
+        // Generate a CID from the module bytes
+        // This is a simplified approach - real implementations would use proper IPLD hashing
+        Cid::from_bytes(&[1u8; 32])
+            .map_err(|_| CliError::Other("Failed to generate CID".into()))?
+    };
+    
+    // Parse event ID if provided
+    let event_id = if let Some(event_id_str) = &args.trigger_event_id {
+        let event_id_bytes = hex::decode(event_id_str)
+            .map_err(|_| CliError::InvalidArgument(format!("Invalid event ID format: {}", event_id_str)))?;
+        
+        if event_id_bytes.len() != 32 {
+            return Err(CliError::InvalidArgument(format!(
+                "Event ID must be 32 bytes, got {} bytes", event_id_bytes.len()
+            )));
+        }
+        
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&event_id_bytes);
+        Some(EventId(arr))
+    } else {
+        None
+    };
+    
+    // Read input data if provided
+    let input_data = if let Some(input_path) = &args.input_data_path {
+        Some(std::fs::read(input_path)
+            .map_err(|e| CliError::Io(e))?)
+    } else {
+        None
+    };
+    
+    // Set fuel limit (a reasonable default for CLI execution)
+    let fuel_limit = Some(10_000_000);
+    
+    println!("Executing module...");
+    
+    // Execute the module
+    let result = executor.execute(
+        &wasm_bytes,
+        runtime_ctx,
+        module_cid.clone(),
+        event_id,
+        input_data.as_deref(),
+        fuel_limit
+    ).await
+    .map_err(|e| CliError::Other(format!("Module execution failed: {}", e).into()))?;
+    
+    // Print execution results
+    println!("\nExecution complete!");
+    println!("  Module CID: {}", result.module_cid);
+    println!("  Execution time: {} ms", result.execution_time_ms);
+    
+    if let Some(fuel) = result.fuel_consumed {
+        println!("  Fuel consumed: {}", fuel);
+    }
+    
+    println!("  Result CID: {}", result.result_cid);
+    
+    Ok(())
+}
+
 // Placeholder handlers
 async fn handle_inspect_module(_context: &mut CliContext, args: &InspectModuleArgs) -> CliResult {
     println!("Executing runtime inspect for module: {}, extended: {}", args.module_ref, args.extended);
-    // TODO: Implement Wasm module inspection (e.g., using wasmparser or similar)
-    //       to show imports, exports, custom sections (like ICN manifest).
-    Err(CliError::Unimplemented("runtime inspect".to_string()))
+    
+    // Create the executor
+    let executor = ModernWasmExecutor::new()
+        .map_err(|e| CliError::Other(format!("Failed to create WASM executor: {}", e).into()))?;
+    
+    // Check if the reference is a file path or CID
+    if Path::new(&args.module_ref).exists() {
+        // Load the WASM module from file
+        let wasm_bytes = executor.load_module_from_file(&args.module_ref)
+            .map_err(|e| CliError::Other(format!("Failed to load WASM module: {}", e).into()))?;
+        
+        println!("\nModule information:");
+        println!("  Size: {} bytes", wasm_bytes.len());
+        
+        // Simple validation check
+        match executor.validate_module(&wasm_bytes) {
+            Ok(true) => println!("  Validation: Passed basic validation"),
+            Ok(false) => println!("  Validation: Failed, but no specific errors reported"),
+            Err(e) => println!("  Validation: Failed with error: {}", e),
+        }
+    } else {
+        return Err(CliError::NotFound(format!("Module not found at path: {}", args.module_ref)));
+    }
+    
+    println!("\nDetailed inspection of WASM modules is not yet implemented.");
+    println!("Future versions will show imports, exports, and custom sections.");
+    
+    Ok(())
 }
 
 async fn handle_validate_module(_context: &mut CliContext, args: &ValidateModuleArgs) -> CliResult {
     println!("Executing runtime validate for module: {}, policy: {:?}", args.module_path, args.policy_file);
-    // TODO: Implement Wasm module validation against ICN rules (e.g., allowed imports, resource limits)
-    //       and optional policy file.
-    Err(CliError::Unimplemented("runtime validate".to_string()))
+    
+    // Create the executor
+    let executor = ModernWasmExecutor::new()
+        .map_err(|e| CliError::Other(format!("Failed to create WASM executor: {}", e).into()))?;
+    
+    // Load the WASM module
+    let wasm_bytes = executor.load_module_from_file(&args.module_path)
+        .map_err(|e| CliError::Other(format!("Failed to load WASM module: {}", e).into()))?;
+    
+    println!("Module loaded: {} bytes", wasm_bytes.len());
+    
+    // Validate the module
+    match executor.validate_module(&wasm_bytes) {
+        Ok(true) => {
+            println!("✅ Module validation successful!");
+            println!("The module meets the basic requirements for ICN execution.");
+        },
+        Ok(false) => {
+            println!("⚠️ Module validation failed without specific errors.");
+            println!("The module may not be suitable for ICN execution.");
+        },
+        Err(e) => {
+            println!("❌ Module validation failed: {}", e);
+            println!("The module cannot be executed in the ICN runtime.");
+            return Err(CliError::Other(format!("Module validation failed: {}", e).into()));
+        }
+    }
+    
+    println!("\nFull validation against ICN policies is not yet implemented.");
+    println!("Future versions will check for compliance with security and resource limits.");
+    
+    Ok(())
 } 

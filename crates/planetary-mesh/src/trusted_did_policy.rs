@@ -1,14 +1,17 @@
 use anyhow::{Result, anyhow, Context};
-use chrono::{DateTime, Utc};
-use icn_identity_core::{Did, did::DidKey};
-use icn_types::dag::{DagStore, Cid, DagPayload, SignedDagNode};
+use icn_core_types::Did;
+use icn_identity_core::did::DidKey;
+use icn_core_types::Cid;
+use icn_types::dag::{DagStore, DagPayload, SignedDagNode};
 use serde::{Serialize, Deserialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::{Arc, RwLock};
-use std::fs;
+use std::sync::Arc;
 use log::{debug, info, warn, error};
 use prometheus::{IntCounterVec, Registry};
+use chrono::{DateTime, Utc};
+use multibase::{Base, encode, decode};
+use ed25519_dalek::{Signature, VerifyingKey, Verifier};
 
 /// Trust level for DIDs in the policy
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -730,7 +733,7 @@ impl TrustPolicyCredential {
         let key_part = self.issuer.trim_start_matches("did:key:");
         
         // Decode the multibase encoding
-        let multibase_decoded = multibase::decode(key_part)
+        let multibase_decoded = decode(key_part)
             .map_err(|e| anyhow!("Failed to decode key part: {}", e))?;
         
         // Check for Ed25519 prefix (0xed01)
@@ -745,7 +748,7 @@ impl TrustPolicyCredential {
         }
         
         // Create verifying key
-        let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(key_bytes.try_into().unwrap())
+        let verifying_key = VerifyingKey::from_bytes(key_bytes.try_into().unwrap())
             .map_err(|e| anyhow!("Invalid public key: {}", e))?;
         
         // Decode signature
@@ -756,7 +759,7 @@ impl TrustPolicyCredential {
             return Err(anyhow!("Invalid signature length"));
         }
         
-        let signature = ed25519_dalek::Signature::from_bytes(&signature_bytes)
+        let signature = Signature::from_bytes(&signature_bytes)
             .map_err(|_| anyhow!("Invalid signature format"))?;
         
         // Verify signature

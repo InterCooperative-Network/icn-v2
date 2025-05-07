@@ -5,7 +5,8 @@ edition = "2021"
 
 # Add features section
 [features]
-default = []
+default = ["mesh"]
+mesh = ["planetary-mesh"]
 persistence = ["icn-identity-core/persistence"] # Enable persistence in dependencies
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -20,7 +21,7 @@ hyper = { version = "0.14", features = ["server", "http1"] }
 icn-types = { path = "../../common/icn-types", features = ["persistence", "async"] }
 icn-identity-core = { path = "../../common/icn-identity-core" }
 icn-core-types = { path = "../../common/icn-core-types" }
-planetary-mesh = { path = "../../planetary-mesh" }
+planetary-mesh = { path = "../../planetary-mesh", optional = true }
 clap = { version = "4.0", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

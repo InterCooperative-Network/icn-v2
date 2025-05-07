@@ -1,0 +1,30 @@
+{
+  "credential": {
+    "@context": [
+      "https://www.w3.org/2018/credentials/v1",
+      "https://icn.network/credentials/mesh/v1"
+    ],
+    "id": "urn:uuid:23456789-a98b-45c3-b456-426614174001",
+    "type": ["VerifiableCredential", "BidSubmission"],
+    "issuer": "did:icn:worker01",
+    "issuanceDate": "2023-10-15T15:31:15Z",
+    "credentialSubject": {
+      "job_manifest_cid": "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+      "bidder_node_id": "did:icn:worker01",
+      "price": 30,
+      "confidence": 0.95,
+      "offered_capabilities": [
+        {"CpuCores": 4},
+        {"RamMb": 2048}
+      ],
+      "expires_at": "2023-10-16T15:31:15Z"
+    },
+    "proof": {
+      "type": "Ed25519Signature2020",
+      "created": "2023-10-15T15:31:15Z",
+      "verificationMethod": "did:icn:worker01#keys-1",
+      "proofPurpose": "assertionMethod",
+      "proofValue": "WORKER_SIGNATURE_PLACEHOLDER"
+    }
+  }
+}

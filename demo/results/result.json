@@ -1,31 +1,19 @@
 {
-  "task_cid": "QmTaskZ7xP9F2cj5YhN8YgWz5DrtGE3vTqMW9W",
-  "bid_cid": "QmBidX3pQ2KLmfG8s6NrZE4yT9jK5RwuVmFa",
-  "status": "completed",
-  "result_hash": "0xd74d97a8957c4b6a88704b8cb88adcd49d797f9ea5d8a091f31e2cdc",
+  "job_id": "sample-job-001",
+  "bid_id": "did:icn:worker01",
+  "result_hash": "d74d97a8957c4b6a88704b8cb88adcd49d797f9ea5d8a091f31e2cdc",
+  "execution_metrics": {
+    "execution_time_ms": 1853,
+    "memory_peak_mb": 642,
+    "cpu_usage_pct": 78,
+    "io_read_bytes": 6242880,
+    "io_write_bytes": 2197152
+  },
   "token_compensation": {
-    "type": "ResourceTokenTransfer",
+    "amount": 30.0,
+    "token_type": "COMPUTE",
     "from": "did:icn:requester",
     "to": "did:icn:worker01",
-    "amount": 30.464000,
-    "token_type": "COMPUTE",
-    "federation_id": "solar-farm-coop",
-    "task_cid": "QmTaskZ7xP9F2cj5YhN8YgWz5DrtGE3vTqMW9W",
-    "timestamp": "2023-10-15T15:32:47Z"
-  },
-  "resource_metrics": {
-    "start": {
-      "timestamp_start": "2023-10-15T15:32:45Z",
-      "memory_available_mb": 16384,
-      "cpu_count": 8
-    },
-    "end": {
-      "timestamp_end": "2023-10-15T15:32:47Z",
-      "execution_time_ms": 2000,
-      "memory_peak_mb": 512,
-      "cpu_usage_pct": 75,
-      "io_read_bytes": 5242880,
-      "io_write_bytes": 2097152
-    }
+    "timestamp": "2023-10-15T15:32:00Z"
   }
 }

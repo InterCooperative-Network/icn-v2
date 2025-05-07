@@ -1,0 +1,19 @@
+# ICN Mesh Job Manifest - Sample
+id = "sample-job-001"
+wasm_module_cid = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
+owner_did = "did:icn:requester"
+federation_id = "solar-farm-coop"
+
+# Require 1024MB of RAM and 2 CPU cores
+[[resource_requirements]]
+type = "RamMb"
+value = 1024
+
+[[resource_requirements]]
+type = "CpuCores"
+value = 2
+
+[parameters]
+input_data = "Sample input data for the job"
+iterations = 100
+verbose = true

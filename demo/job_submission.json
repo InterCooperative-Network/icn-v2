@@ -1,0 +1,38 @@
+{
+  "credential": {
+    "@context": [
+      "https://www.w3.org/2018/credentials/v1",
+      "https://icn.network/credentials/mesh/v1"
+    ],
+    "id": "urn:uuid:123e4567-e89b-12d3-a456-426614174000",
+    "type": ["VerifiableCredential", "JobSubmission"],
+    "issuer": "did:icn:requester",
+    "issuanceDate": "2023-10-15T15:30:45Z",
+    "credentialSubject": {
+      "manifest": {
+        "id": "sample-job-001",
+        "wasm_module_cid": "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+        "resource_requirements": [
+          {"RamMb": 1024},
+          {"CpuCores": 2}
+        ],
+        "parameters": {
+          "input_data": "Sample input data for the job",
+          "iterations": 100,
+          "verbose": true
+        },
+        "owner": "did:icn:requester",
+        "deadline": null
+      },
+      "signature": "SE5DUElOX1NJR05BVFVSRV9QTEFDRUhPTERFUg==",
+      "signer": "did:icn:requester"
+    },
+    "proof": {
+      "type": "Ed25519Signature2020",
+      "created": "2023-10-15T15:30:45Z",
+      "verificationMethod": "did:icn:requester#keys-1",
+      "proofPurpose": "assertionMethod",
+      "proofValue": "SIGNATURE_PLACEHOLDER"
+    }
+  }
+}

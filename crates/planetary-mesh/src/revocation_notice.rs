@@ -1,10 +1,14 @@
 use anyhow::{Result, anyhow, Context};
-use chrono::{DateTime, Utc};
-use icn_identity_core::{Did, did::DidKey};
-use icn_types::dag::{DagStore, Cid, DagPayload, SignedDagNode};
+use icn_core_types::Did;
+use icn_identity_core::did::DidKey;
+use icn_core_types::Cid;
+use icn_types::dag::{DagStore, DagPayload, SignedDagNode};
 use serde::{Serialize, Deserialize};
-use std::sync::Arc;
 use log::{debug, info, warn, error};
+use ed25519_dalek::{Signature, VerifyingKey, Verifier};
+use multibase::{Base, encode, decode};
+use std::sync::Arc;
+use chrono::{DateTime, Utc};
 
 /// W3C Verifiable Credential for DID or credential revocation
 #[derive(Debug, Clone, Serialize, Deserialize)]

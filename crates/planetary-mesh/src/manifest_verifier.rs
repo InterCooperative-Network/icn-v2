@@ -5,6 +5,11 @@ use icn_identity_core::{
 };
 use log::{debug, warn, error};
 use serde_json::Value;
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use icn_core_types::Did;
+use multibase::{decode, Base};
+use serde::{Serialize, Deserialize};
+use thiserror::Error;
 
 /// Error types for manifest verification
 #[derive(Debug, thiserror::Error)]
@@ -153,25 +158,19 @@ impl ManifestVerifier {
         let key_part = did_str.trim_start_matches("did:key:");
         
         // Decode the multibase encoding
-        let multibase_decoded = multibase::decode(key_part)
-            .map_err(|e| ManifestVerificationError::InvalidDidFormat(
-                format!("Failed to decode key part: {}", e)
-            ))?;
+        let multibase_decoded = decode(key_part)?;
         
-        // Remove the multicodec prefix (0xed01 for Ed25519)
-        if multibase_decoded.len() < 2 {
-            return Err(ManifestVerificationError::InvalidDidFormat(
-                "Decoded key too short".into()
-            ));
+        if multibase_decoded.1.len() < 2 {
+            return Err(ManifestVerificationError::InvalidDidFormat("Decoded key too short".into()));
         }
         
-        let key_bytes = if multibase_decoded[0] == 0xed && multibase_decoded[1] == 0x01 {
-            &multibase_decoded[2..]
+        let key_bytes = if multibase_decoded.1[0] == 0xed && multibase_decoded.1[1] == 0x01 {
+            &multibase_decoded.1[2..]
         } else {
-            return Err(ManifestVerificationError::InvalidDidFormat(
-                format!("Unexpected multicodec prefix: {:02x}{:02x}", 
-                    multibase_decoded[0], multibase_decoded[1])
-            ));
+            return Err(ManifestVerificationError::InvalidDidFormat(format!(
+                "Unsupported key type: {:02x}{:02x}",
+                multibase_decoded.1[0], multibase_decoded.1[1]
+            )));
         };
         
         // Create a verifying key from the bytes
