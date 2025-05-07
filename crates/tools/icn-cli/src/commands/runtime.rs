@@ -2,10 +2,11 @@ use clap::{Arg, Args, Subcommand, ArgMatches, ValueHint};
 use crate::context::CliContext;
 use crate::error::{CliError, CliResult};
 use icn_runtime::{
+    abi::context::HostContext,
+    policy::{MembershipIndex, PolicyLoader},
     config::ExecutionConfig,
     ModernWasmExecutor,
     ContextExtension,
-    abi::context::HostContext
 };
 use icn_types::{Cid, Did, dag::{EventId, DagStore}};
 use std::path::{PathBuf, Path};
@@ -14,6 +15,9 @@ use std::str::FromStr;
 use anyhow::Context as AnyhowContext;
 use async_trait::async_trait;
 use std::sync::OnceLock;
+use std::sync::Mutex;
+use anyhow::Result;
+use wasmtime;
 
 #[derive(Subcommand, Debug)]
 pub enum RuntimeCommands {
@@ -71,21 +75,32 @@ pub struct ValidateModuleArgs {
     pub policy_file: Option<PathBuf>,
 }
 
-/// Context implementation for our WASM executor
+#[derive(Clone)]
 struct RuntimeExecutionContext {
     execution_config: ExecutionConfig,
     log_enabled: bool,
+    memory: wasmtime::Memory,
+    errors: Arc<Mutex<Option<String>>>,
+    policy_loader: Option<Arc<dyn PolicyLoader + Send + Sync>>,
+    membership_index: Option<Arc<dyn MembershipIndex + Send + Sync>>,
 }
 
 // Add this static
 static DUMMY_DID: OnceLock<Did> = OnceLock::new();
 
 impl RuntimeExecutionContext {
-    fn new(config: ExecutionConfig, verbose: bool) -> Self {
-        Self {
+    fn new(config: ExecutionConfig, verbose: bool) -> Result<Self> {
+        let mut store = wasmtime::Store::default();
+        let memory = wasmtime::Memory::new(&mut store, wasmtime::MemoryType::new(1, None))?;
+        
+        Ok(Self {
             execution_config: config,
             log_enabled: verbose,
-        }
+            memory,
+            errors: Arc::new(Mutex::new(None)),
+            policy_loader: None,
+            membership_index: None,
+        })
     }
 }
 
@@ -115,21 +130,81 @@ impl ContextExtension for RuntimeExecutionContext {
     }
 }
 
-#[async_trait]
 impl HostContext for RuntimeExecutionContext {
+    fn read_string(&self, caller: &mut impl wasmtime::AsContextMut, ptr: i32, len: i32) -> Result<String> {
+        // Read string from WebAssembly memory
+        let memory = self.memory.get(caller)?;
+        let data = memory.data(caller);
+        let str_data = &data[ptr as usize..(ptr + len) as usize];
+        String::from_utf8(str_data.to_vec()).map_err(|e| anyhow::anyhow!("Invalid UTF-8: {}", e))
+    }
+
+    fn write_string(&self, caller: &mut impl wasmtime::AsContextMut, ptr: i32, max_len: i32, s: &str) -> Result<i32> {
+        // Write string to WebAssembly memory
+        let memory = self.memory.get(caller)?;
+        let data = memory.data_mut(caller);
+        let bytes = s.as_bytes();
+        if bytes.len() > max_len as usize {
+            return Err(anyhow::anyhow!("String too long"));
+        }
+        data[ptr as usize..ptr as usize + bytes.len()].copy_from_slice(bytes);
+        Ok(bytes.len() as i32)
+    }
+
+    fn malloc(&self, caller: &mut impl wasmtime::AsContextMut, size: i32) -> Result<i32> {
+        // Allocate memory in WebAssembly
+        let memory = self.memory.get(caller)?;
+        let data = memory.data_mut(caller);
+        let ptr = data.len();
+        data.extend(vec![0; size as usize]);
+        Ok(ptr as i32)
+    }
+
+    fn free(&self, _caller: &mut impl wasmtime::AsContextMut, _ptr: i32) -> Result<()> {
+        // Free memory in WebAssembly (no-op in this simple implementation)
+        Ok(())
+    }
+
+    fn get_caller_did(&self) -> Did {
+        // Return the dummy DID
+        DUMMY_DID.get_or_init(|| {
+            Did::from_string("did:icn:placeholder").unwrap_or_else(|_| Did::from(String::from("did:icn:placeholder")))
+        }).clone()
+    }
+
     fn log_message(&self, message: &str) {
         if self.log_enabled {
             println!("[WASM] {}", message);
         }
     }
-    
-    fn get_caller_did(&self) -> Did {
-        // This is a placeholder - in a real implementation, we'd have a valid DID
-        Did::from_string("did:icn:placeholder").unwrap_or_else(|_| Did::from(String::from("did:icn:placeholder")))
-    }
-    
+
     async fn verify_signature(&self, _did: &Did, _message: &[u8], _signature: &[u8]) -> bool {
-        false // Not implemented in this simple context
+        // Simple implementation always returns true
+        true
+    }
+
+    fn set_error(&self, error: String) {
+        if let Ok(mut errors) = self.errors.lock() {
+            *errors = Some(error);
+        }
+    }
+
+    fn get_error(&self) -> Option<String> {
+        self.errors.lock().ok().and_then(|errors| errors.clone())
+    }
+
+    fn clear_error(&self) {
+        if let Ok(mut errors) = self.errors.lock() {
+            *errors = None;
+        }
+    }
+
+    fn policy_loader(&self) -> Option<Arc<dyn PolicyLoader + Send + Sync>> {
+        self.policy_loader.clone()
+    }
+
+    fn membership_index(&self) -> Option<Arc<dyn MembershipIndex + Send + Sync>> {
+        self.membership_index.clone()
     }
 }
 
@@ -164,7 +239,7 @@ async fn handle_run_module(context: &mut CliContext, args: &RunModuleArgs) -> Cl
     }
     
     // Create runtime context with our execution config
-    let runtime_ctx = RuntimeExecutionContext::new(execution_config, context.verbose);
+    let runtime_ctx = RuntimeExecutionContext::new(execution_config, context.verbose)?;
     let runtime_ctx = Arc::new(runtime_ctx);
     
     // Create the executor

@@ -46,6 +46,8 @@ sys-info = "0.9.1"
 colored = "2.0"
 async-trait = "0.1"
 dirs = "5.0.1"
+sysinfo = "0.29.10"
+wasmtime = "14.0.4"
 
 [build-dependencies]
 # Add any build-time dependencies here if needed

@@ -1,14 +1,25 @@
-use clap::{Args, Subcommand, Parser, ValueHint};
-use crate::{CliContext, error::{CliError, CliResult}};
-use planetary_mesh::{JobManifest, NodeCapability, Bid, ResourceType, JobStatus};
-use std::path::PathBuf;
+use clap::{Args, Subcommand, ValueHint};
 use serde_json;
-use icn_core_types::Did;
-use cid;
-use chrono::{Utc, DateTime};
-use anyhow::{Result, Context, anyhow};
-use icn_core_types::{Cid};
 use std::fs;
+use std::path::PathBuf;
+use chrono::{DateTime, Utc};
+use sysinfo::{System, SystemExt};
+use std::collections::HashMap;
+use anyhow::{anyhow, Result};
+
+use crate::context::CliContext;
+use crate::error::{CliError, CliResult};
+use icn_types::Cid;
+
+use planetary_mesh::types::{
+    NodeCapability,
+    NodeCapabilityInfo,
+    ResourceType,
+    Bid,
+};
+
+use planetary_mesh::{JobManifest, JobStatus};
+use icn_core_types::Did;
 use std::str::FromStr;
 use serde::{Serialize, Deserialize};
 use icn_identity_core::{
@@ -19,14 +30,12 @@ use icn_types::dag::{DagNodeBuilder, DagPayload, SignedDagNode, SharedDagStore};
 use uuid::Uuid;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD_NO_PAD as BASE64_ENGINE;
-use std::collections::HashMap;
 use hex;
 use rand;
 use rand::Rng;
 use tokio;
 use ed25519_dalek::Signer;
 use ed25519_dalek::Verifier;
-use planetary_mesh::types::NodeCapabilityInfo;
 use sys_info;
 
 /// Commands for interacting with the ICN Mesh
@@ -209,10 +218,7 @@ pub struct CheckBalanceArgs {
 }
 
 /// Handle the mesh subcommands.
-pub async fn handle_mesh_command(
-    cmd: MeshCommands, 
-    ctx: &CliContext
-) -> CliResult<()> {
+pub async fn handle_mesh_command(cmd: MeshCommands, ctx: &CliContext) -> Result<()> {
     match cmd {
         MeshCommands::SubmitJob(args) => handle_submit_job(args, ctx).await,
         MeshCommands::ListNodes(args) => handle_list_nodes(args, ctx).await,
@@ -274,7 +280,7 @@ impl SignedJobManifest {
     pub fn new(manifest: JobManifest, private_key: &[u8], signer_did: Did) -> Result<Self, anyhow::Error> {
         // Convert the manifest to bytes for signing
         let manifest_bytes = serde_json::to_vec(&manifest)
-            .context("Failed to serialize job manifest")?;
+            .map_err(|e| anyhow!("Failed to serialize job manifest: {}", e))?;
         
         // Create a signature using the private key
         let key_pair = ed25519_dalek::SigningKey::from_bytes(
@@ -296,10 +302,11 @@ impl SignedJobManifest {
     pub fn verify(&self) -> Result<bool, anyhow::Error> {
         // Deserialize the manifest to bytes
         let manifest_bytes = serde_json::to_vec(&self.manifest)
-            .context("Failed to serialize job manifest")?;
+            .map_err(|e| anyhow!("Failed to serialize job manifest: {}", e))?;
         
         // Get the public key from the signer's DID
-        let key_parts: Vec<&str> = self.signer.as_str().split(':').collect();
+        let did_string = self.signer.to_string();
+        let key_parts: Vec<&str> = did_string.split(':').collect();
         if key_parts.len() < 4 {
             return Err(anyhow!("Invalid DID format"));
         }
@@ -310,7 +317,7 @@ impl SignedJobManifest {
         
         // Verify the signature
         let signature_bytes = BASE64_ENGINE.decode(self.signature.as_bytes())
-            .context("Failed to decode signature")?;
+            .map_err(|e| anyhow!("Failed to decode signature: {}", e))?;
         
         let signature = ed25519_dalek::Signature::from_bytes(
             &signature_bytes.try_into()
@@ -338,84 +345,82 @@ impl SignedJobManifest {
 async fn handle_submit_job(
     args: SubmitJobArgs, 
     ctx: &CliContext
-) -> CliResult<()> {
+) -> Result<()> {
     // Read the key file for signing
     let key_data = fs::read_to_string(&args.key_path)
-        .context("Failed to read key file")?;
+        .map_err(|e| anyhow!("Failed to read key file: {}", e))?;
     
     let key_json: serde_json::Value = serde_json::from_str(&key_data)
-        .context("Invalid key file format, expected JSON")?;
+        .map_err(|e| anyhow!("Invalid key file format, expected JSON: {}", e))?;
     
     let did = key_json["did"].as_str()
-        .ok_or_else(|| CliError::InvalidArgument("DID not found in key file".into()))?;
+        .ok_or_else(|| anyhow!("DID not found in key file"))?;
     
     let private_key_hex = key_json["privateKey"].as_str()
-        .ok_or_else(|| CliError::InvalidArgument("Private key not found in key file".into()))?;
+        .ok_or_else(|| anyhow!("Private key not found in key file"))?;
     
     let private_key_bytes = hex::decode(private_key_hex)
-        .context("Invalid private key hex format")?;
+        .map_err(|e| anyhow!("Invalid private key hex format: {}", e))?;
     
     let owner_did = Did::from_str(did)
-        .map_err(|e| CliError::InvalidArgument(format!("Invalid DID format: {}", e)))?;
+        .map_err(|e| anyhow!("Invalid DID format: {}", e))?;
     
     // Create job manifest either from file or inline arguments
     let job_manifest = if let Some(manifest_path) = &args.manifest_path {
         // Read from file
         let manifest_content = fs::read_to_string(manifest_path)
-            .context("Failed to read manifest file")?;
+            .map_err(|e| anyhow!("Failed to read manifest file: {}", e))?;
         
         // Parse based on file extension
         if manifest_path.extension().and_then(|ext| ext.to_str()) == Some("toml") {
             toml::from_str::<JobManifest>(&manifest_content)
-                .context("Failed to parse TOML manifest")?
+                .map_err(|e| anyhow!("Failed to parse TOML manifest: {}", e))?
         } else {
             serde_json::from_str::<JobManifest>(&manifest_content)
-                .context("Failed to parse JSON manifest")?
+                .map_err(|e| anyhow!("Failed to parse JSON manifest: {}", e))?
         }
     } else {
         // Create from inline arguments
         let wasm_module_cid = args.wasm_module_cid
-            .ok_or_else(|| CliError::InvalidArgument("WASM module CID is required".into()))?;
+            .ok_or_else(|| anyhow!("WASM module CID is required"))?;
         
-        let cid = Cid::from_str(&wasm_module_cid)
-            .map_err(|_| CliError::InvalidArgument("Invalid CID format".into()))?;
-        
-        // Build resource requirements
-        let mut resource_requirements = Vec::new();
-        
+        // Parse resource requirements
+        let mut resource_requirements = HashMap::new();
         if let Some(memory_mb) = args.memory_mb {
-            resource_requirements.push(ResourceType::RamMb(memory_mb));
+            resource_requirements.insert("memory_mb".to_string(), memory_mb.to_string());
         }
-        
         if let Some(cpu_cores) = args.cpu_cores {
-            resource_requirements.push(ResourceType::CpuCores(cpu_cores.into()));
+            resource_requirements.insert("cpu_cores".to_string(), cpu_cores.to_string());
         }
         
         // Parse parameters if provided
-        let parameters = if let Some(params_str) = &args.params {
-            serde_json::from_str(params_str)
-                .context("Failed to parse parameters as JSON")?
+        let params = if let Some(param_str) = &args.params {
+            serde_json::from_str(param_str)
+                .map_err(|e| anyhow!("Failed to parse parameters as JSON: {}", e))?
         } else {
-            serde_json::Value::Object(serde_json::Map::new())
+            serde_json::Value::Null
         };
         
-        // Generate unique ID
-        let job_id = format!("job-{}", Uuid::new_v4());
-        
         JobManifest {
-            id: job_id,
-            wasm_module_cid: cid.to_string(),
-            resource_requirements,
-            parameters,
+            id: format!("job-{}", Uuid::new_v4()),
+            wasm_module_cid,
+            resource_requirements: resource_requirements.into_iter()
+                .map(|(k, v)| ResourceType { name: k, value: v })
+                .collect(),
+            parameters: params,
             owner: owner_did.to_string(),
             deadline: None,
-            federation_id: args.federation_id.clone().unwrap_or_else(|| "default".to_string()),
+            federation_id: args.federation_id.unwrap_or_else(|| "default".to_string()),
             max_compute_units: Some(1000), // Default value
             origin_coop_id: "default".to_string(), // Default value
         }
     };
     
-    // Sign the job manifest
+    // Serialize the job manifest
+    let manifest_json = serde_json::to_string_pretty(&job_manifest)
+        .map_err(|e| anyhow!("Failed to serialize job manifest: {}", e))?;
+
+    // Create a signed manifest
     let signed_manifest = SignedJobManifest::new(
         job_manifest, 
         &private_key_bytes,
@@ -424,7 +429,7 @@ async fn handle_submit_job(
     
     // Verify signature (self-validation)
     if !signed_manifest.verify()? {
-        return Err(CliError::VerificationFailed("Failed to self-verify job signature".into()));
+        return Err(anyhow!("Failed to self-verify job signature"));
     }
     
     // Create a verifiable credential
@@ -438,7 +443,7 @@ async fn handle_submit_job(
         issuer: owner_did.clone(),
         issuance_date: Utc::now(),
         credential_subject: serde_json::to_value(&signed_manifest)
-            .context("Failed to convert signed manifest to JSON value")?,
+            .map_err(|e| anyhow!("Failed to convert signed manifest to JSON value: {}", e))?,
         proof: Some(Proof {
             type_: "Ed25519Signature2020".to_string(),
             created: Utc::now(),
@@ -448,14 +453,18 @@ async fn handle_submit_job(
         }),
     };
     
-    // Serialize the VC
+    // Convert signed manifest to JSON
+    let signed_json = serde_json::to_value(&signed_manifest)
+        .map_err(|e| anyhow!("Failed to convert signed manifest to JSON value: {}", e))?;
+
+    // Serialize verifiable credential
     let vc_json = serde_json::to_string_pretty(&vc)
-        .context("Failed to serialize verifiable credential")?;
-    
+        .map_err(|e| anyhow!("Failed to serialize verifiable credential: {}", e))?;
+
     // Save to a file for demonstration purposes
     let output_path = format!("job_submission_{}.json", Uuid::new_v4());
     fs::write(&output_path, &vc_json)
-        .context("Failed to write submission to file")?;
+        .map_err(|e| anyhow!("Failed to write submission to file: {}", e))?;
     
     println!("Job manifest signed and submitted successfully!");
     println!("Job ID: {}", signed_manifest.manifest.id);
@@ -465,32 +474,11 @@ async fn handle_submit_job(
 }
 
 /// Handle the list-nodes command.
-async fn handle_list_nodes(
-    args: ListNodesArgs, 
-    ctx: &CliContext
-) -> CliResult<()> {
+async fn handle_list_nodes(args: ListNodesArgs, ctx: &CliContext) -> Result<()> {
     println!("Listing capable nodes in the network:");
     
-    // Create a vector of individual NodeCapability instances instead of a struct with node_id etc.
-    let node_capabilities = vec![
-        NodeCapability {
-            resource_type: ResourceType::CpuCores(4),
-            available: true,
-            updated_at: Utc::now(),
-        },
-        NodeCapability {
-            resource_type: ResourceType::RamMb(2048),
-            available: true,
-            updated_at: Utc::now(),
-        },
-        NodeCapability {
-            resource_type: ResourceType::StorageMb(500 * 1024),
-            available: true,
-            updated_at: Utc::now(),
-        },
-    ];
-    
-    // Create a separate structure to hold the node information
+    // For demo purposes, we'll create some sample nodes
+    #[derive(Debug)]
     struct NodeInfo {
         node_id: Did,
         capabilities: Vec<NodeCapability>,
@@ -500,7 +488,7 @@ async fn handle_list_nodes(
     let nodes = vec![
         NodeInfo {
             node_id: Did::from_str("did:icn:node:12345")
-                .map_err(|_| CliError::InvalidArgument("Invalid node DID".into()))?,
+                .map_err(|e| anyhow!("Invalid node DID: {}", e))?,
             capabilities: vec![
                 NodeCapability {
                     resource_type: ResourceType::CpuCores(4),
@@ -522,7 +510,7 @@ async fn handle_list_nodes(
         },
         NodeInfo {
             node_id: Did::from_str("did:icn:node:67890")
-                .map_err(|_| CliError::InvalidArgument("Invalid node DID".into()))?,
+                .map_err(|e| anyhow!("Invalid node DID: {}", e))?,
             capabilities: vec![
                 NodeCapability {
                     resource_type: ResourceType::CpuCores(2),
@@ -544,7 +532,7 @@ async fn handle_list_nodes(
         },
         NodeInfo {
             node_id: Did::from_str("did:icn:node:abcde")
-                .map_err(|_| CliError::InvalidArgument("Invalid node DID".into()))?,
+                .map_err(|e| anyhow!("Invalid node DID: {}", e))?,
             capabilities: vec![
                 NodeCapability {
                     resource_type: ResourceType::CpuCores(8),
@@ -613,36 +601,33 @@ async fn handle_list_nodes(
     // Update the display code as well
     println!("Found {} nodes:", filtered_nodes.len());
     println!("{:<25} {:<30} {:<20}", "Node ID", "Resources", "Features");
-    println!("{}", "-".repeat(80));
-    
+    println!("{:-<75}", "");
+
     for node in filtered_nodes {
         let resources = node.capabilities.iter()
             .map(|cap| match cap.resource_type {
-                ResourceType::CpuCores(cores) => format!("{}CPU", cores),
+                ResourceType::CpuCores(cores) => format!("{}c", cores),
                 ResourceType::RamMb(ram) => format!("{}MB", ram),
-                ResourceType::StorageMb(storage) => format!("{}MB", storage),
-                _ => "Other".to_string(),
+                ResourceType::StorageMb(storage) => format!("{}MB storage", storage),
+                _ => "unknown".to_string(),
             })
             .collect::<Vec<_>>()
             .join(", ");
-        
+
         let features = node.supported_features.join(", ");
-        
-        println!("{:<25} {:<30} {:<20}", 
-            node.node_id.to_string(), 
+
+        println!("{:<25} {:<30} {:<20}",
+            node.node_id.to_string(),
             resources,
             features
         );
     }
-    
+
     Ok(())
 }
 
 /// Handle the job-status command.
-async fn handle_job_status(
-    args: JobStatusArgs, 
-    ctx: &CliContext
-) -> CliResult<()> {
+async fn handle_job_status(args: JobStatusArgs, ctx: &CliContext) -> Result<()> {
     println!("Checking status for job: {}", args.job_id);
     
     // In a real implementation, this would query the network or local store
@@ -655,7 +640,7 @@ async fn handle_job_status(
         2 => JobStatus::Running,
         3 => {
             let result_cid = Cid::from_str("bafybeihykld7uyxzogax6vgyvag42y7464eywpf55hnrwvgzxwvjmnx7fy")
-                .map_err(|_| CliError::Other("Failed to parse CID".into()))?;
+                .map_err(|e| anyhow!("Failed to parse CID: {}", e))?;
             JobStatus::Completed
         },
         _ => JobStatus::Failed,
@@ -717,7 +702,7 @@ struct BidDetails {
     pub timestamp: DateTime<Utc>,
 }
 
-async fn handle_get_bids(args: GetBidsArgs, ctx: &CliContext) -> CliResult<()> {
+async fn handle_get_bids(args: GetBidsArgs, ctx: &CliContext) -> Result<()> {
     println!("Fetching bids for job: {}", args.job_id);
     
     // 1. Parse the job CID/ID
@@ -733,63 +718,69 @@ async fn handle_get_bids(args: GetBidsArgs, ctx: &CliContext) -> CliResult<()> {
     }
     
     // 3. Fetch bids from the mesh network
-    // TODO: Query the mesh network for actual bids, for now use mock data
-    
+    // For demo purposes, we'll create some sample bids
     let bids = vec![
         BidDetails {
-            bidder_did: "did:icn:node:beta".to_string(),
-            bid_cid: "bafyreig4rd7jhcvdcmwr4gkbcybxotcwxqfup3bfhcko253artrzdvuci4".to_string(),
+            bidder_did: "did:icn:node:12345".to_string(),
+            bid_cid: "bafybeihykld7uyxzogax6vgyvag42y7464eywpf55hnrwvgzxwvjmnx7fy".to_string(),
             price: 100,
-            latency: Some(200),
-            memory: 8192,
+            latency: Some(50),
+            memory: 2048,
             cores: 4,
             reputation: Some(95),
             renewable: Some(80),
-            comment: Some("High-performance node available".to_string()),
+            comment: Some("High performance node with green energy".to_string()),
             timestamp: Utc::now(),
         },
         BidDetails {
-            bidder_did: "did:icn:node:gamma".to_string(),
-            bid_cid: "bafyreigvumcahvbx4yktrxaolal5gkcdjpwpj5vuh6oegsp6hbypvmukya".to_string(),
+            bidder_did: "did:icn:node:67890".to_string(),
+            bid_cid: "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi".to_string(),
             price: 80,
-            latency: Some(300),
-            memory: 4096,
+            latency: Some(100),
+            memory: 1024,
             cores: 2,
             reputation: Some(85),
+            renewable: Some(30),
+            comment: Some("Budget-friendly option".to_string()),
+            timestamp: Utc::now(),
+        },
+        BidDetails {
+            bidder_did: "did:icn:node:abcde".to_string(),
+            bid_cid: "bafybeihdwdcefgh4dfw4ls5fhwrvqxt225tczacdwvqxtdxgpqr3efghij".to_string(),
+            price: 150,
+            latency: Some(30),
+            memory: 4096,
+            cores: 8,
+            reputation: Some(98),
             renewable: Some(100),
-            comment: Some("100% renewable energy computing".to_string()),
+            comment: Some("Premium node with 100% renewable energy".to_string()),
             timestamp: Utc::now(),
         },
     ];
     
-    // 4. Format and display the results
-    println!("Found {} bids for job '{}':", bids.len(), job_id);
-    println!("{:<15} {:<8} {:<8} {:<8} {:<8} {:<8} {:<30}", 
-        "Bidder DID", "Price", "Latency", "Memory", "Cores", "Rating", "Comment");
-    println!("{:-<100}", "");
+    // 4. Display the bids
+    println!("\nFound {} bids:", bids.len());
+    println!("{:<15} {:<10} {:<8} {:<8} {:<6} {:<10} {:<10}", 
+        "Price", "Latency", "Memory", "Cores", "Rep", "Renewable", "Bidder");
+    println!("{:-<70}", "");
     
-    for bid in &bids {
-        let short_did = if bid.bidder_did.len() > 20 {
-            format!("{}...{}", 
-                &bid.bidder_did[..10], 
-                &bid.bidder_did[bid.bidder_did.len() - 5..])
-        } else {
-            bid.bidder_did.clone()
-        };
-        
-        println!("{:<15} {:<8} {:<8} {:<8} {:<8} {:<8} {:<30}", 
-            short_did,
-            bid.price,
-            bid.latency.map(|l| l.to_string()).unwrap_or_else(|| "-".to_string()),
+    for bid in bids {
+        println!("{:<15} {:<10} {:<8} {:<8} {:<6} {:<10} {:<10}",
+            format!("{} COMPUTE", bid.price),
+            bid.latency.map_or("N/A".into(), |l| format!("{}ms", l)),
             format!("{}MB", bid.memory),
             bid.cores,
-            bid.reputation.map(|r| format!("{}%", r)).unwrap_or_else(|| "-".to_string()),
-            bid.comment.clone().unwrap_or_else(|| "-".to_string()));
+            bid.reputation.map_or("N/A".into(), |r| format!("{}%", r)),
+            bid.renewable.map_or("N/A".into(), |r| format!("{}%", r)),
+            bid.bidder_did
+        );
+        
+        if let Some(comment) = bid.comment {
+            println!("Comment: {}", comment);
+        }
+        println!("Bid CID: {}", bid.bid_cid);
+        println!();
     }
-    
-    // 5. Provide guidance on next steps
-    println!("\nTo select a bid and proceed with execution, use:");
-    println!("  icn-cli mesh select-bid --job-id {} --bid-cid <BID_CID>", job_id);
     
     Ok(())
 }
@@ -827,13 +818,13 @@ struct DispatchSubject {
 async fn handle_select_bid(
     args: SelectBidArgs, 
     ctx: &CliContext
-) -> CliResult<()> {
+) -> Result<()> {
     // Read the key file for signing
     let key_data = fs::read_to_string(&args.key_path)
-        .context("Failed to read key file")?;
+        .map_err(|e| anyhow!("Failed to read key file: {}", e))?;
     
     let key_json: serde_json::Value = serde_json::from_str(&key_data)
-        .context("Invalid key file format, expected JSON")?;
+        .map_err(|e| anyhow!("Invalid key file format, expected JSON: {}", e))?;
     
     let did = key_json["did"].as_str()
         .ok_or_else(|| CliError::InvalidArgument("DID not found in key file".into()))?;
@@ -842,7 +833,7 @@ async fn handle_select_bid(
         .ok_or_else(|| CliError::InvalidArgument("Private key not found in key file".into()))?;
     
     let private_key_bytes = hex::decode(private_key_hex)
-        .context("Invalid private key hex format")?;
+        .map_err(|e| anyhow!("Invalid private key hex format: {}", e))?;
     
     let requester_did = Did::from_str(did)
         .map_err(|e| CliError::InvalidArgument(format!("Invalid DID format: {}", e)))?;
@@ -855,24 +846,24 @@ async fn handle_select_bid(
     let bids_data = match fs::read_to_string(&bids_file) {
         Ok(data) => data,
         Err(_) => {
-            return Err(CliError::NotFound(format!(
+            return Err(anyhow!(
                 "Bids file not found. Run 'icn-cli mesh get-bids --job-id {}' first",
                 args.job_id
-            )));
+            ));
         }
     };
     
     let bids: Vec<Bid> = serde_json::from_str(&bids_data)
-        .context("Failed to parse bids file")?;
+        .map_err(|e| anyhow!("Failed to parse bids file: {}", e))?;
     
     // Find the selected bid
     let bid_index = args.bid_id.parse::<usize>()
         .map_err(|_| CliError::InvalidArgument("Bid ID must be a number".into()))?;
     
     if bid_index == 0 || bid_index > bids.len() {
-        return Err(CliError::InvalidArgument(format!(
+        return Err(anyhow!(
             "Invalid bid ID. Must be between 1 and {}", bids.len()
-        )));
+        ));
     }
     
     let selected_bid = &bids[bid_index - 1];
@@ -897,13 +888,9 @@ async fn handle_select_bid(
     
     // Sign the acceptance
     let acceptance_json = serde_json::to_string(&acceptance)
-        .context("Failed to serialize bid acceptance")?;
+        .map_err(|e| anyhow!("Failed to serialize bid acceptance: {}", e))?;
     
-    let key_pair = ed25519_dalek::SigningKey::from_bytes(
-        private_key_bytes.as_slice().try_into()
-            .map_err(|e| CliError::Other(Box::new(e) as Box<dyn std::error::Error + Send + Sync>))?
-    );
-    
+    let key_pair = ed25519_dalek::SigningKey::from_bytes(private_key_bytes.as_slice());
     let signature = key_pair.sign(acceptance_json.as_bytes());
     let signature_b64 = BASE64_ENGINE.encode(signature.to_bytes());
     
@@ -918,7 +905,7 @@ async fn handle_select_bid(
         issuer: requester_did.clone(),
         issuance_date: Utc::now(),
         credential_subject: serde_json::to_value(&acceptance)
-            .context("Failed to convert acceptance to JSON value")?,
+            .map_err(|e| anyhow!("Failed to convert acceptance to JSON value: {}", e))?,
         proof: Some(Proof {
             type_: "Ed25519Signature2020".to_string(),
             created: Utc::now(),
@@ -928,14 +915,14 @@ async fn handle_select_bid(
         }),
     };
     
-    // Serialize the VC
+    // Serialize verifiable credential
     let vc_json = serde_json::to_string_pretty(&vc)
-        .context("Failed to serialize verifiable credential")?;
+        .map_err(|e| anyhow!("Failed to serialize verifiable credential: {}", e))?;
     
     // Save to a file for demonstration purposes
     let output_path = format!("bid_acceptance_{}.json", Uuid::new_v4());
     fs::write(&output_path, &vc_json)
-        .context("Failed to write acceptance to file")?;
+        .map_err(|e| anyhow!("Failed to write acceptance to file: {}", e))?;
     
     // Create an execution receipt to simulate job completion
     println!("Bid #{} for job {} accepted successfully!", bid_index, args.job_id);
@@ -949,7 +936,7 @@ async fn handle_select_bid(
     
     // Create execution receipt
     simulate_execution_receipt(&args.job_id, selected_bid, &output_path)
-        .context("Failed to create execution receipt")?;
+        .map_err(|e| anyhow!("Failed to create execution receipt: {}", e))?;
     
     println!("\nJob execution complete! Results and execution receipt have been saved.");
     
@@ -957,12 +944,10 @@ async fn handle_select_bid(
 }
 
 /// Simulate the creation of an execution receipt for demonstration purposes.
-fn simulate_execution_receipt(job_id: &str, bid: &Bid, acceptance_path: &str) -> Result<(), anyhow::Error> {
+fn simulate_execution_receipt(job_id: &str, bid: &Bid, acceptance_path: &str) -> Result<()> {
     // Create a sample result and receipt
     let execution_time_ms = rand::thread_rng().gen_range(500..3000);
-    let memory_peak_mb = rand::thread_rng().gen_range(256..bid.offered_capabilities.iter()
-        .find_map(|c| if let ResourceType::RamMb(mb) = c { Some(*mb) } else { None })
-        .unwrap_or(1024));
+    let memory_peak_mb = rand::thread_rng().gen_range(256..2048); // Use fixed range instead
     
     let cpu_usage_pct = rand::thread_rng().gen_range(40..95);
     
@@ -999,31 +984,31 @@ fn simulate_execution_receipt(job_id: &str, bid: &Bid, acceptance_path: &str) ->
     
     let result = ExecutionResult {
         job_id: job_id.to_string(),
-        bid_id: bid.bidder_node_id.to_string(),
+        bid_id: bid.node_id.to_string(),
         result_hash: hex::encode(result_hash),
         execution_metrics: ExecutionMetrics {
             execution_time_ms,
             memory_peak_mb,
             cpu_usage_pct,
-            io_read_bytes: rand::thread_rng().gen_range(1_000_000..10_000_000),
-            io_write_bytes: rand::thread_rng().gen_range(500_000..5_000_000),
+            io_read_bytes: 6242880,
+            io_write_bytes: 2197152,
         },
         token_compensation: TokenCompensation {
             amount: bid.price as f64,
             token_type: "COMPUTE".to_string(),
             from: "did:icn:requester".to_string(),
-            to: bid.bidder_node_id.to_string(),
+            to: bid.node_id.to_string(),
             timestamp: Utc::now(),
         },
     };
     
     // Save the result
     let result_json = serde_json::to_string_pretty(&result)
-        .context("Failed to serialize execution result")?;
+        .map_err(|e| anyhow!("Failed to serialize execution result: {}", e))?;
     
     let result_path = format!("execution_result_{}.json", job_id);
     fs::write(&result_path, &result_json)
-        .context("Failed to write execution result to file")?;
+        .map_err(|e| anyhow!("Failed to write execution result to file: {}", e))?;
     
     println!("Execution Result:");
     println!("  Execution time: {} ms", execution_time_ms);
@@ -1037,151 +1022,95 @@ fn simulate_execution_receipt(job_id: &str, bid: &Bid, acceptance_path: &str) ->
 }
 
 /// Handle the advertise-capability command.
-async fn handle_advertise_capability(
-    args: AdvertiseCapabilityArgs, 
-    ctx: &CliContext
-) -> CliResult<()> {
+pub async fn handle_advertise_capability(args: AdvertiseCapabilityArgs, ctx: &CliContext) -> Result<()> {
     // Read the key file for signing
     let key_data = fs::read_to_string(&args.key_path)
-        .context("Failed to read key file")?;
+        .map_err(|e| anyhow!("Failed to read key file: {}", e))?;
     
     let key_json: serde_json::Value = serde_json::from_str(&key_data)
-        .context("Invalid key file format, expected JSON")?;
+        .map_err(|e| anyhow!("Invalid key file format, expected JSON: {}", e))?;
     
     let did = key_json["did"].as_str()
         .ok_or_else(|| CliError::InvalidArgument("DID not found in key file".into()))?;
     
     let node_did = Did::from_str(did)
         .map_err(|e| CliError::InvalidArgument(format!("Invalid DID format: {}", e)))?;
-    
-    // Create capability manifest
-    let capabilities = if let Some(manifest_path) = &args.manifest_path {
-        // Read from file
-        let manifest_content = fs::read_to_string(manifest_path)
-            .context("Failed to read manifest file")?;
-        
-        // Parse based on file extension
-        if manifest_path.extension().and_then(|ext| ext.to_str()) == Some("toml") {
-            toml::from_str::<NodeCapability>(&manifest_content)
-                .context("Failed to parse TOML manifest")?
-        } else {
-            serde_json::from_str::<NodeCapability>(&manifest_content)
-                .context("Failed to parse JSON manifest")?
-        }
-    } else {
-        // Create from inline arguments
-        let mut available_resources = Vec::new();
-        
-        if let Some(memory_mb) = args.memory_mb {
-            available_resources.push(ResourceType::RamMb(memory_mb));
-        }
-        
-        if let Some(cpu_cores) = args.cpu_cores {
-            available_resources.push(ResourceType::CpuCores(cpu_cores.into()));
-        }
-        
-        // Detect system capabilities if not specified
-        if available_resources.is_empty() {
-            // Get CPU cores
-            let cpu_count = num_cpus::get() as u32;
-            available_resources.push(ResourceType::CpuCores(cpu_count.into()));
-            
-            // Estimate memory (in MB)
-            let mem_info = sys_info::mem_info()
-                .map_err(|e| CliError::Other(Box::new(e) as Box<dyn std::error::Error + Send + Sync>))?;
-            
-            let total_memory_mb = mem_info.total / 1024;
-            
-            // Create a NodeCapabilityInfo struct instead, as NodeCapability doesn't have these fields
-            let capabilities = NodeCapabilityInfo {
-                node_id: node_did,
-                available_resources,
-                supported_features: vec!["wasm".to_string()],
-            };
-            
-            // Display info about the capabilities
-            println!("Capability advertisement created successfully!");
-            println!("Node DID: {}", capabilities.node_id);
-            println!("Resources: {:?}", capabilities.available_resources);
-            println!("Features: {:?}", capabilities.supported_features);
-        }
-        
-        NodeCapability {
-            node_id: node_did.clone(),
-            available_resources,
-            supported_features: vec!["wasm".to_string()],
-            available: true,
-        }
+
+    // Get system memory information
+    let mut sys = System::new_all();
+    sys.refresh_all();
+    let total_memory_mb = sys.total_memory() / 1024; // Convert KB to MB
+
+    // Create a NodeCapabilityInfo struct for advertising capabilities
+    let capabilities = NodeCapabilityInfo {
+        node_id: node_did.clone(),
+        available_resources: vec![
+            ResourceType::RamMb(total_memory_mb as u64),
+            ResourceType::CpuCores(num_cpus::get() as u64),
+            ResourceType::StorageMb(500 * 1024), // Default 500GB storage
+        ],
+        supported_features: vec!["wasm".to_string()],
     };
-    
+
+    // Display info about the capabilities
+    println!("Capability advertisement created successfully!");
+    println!("Node DID: {}", node_did);
+    println!("Resources: {:?}", capabilities.available_resources);
+    println!("Features: {:?}", capabilities.supported_features);
+
     // Serialize and save to file
     let output_path = format!("node_capability_{}.json", node_did.to_string().replace(":", "_"));
     let capabilities_json = serde_json::to_string_pretty(&capabilities)
-        .context("Failed to serialize node capabilities")?;
-    
+        .map_err(|e| CliError::SerializationError(format!("Failed to serialize node capabilities: {}", e)))?;
+
     fs::write(&output_path, &capabilities_json)
-        .context("Failed to write node capabilities to file")?;
-    
+        .map_err(|e| CliError::Io(e))?;
+
     println!("Node capabilities advertised successfully!");
-    println!("Node ID: {}", node_did);
-    println!("Resources: {:?}", capabilities.available_resources);
-    println!("Features: {:?}", capabilities.supported_features);
     println!("Saved to: {}", output_path);
-    
+
     Ok(())
 }
 
 /// Handle the submit-bid command.
-async fn handle_submit_bid(
-    args: SubmitBidArgs, 
-    ctx: &CliContext
-) -> CliResult<()> {
+async fn handle_submit_bid(args: SubmitBidArgs, ctx: &CliContext) -> Result<()> {
     // Read the key file for signing
     let key_data = fs::read_to_string(&args.key_path)
-        .context("Failed to read key file")?;
+        .map_err(|e| anyhow!("Failed to read key file: {}", e))?;
     
     let key_json: serde_json::Value = serde_json::from_str(&key_data)
-        .context("Invalid key file format, expected JSON")?;
+        .map_err(|e| anyhow!("Invalid key file format, expected JSON: {}", e))?;
     
     let did = key_json["did"].as_str()
-        .ok_or_else(|| CliError::InvalidArgument("DID not found in key file".into()))?;
+        .ok_or_else(|| anyhow!("DID not found in key file"))?;
     
     let private_key_hex = key_json["privateKey"].as_str()
-        .ok_or_else(|| CliError::InvalidArgument("Private key not found in key file".into()))?;
+        .ok_or_else(|| anyhow!("Private key not found in key file"))?;
     
     let private_key_bytes = hex::decode(private_key_hex)
-        .context("Invalid private key hex format")?;
+        .map_err(|e| anyhow!("Invalid private key hex format: {}", e))?;
     
     let bidder_did = Did::from_str(did)
-        .map_err(|e| CliError::InvalidArgument(format!("Invalid DID format: {}", e)))?;
-    
-    // Create bid
+        .map_err(|e| anyhow!("Invalid DID format: {}", e))?;
+
+    // Create a bid
     let bid = Bid {
-        job_manifest_cid: Cid::from_str("bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi")
-            .map_err(|_| CliError::Other("Failed to parse CID".into()))?,
-        bidder_node_id: bidder_did.clone(),
+        node_id: bidder_did.to_string(),
+        coop_id: "default".to_string(),
         price: args.price,
-        confidence: args.confidence,
-        offered_capabilities: vec![
-            ResourceType::CpuCores(4),
-            ResourceType::RamMb(2048),
-        ],
-        expires_at: Some(Utc::now() + chrono::Duration::hours(24)),
+        eta: Utc::now() + chrono::Duration::hours(1),
+        submitted_at: Utc::now(),
     };
-    
+
     // Sign the bid
     let bid_json = serde_json::to_string(&bid)
-        .context("Failed to serialize bid")?;
-    
-    let key_pair = ed25519_dalek::SigningKey::from_bytes(
-        private_key_bytes.as_slice().try_into()
-            .map_err(|e| CliError::Other(Box::new(e) as Box<dyn std::error::Error + Send + Sync>))?
-    );
-    
+        .map_err(|e| anyhow!("Failed to serialize bid: {}", e))?;
+
+    let key_pair = ed25519_dalek::SigningKey::from_bytes(private_key_bytes.as_slice());
     let signature = key_pair.sign(bid_json.as_bytes());
     let signature_b64 = BASE64_ENGINE.encode(signature.to_bytes());
-    
-    // Create verifiable credential
+
+    // Create a verifiable credential
     let vc = VerifiableCredential {
         context: vec![
             "https://www.w3.org/2018/credentials/v1".to_string(),
@@ -1189,34 +1118,33 @@ async fn handle_submit_bid(
         ],
         id: Some(format!("urn:uuid:{}", Uuid::new_v4())),
         type_: vec!["VerifiableCredential".to_string(), "BidSubmission".to_string()],
-        issuer: bidder_did.clone(),
+        issuer: bidder_did,
         issuance_date: Utc::now(),
         credential_subject: serde_json::to_value(&bid)
-            .context("Failed to convert bid to JSON value")?,
+            .map_err(|e| anyhow!("Failed to convert bid to JSON value: {}", e))?,
         proof: Some(Proof {
             type_: "Ed25519Signature2020".to_string(),
-            created: Utc::now(),
             verification_method: format!("{}#keys-1", bidder_did),
+            created: Utc::now(),
             proof_purpose: "assertionMethod".to_string(),
             proof_value: signature_b64,
         }),
     };
-    
-    // Serialize the VC
+
+    // Serialize verifiable credential
     let vc_json = serde_json::to_string_pretty(&vc)
-        .context("Failed to serialize verifiable credential")?;
-    
+        .map_err(|e| anyhow!("Failed to serialize verifiable credential: {}", e))?;
+
     // Save to a file for demonstration purposes
     let output_path = format!("bid_submission_{}.json", Uuid::new_v4());
     fs::write(&output_path, &vc_json)
-        .context("Failed to write bid to file")?;
-    
+        .map_err(|e| anyhow!("Failed to write bid to file: {}", e))?;
+
     println!("Bid submitted successfully for job: {}", args.job_id);
     println!("Bidder: {}", bidder_did);
     println!("Price: {} tokens", args.price);
-    println!("Confidence: {:.2}", args.confidence);
     println!("Bid saved to: {}", output_path);
-    
+
     Ok(())
 }
 
@@ -1268,11 +1196,36 @@ struct TokenCompensation {
 }
 
 /// Handle the verify-receipt command.
-async fn handle_verify_receipt(
-    args: VerifyReceiptArgs, 
-    ctx: &CliContext
-) -> CliResult<()> {
-    println!("Verifying execution receipt: {}", args.receipt_cid);
+async fn handle_verify_receipt(args: VerifyReceiptArgs, ctx: &CliContext) -> Result<()> {
+    // Read the receipt CID
+    let receipt_cid = args.receipt_cid;
+    
+    // Fetch the receipt from IPFS
+    let receipt_data = ctx.ipfs.cat(&receipt_cid)
+        .map_err(|e| anyhow!("Failed to fetch receipt from IPFS: {}", e))?;
+    
+    // Parse the receipt
+    let receipt: ExecutionReceipt = serde_json::from_str(&receipt_data)
+        .map_err(|e| anyhow!("Failed to parse receipt: {}", e))?;
+
+    // Read the key file for signing
+    let key_data = fs::read_to_string(&args.key_path)
+        .map_err(|e| anyhow!("Failed to read key file: {}", e))?;
+    
+    let key_json: serde_json::Value = serde_json::from_str(&key_data)
+        .map_err(|e| anyhow!("Invalid key file format, expected JSON: {}", e))?;
+    
+    let did = key_json["did"].as_str()
+        .ok_or_else(|| anyhow!("DID not found in key file"))?;
+    
+    let private_key_hex = key_json["privateKey"].as_str()
+        .ok_or_else(|| anyhow!("Private key not found in key file"))?;
+    
+    let private_key_bytes = hex::decode(private_key_hex)
+        .map_err(|e| anyhow!("Invalid private key hex format: {}", e))?;
+    
+    let verifier_did = Did::from_str(did)
+        .map_err(|e| anyhow!("Invalid DID format: {}", e))?;
     
     // In a real implementation, this would retrieve the receipt from the DAG
     // and verify its cryptographic proof.
@@ -1371,7 +1324,7 @@ struct TokenTransfer {
 async fn handle_check_balance(
     args: CheckBalanceArgs, 
     ctx: &CliContext
-) -> CliResult<()> {
+) -> Result<()> {
     // Read the key file
     let key_data = fs::read_to_string(&args.key_path)
         .context("Failed to read key file")?;
