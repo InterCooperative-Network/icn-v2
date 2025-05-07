@@ -4,7 +4,7 @@ use crate::error::{CliError, CliResult};
 use icn_runtime::{
     config::ExecutionConfig,
     ModernWasmExecutor,
-    engine::executor::ContextExtension,
+    ContextExtension,
     abi::context::HostContext
 };
 use icn_types::{Cid, Did, dag::{EventId, DagStore}};
@@ -12,6 +12,7 @@ use std::path::{PathBuf, Path};
 use std::sync::Arc;
 use std::str::FromStr;
 use anyhow::Context as AnyhowContext;
+use async_trait::async_trait;
 
 #[derive(Subcommand, Debug)]
 pub enum RuntimeCommands {
@@ -100,8 +101,15 @@ impl ContextExtension for RuntimeExecutionContext {
     fn federation_did(&self) -> Option<&Did> {
         None // We don't have a federation DID in this simple implementation
     }
+    
+    fn caller_did(&self) -> Option<&Did> {
+        // This is a placeholder - in a real implementation, we'd derive from context
+        static DUMMY_DID: Did = Did::new_unchecked("did:icn:placeholder");
+        Some(&DUMMY_DID)
+    }
 }
 
+#[async_trait]
 impl HostContext for RuntimeExecutionContext {
     fn log_message(&self, message: &str) {
         if self.log_enabled {
@@ -109,10 +117,13 @@ impl HostContext for RuntimeExecutionContext {
         }
     }
     
-    fn get_caller_did(&self) -> &Did {
+    fn get_caller_did(&self) -> Did {
         // This is a placeholder - in a real implementation, we'd have a valid DID
-        static DUMMY_DID: Did = Did::new_unchecked("did:icn:placeholder");
-        &DUMMY_DID
+        Did::new_unchecked("did:icn:placeholder")
+    }
+    
+    async fn verify_signature(&self, _did: &Did, _message: &[u8], _signature: &[u8]) -> bool {
+        false // Not implemented in this simple context
     }
 }
 

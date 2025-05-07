@@ -6,10 +6,10 @@ pub mod host;
 pub mod dag_anchor;
 pub mod config;
 
-// Re-export the main executor types from engine module
-pub use engine::executor::ModernWasmExecutor;
-pub use engine::executor::ExecutionResult;
-pub use engine::executor::ContextExtension;
+// Re-export the main executor types directly
+pub use engine::ModernWasmExecutor;
+pub use engine::ExecutionResult;
+pub use engine::ContextExtension;
 pub use engine::WasmExecutor;
 
 // Other re-exports

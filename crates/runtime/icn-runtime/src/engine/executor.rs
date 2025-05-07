@@ -1,7 +1,7 @@
 use wasmtime::*;
 use anyhow::{Context, Result};
 use crate::config::ExecutionConfig;
-use crate::host::receipt::{issue_execution_receipt, ReceiptContextExt};
+use crate::host::receipt::issue_execution_receipt;
 use crate::abi::bindings::register_host_functions;
 use crate::abi::context::HostContext;
 use icn_types::{Cid, dag::EventId, Did};
@@ -23,6 +23,54 @@ pub struct ExecutionResult {
     pub fuel_consumed: Option<u64>,
     /// CID of the result data
     pub result_cid: Cid,
+}
+
+/// Context extension trait for WASM execution
+pub trait ContextExtension {
+    /// Get execution configuration
+    fn get_execution_config(&self) -> &ExecutionConfig;
+    
+    /// Get mutable access to the DAG store if available
+    fn get_dag_store_mut(&mut self) -> Option<&mut (dyn icn_types::dag::DagStore + Send + Sync)>;
+    
+    /// Get node DID if available
+    fn node_did(&self) -> Option<&Did> { None }
+    
+    /// Get federation DID if available
+    fn federation_did(&self) -> Option<&Did> { None }
+    
+    /// Get caller DID if available
+    fn caller_did(&self) -> Option<&Did> { None }
+    
+    /// Get federation keypair if available
+    fn federation_keypair(&self) -> Option<DidKey> { None }
+}
+
+// Implement ContextExtension for Arc<T> where T: ContextExtension
+impl<T: ContextExtension + ?Sized> ContextExtension for Arc<T> {
+    fn get_execution_config(&self) -> &ExecutionConfig {
+        (**self).get_execution_config()
+    }
+
+    fn get_dag_store_mut(&mut self) -> Option<&mut (dyn icn_types::dag::DagStore + Send + Sync)> {
+        Arc::get_mut(self).and_then(|inner| inner.get_dag_store_mut())
+    }
+    
+    fn node_did(&self) -> Option<&Did> {
+        (**self).node_did()
+    }
+    
+    fn federation_did(&self) -> Option<&Did> {
+        (**self).federation_did()
+    }
+    
+    fn caller_did(&self) -> Option<&Did> {
+        (**self).caller_did()
+    }
+    
+    fn federation_keypair(&self) -> Option<DidKey> {
+        (**self).federation_keypair()
+    }
 }
 
 /// Executes WASM modules and provides resource usage metrics
@@ -74,7 +122,7 @@ impl ModernWasmExecutor {
         fuel_limit: Option<u64>
     ) -> Result<ExecutionResult> 
     where 
-        T: HostContext + ReceiptContextExt + Send + Sync + 'static 
+        T: HostContext + ContextExtension + Send + Sync + 'static 
     {
         let start_time = Instant::now();
         
@@ -87,7 +135,7 @@ impl ModernWasmExecutor {
         register_host_functions(&mut linker)?;
         
         // Create store with context
-        let mut store = Store::new(&self.engine, ctx.clone());
+        let mut store = Store::new(&self.engine, ctx);
         
         // Configure fuel if limit is specified
         if let Some(limit) = fuel_limit {
@@ -116,7 +164,8 @@ impl ModernWasmExecutor {
         
         // Get fuel consumption if enabled
         let fuel_consumed = if fuel_limit.is_some() {
-            store.fuel_consumed().ok()
+            // store.fuel_consumed() returns Option<u64> directly
+            store.fuel_consumed()
         } else {
             None
         };
@@ -152,7 +201,7 @@ impl ModernWasmExecutor {
     {
         // Try standard entry points in order of preference
         for name in &["_start", "main", "run", "execute"] {
-            if let Ok(func) = instance.get_typed_func::<(), ()>(store, name) {
+            if let Ok(func) = instance.get_typed_func::<(), ()>(&mut *store, name) {
                 debug!("Found entry point: {}", name);
                 return Ok(func);
             }
@@ -169,23 +218,21 @@ impl ModernWasmExecutor {
         event_id: Option<EventId>
     ) -> Result<Option<String>>
     where 
-        T: HostContext + ReceiptContextExt + Send + Sync + 'static 
+        T: HostContext + ContextExtension + Send + Sync + 'static 
     {
-        // Access context data
-        let ctx_ref = store.data();
-        
         // Check if receipt generation is enabled in the execution config
-        let auto_issue_receipts = ctx_ref.get_execution_config().auto_issue_receipts;
-        let anchor_receipts = ctx_ref.get_execution_config().anchor_receipts;
-        let receipt_export_dir = ctx_ref.get_execution_config().receipt_export_dir.clone();
+        // We can access this directly through the ContextExtension implementation on Store
+        let auto_issue_receipts = store.get_execution_config().auto_issue_receipts;
+        let anchor_receipts = store.get_execution_config().anchor_receipts;
+        let receipt_export_dir = store.get_execution_config().receipt_export_dir.clone();
         
         if !auto_issue_receipts {
             return Ok(None);
         }
         
-        // Generate and sign execution receipt
+        // Generate and sign execution receipt using the store directly as it implements ContextExtension
         match issue_execution_receipt(
-            ctx_ref.as_ref(),
+            store, // Pass the store directly instead of ctx_ref.as_ref()
             &result.module_cid,
             &result.result_cid,
             event_id.as_ref()
@@ -197,9 +244,8 @@ impl ModernWasmExecutor {
                 if anchor_receipts {
                     let mut dag_anchored_successfully = false;
                     
-                    // Access the data mutably (requires separate access to avoid borrow issues)
-                    let host_data_mut = store.data_mut();
-                    if let Some(dag_store_mut_ref) = host_data_mut.get_dag_store_mut() {
+                    // Directly use get_dag_store_mut on the store 
+                    if let Some(dag_store_mut_ref) = store.get_dag_store_mut() {
                         match crate::dag_anchor::anchor_execution_receipt(&receipt, dag_store_mut_ref, event_id).await {
                             Ok(anchored_event_id) => {
                                 info!("🧾 ExecutionReceipt anchored to DAG. Event ID: {}", anchored_event_id);
@@ -247,25 +293,4 @@ impl ModernWasmExecutor {
             }
         }
     }
-}
-
-// Use existing trait from parent module
-pub trait ContextExtension {
-    /// Get execution configuration
-    fn get_execution_config(&self) -> &ExecutionConfig;
-    
-    /// Get mutable access to the DAG store if available
-    fn get_dag_store_mut(&mut self) -> Option<&mut (dyn icn_types::dag::DagStore + Send + Sync)>;
-    
-    /// Get node DID if available
-    fn node_did(&self) -> Option<&Did> { None }
-    
-    /// Get federation DID if available
-    fn federation_did(&self) -> Option<&Did> { None }
-    
-    /// Get caller DID if available
-    fn caller_did(&self) -> Option<&Did> { None }
-    
-    /// Get federation keypair if available
-    fn federation_keypair(&self) -> Option<DidKey> { None }
 } 
