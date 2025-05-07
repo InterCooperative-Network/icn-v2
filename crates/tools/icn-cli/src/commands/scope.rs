@@ -133,6 +133,18 @@ pub enum ScopeCommands {
         #[command(flatten)]
         options: ScopeOptions,
     },
+    
+    /// Set a policy for a scope
+    #[command(name = "set-policy")]
+    SetPolicy {
+        /// Scope options (type, id, federation)
+        #[command(flatten)]
+        options: ScopeOptions,
+        
+        /// Path to a JSON file containing the policy configuration
+        #[arg(long, value_hint = ValueHint::FilePath)]
+        policy_file: PathBuf,
+    },
 }
 
 pub async fn handle_scope_command(command: &ScopeCommands, ctx: &mut CliContext) -> CliResult<()> {
@@ -508,6 +520,84 @@ pub async fn handle_scope_command(command: &ScopeCommands, ctx: &mut CliContext)
             
             println!("Submitted join request for {} '{}' to federation '{}' with CID {}", 
                 scope_name, options.scope_id, options.federation_id, cid);
+            
+            Ok(())
+        },
+        
+        ScopeCommands::SetPolicy { options, policy_file } => {
+            let scope_type = ScopeType::from_str(&options.scope_type)?;
+            let dag_store = ctx.get_dag_store(options.dag_dir.as_deref())?;
+            let did_key = ctx.load_did_key(&options.key)?;
+            let did = Did::from_string(&did_key.to_did_string())?;
+            
+            // Read policy configuration from file
+            let policy_str = fs::read_to_string(policy_file)
+                .map_err(|e| CliError::IoError(format!("Failed to read policy file: {}", e)))?;
+            
+            // Parse policy from JSON
+            let mut policy_config: icn_types::ScopePolicyConfig = serde_json::from_str(&policy_str)
+                .map_err(|e| CliError::SerializationError(format!("Failed to parse policy: {}", e)))?;
+            
+            // Override scope_type and scope_id to ensure they match options
+            policy_config.scope_type = scope_type.to_node_scope();
+            policy_config.scope_id = options.scope_id.clone();
+            
+            // Create a policy node in the DAG
+            let node_type = match scope_type {
+                ScopeType::Cooperative => "CooperativePolicy",
+                ScopeType::Community => "CommunityPolicy",
+            };
+            
+            // Create payload with the policy
+            let payload = DagPayload::Json(json!({
+                "type": node_type,
+                "policy": serde_json::to_value(&policy_config).unwrap(),
+                "createdAt": chrono::Utc::now().to_rfc3339(),
+                "author": did.to_string(),
+            }));
+            
+            // Get the latest nodes from this scope to use as parents
+            let search_type = match scope_type {
+                ScopeType::Cooperative => "Cooperative",
+                ScopeType::Community => "Community",
+            };
+            
+            let scope_nodes = dag_store.get_nodes_by_payload_type(search_type).await?;
+            let mut parent_cids = Vec::new();
+            
+            for node in scope_nodes {
+                if let Some(scope) = node.node.metadata.scope_id.as_ref() {
+                    if scope == &options.scope_id {
+                        let cid = node.ensure_cid()?;
+                        parent_cids.push(cid);
+                    }
+                }
+            }
+            
+            let mut builder = DagNodeBuilder::new()
+                .with_payload(payload)
+                .with_author(did)
+                .with_federation_id(options.federation_id.clone())
+                .with_scope(scope_type.to_node_scope())
+                .with_scope_id(options.scope_id.clone())
+                .with_label(node_type.to_string());
+            
+            // Add parents if available
+            if !parent_cids.is_empty() {
+                builder = builder.with_parents(parent_cids);
+            }
+            
+            let node = builder.build()?;
+            let signed_node = ctx.sign_dag_node(node, &did_key)?;
+            let cid = dag_store.add_node(signed_node).await?;
+            
+            let scope_name = match scope_type {
+                ScopeType::Cooperative => "cooperative",
+                ScopeType::Community => "community",
+            };
+            
+            println!("Created policy for {} '{}' with CID {}", 
+                scope_name, options.scope_id, cid);
             
             Ok(())
         },

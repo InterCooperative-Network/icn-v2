@@ -44,6 +44,12 @@ pub trait ContextExtension {
     
     /// Get federation keypair if available
     fn federation_keypair(&self) -> Option<DidKey> { None }
+    
+    /// Get membership index if available
+    fn membership_index(&self) -> Option<std::sync::Arc<crate::policy::MembershipIndex>> { None }
+    
+    /// Get policy loader if available
+    fn policy_loader(&self) -> Option<std::sync::Arc<crate::policy::PolicyLoader>> { None }
 }
 
 // Implement ContextExtension for Arc<T> where T: ContextExtension
@@ -70,6 +76,14 @@ impl<T: ContextExtension + ?Sized> ContextExtension for Arc<T> {
     
     fn federation_keypair(&self) -> Option<DidKey> {
         (**self).federation_keypair()
+    }
+    
+    fn membership_index(&self) -> Option<std::sync::Arc<crate::policy::MembershipIndex>> {
+        (**self).membership_index()
+    }
+    
+    fn policy_loader(&self) -> Option<std::sync::Arc<crate::policy::PolicyLoader>> {
+        (**self).policy_loader()
     }
 }
 

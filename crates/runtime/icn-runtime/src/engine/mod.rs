@@ -57,6 +57,14 @@ impl<T: ContextExtension + Send + Sync + 'static> ContextExtension for wasmtime:
     fn federation_keypair(&self) -> Option<icn_identity_core::did::DidKey> {
         self.data().federation_keypair()
     }
+    
+    fn membership_index(&self) -> Option<std::sync::Arc<crate::policy::MembershipIndex>> {
+        self.data().membership_index()
+    }
+    
+    fn policy_loader(&self) -> Option<std::sync::Arc<crate::policy::PolicyLoader>> {
+        self.data().policy_loader()
+    }
 }
 
 // Implement ContextExtension for StoreContext
@@ -84,6 +92,14 @@ impl<'a, T: ContextExtension + Send + Sync + 'static> ContextExtension for wasmt
     
     fn federation_keypair(&self) -> Option<icn_identity_core::did::DidKey> {
         self.data().federation_keypair()
+    }
+    
+    fn membership_index(&self) -> Option<std::sync::Arc<crate::policy::MembershipIndex>> {
+        self.data().membership_index()
+    }
+    
+    fn policy_loader(&self) -> Option<std::sync::Arc<crate::policy::PolicyLoader>> {
+        self.data().policy_loader()
     }
 }
 
@@ -116,5 +132,13 @@ impl<'a, T: ContextExtension + Send + Sync + 'static> ContextExtension for wasmt
     
     fn federation_keypair(&self) -> Option<icn_identity_core::did::DidKey> {
         self.data().federation_keypair()
+    }
+    
+    fn membership_index(&self) -> Option<std::sync::Arc<crate::policy::MembershipIndex>> {
+        self.data().membership_index()
+    }
+    
+    fn policy_loader(&self) -> Option<std::sync::Arc<crate::policy::PolicyLoader>> {
+        self.data().policy_loader()
     }
 }

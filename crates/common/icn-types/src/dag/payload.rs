@@ -1,6 +1,18 @@
 use serde::{Deserialize, Serialize};
 use crate::Cid;
 
+/// Trait for DAG payload types that can provide their action type for policy enforcement
+pub trait ActionType {
+    /// Returns the action type string used for policy enforcement, or None if
+    /// this payload doesn't require policy enforcement
+    fn action_type(&self) -> Option<String>;
+    
+    /// Returns true if this payload requires authorization
+    fn requires_authorization(&self) -> bool {
+        self.action_type().is_some()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "data")]
 pub enum EventPayload {
@@ -112,5 +124,32 @@ impl EventPayload {
     /// Create a Custom payload
     pub fn custom(fields: serde_json::Value) -> Self {
         EventPayload::Custom { fields }
+    }
+}
+
+impl ActionType for EventPayload {
+    fn action_type(&self) -> Option<String> {
+        match self {
+            // Core governance action types
+            EventPayload::Proposal { .. } => Some("submit_proposal".to_string()),
+            EventPayload::Vote { .. } => Some("submit_vote".to_string()),
+            EventPayload::Execution { .. } => Some("execute_proposal".to_string()),
+            
+            // Join flow action types
+            EventPayload::JoinRequest { .. } => Some("submit_join_request".to_string()),
+            EventPayload::JoinVote { .. } => Some("submit_join_vote".to_string()),
+            EventPayload::JoinApproval { .. } => Some("approve_join_request".to_string()),
+            
+            // Custom and other payloads - would need to be handled in their individual contexts
+            EventPayload::Custom { fields } => {
+                // Extract action_type field from custom payload if available
+                fields.get("action_type")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            },
+            
+            // Other payload types that don't require explicit authorization
+            _ => None,
+        }
     }
 } 

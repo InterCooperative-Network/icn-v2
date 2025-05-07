@@ -29,9 +29,12 @@ use commands::coop::CoopCommands;
 use commands::coop::handle_coop_command;
 use commands::community::CommunityCommands;
 use commands::community::handle_community_command;
+use commands::federation::FederationCommands;
+use commands::scope::ScopeCommands;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
+#[command(propagate_version = true)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -79,7 +82,7 @@ enum Commands {
 
     /// Federation management commands
     #[command(subcommand)]
-    Federation(commands::federation::FederationCommands),
+    Federation(FederationCommands),
 
     /// Manage trust policies
     #[command(subcommand)]
@@ -99,11 +102,15 @@ enum Commands {
 
     /// Cooperative commands
     #[command(subcommand)]
-    Coop(commands::coop::CoopCommands),
+    Coop(CoopCommands),
     
     /// Community commands
     #[command(subcommand)]
-    Community(commands::community::CommunityCommands),
+    Community(CommunityCommands),
+
+    /// Generic scope commands (works with both cooperatives and communities)
+    #[command(subcommand)]
+    Scope(ScopeCommands),
 }
 
 // Removed DagCommands enum definition from here (moved to commands/dag.rs)
@@ -112,53 +119,53 @@ enum Commands {
 
 // Main function using the new structure
 #[tokio::main]
-async fn main() -> Result<(), CliError> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
+    let mut ctx = CliContext::new(false)?;
 
-    // Initialize context
-    let mut context = CliContext::new(cli.verbose > 0)?;
-
-    // Match top-level command and dispatch
     match &cli.command {
+        Commands::Coop(coop_cmd) => {
+            commands::coop::handle_coop_command(coop_cmd, &mut ctx).await?;
+        },
+        Commands::Community(community_cmd) => {
+            commands::community::handle_community_command(community_cmd, &mut ctx).await?;
+        },
+        Commands::Federation(federation_cmd) => {
+            commands::federation::handle_federation_command(federation_cmd, &mut ctx).await?;
+        },
+        Commands::Scope(scope_cmd) => {
+            commands::scope::handle_scope_command(scope_cmd, &mut ctx).await?;
+        },
         Commands::Dag(cmd) => {
-            handle_dag_command(&mut context, cmd).await?
+            handle_dag_command(&mut ctx, cmd).await?
         }
         Commands::KeyGen { output } => {
-            handle_key_gen(&mut context, output).await?
+            handle_key_gen(&mut ctx, output).await?
         }
         Commands::Bundle(cmd) => {
-            handle_bundle_command(&mut context, cmd).await?
+            handle_bundle_command(&mut ctx, cmd).await?
         }
          Commands::Receipt(cmd) => {
-            handle_receipt_command(&mut context, cmd).await?
+            handle_receipt_command(&mut ctx, cmd).await?
         }
         Commands::Mesh(cmd) => {
-            handle_mesh_command(&mut context, cmd).await?
+            handle_mesh_command(&mut ctx, cmd).await?
         }
          Commands::SyncP2P(cmd) => {
-            handle_dag_sync_command(&mut context, cmd).await?
-        }
-        Commands::Federation(cmd) => {
-            handle_federation_command(&mut context, cmd).await?
+            handle_dag_sync_command(&mut ctx, cmd).await?
         }
         Commands::Runtime(cmd) => {
-            handle_runtime_command(&mut context, cmd).await?
+            handle_runtime_command(&mut ctx, cmd).await?
         }
         Commands::Policy(cmd) => {
-            handle_policy_command(&mut context, cmd).await?
+            handle_policy_command(&mut ctx, cmd).await?
         }
         Commands::Proposal(cmd) => {
-            handle_proposal_commands(cmd.clone(), &mut context).await?
+            handle_proposal_commands(cmd.clone(), &mut ctx).await?
         }
         Commands::Vote(cmd) => {
-            handle_vote_commands(cmd.clone(), &mut context).await?
+            handle_vote_commands(cmd.clone(), &mut ctx).await?
         }
-        Commands::Coop(cmd) => {
-            handle_coop_command(cmd, &mut context).await?
-        },
-        Commands::Community(cmd) => {
-            handle_community_command(cmd, &mut context).await?
-        },
     }
     
     Ok(())

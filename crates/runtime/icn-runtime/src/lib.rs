@@ -5,6 +5,8 @@ pub mod engine;
 pub mod host;
 pub mod dag_anchor;
 pub mod config;
+pub mod policy;
+pub mod dag_processor;
 
 // Re-export the main executor types directly
 pub use engine::ModernWasmExecutor;
@@ -16,6 +18,8 @@ pub use engine::WasmExecutor;
 pub use host::receipt::{issue_execution_receipt, ReceiptError, ReceiptContextExt};
 pub use dag_anchor::{anchor_execution_receipt, AnchorError};
 pub use config::{RuntimeConfig, ExecutionConfig};
+pub use policy::{evaluate_policy, MembershipIndex, PolicyLoader, ScopeType};
+pub use dag_processor::{DagProcessor, ValidationResult};
 
 /// Initialize runtime components (logging, etc.)
 pub fn init_runtime() {

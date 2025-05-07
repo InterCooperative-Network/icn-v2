@@ -10,6 +10,7 @@ pub mod dag;
 pub mod receipts;
 pub mod resources;
 pub mod governance;
+pub mod policy;
 
 // Re-export core types for easier access
 pub use anchor::AnchorRef;
@@ -46,3 +47,4 @@ pub use governance::QuorumConfig;
 // Commented out problematic re-exports for now
 pub use receipts::{QuorumProof, ReceiptError}; // Removed ReceiptProof, VoteReceipt, SignedVoteReceipt
 pub use resources::{ResourceOffer, ResourceType as EconomicResourceType}; // Removed MeteringProof
+pub use policy::{ScopePolicyConfig, PolicyRule, PolicyError};

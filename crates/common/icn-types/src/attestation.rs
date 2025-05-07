@@ -3,6 +3,7 @@ use crate::Cid;
 use crate::Did;
 use serde::{Serialize, Deserialize};
 use chrono::{DateTime, Utc};
+use serde_json;
 
 /// Represents a signature from a specific scope (cooperative, community, or federation)
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -117,6 +118,21 @@ impl LineageAttestation {
         }
         
         has_parent_sig && has_child_sig
+    }
+    
+    /// Returns a canonical byte representation for signing
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, AttestationError> {
+        serde_json::to_vec(&serde_json::json!({
+            "parent_scope": format!("{:?}", self.parent_scope),
+            "parent_scope_id": self.parent_scope_id,
+            "parent_cid": self.parent_cid.to_string(),
+            "child_scope": format!("{:?}", self.child_scope),
+            "child_scope_id": self.child_scope_id,
+            "child_cid": self.child_cid.to_string(),
+            "timestamp": self.timestamp.to_rfc3339(),
+            "membership_attestation_cid": self.membership_attestation_cid.map(|cid| cid.to_string()),
+        }))
+        .map_err(|e| AttestationError::SerializationError(e.to_string()))
     }
 }
 
@@ -238,6 +254,22 @@ impl QuorumProof {
         
         Ok(true)
     }
+    
+    /// Returns a canonical byte representation for verification
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, AttestationError> {
+        serde_json::to_vec(&serde_json::json!({
+            "total_members": self.total_members,
+            "threshold": self.threshold,
+            "votes_received": self.votes_received,
+            "yes_votes": self.yes_votes,
+            "no_votes": self.no_votes,
+            "eligible_voters": self.eligible_voters.iter().map(|did| did.to_string()).collect::<Vec<_>>(),
+            "yes_voters": self.yes_voters.iter().map(|did| did.to_string()).collect::<Vec<_>>(),
+            "no_voters": self.no_voters.iter().map(|did| did.to_string()).collect::<Vec<_>>(),
+            "timestamp": self.timestamp.to_rfc3339(),
+        }))
+        .map_err(|e| AttestationError::SerializationError(e.to_string()))
+    }
 }
 
 /// Federation membership attestation documenting the acceptance of a scope into a federation
@@ -346,6 +378,21 @@ impl FederationMembershipAttestation {
         // In a full implementation, we would verify signatures against DIDs, etc.
         
         Ok(true)
+    }
+    
+    /// Returns a canonical byte representation for signing
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, AttestationError> {
+        serde_json::to_vec(&serde_json::json!({
+            "scope_type": format!("{:?}", self.scope_type),
+            "scope_id": self.scope_id,
+            "scope_genesis_cid": self.scope_genesis_cid.to_string(),
+            "federation_id": self.federation_id,
+            "federation_genesis_cid": self.federation_genesis_cid.to_string(),
+            "join_proposal_cid": self.join_proposal_cid.to_string(),
+            "vote_cids": self.vote_cids.iter().map(|cid| cid.to_string()).collect::<Vec<_>>(),
+            "timestamp": self.timestamp.to_rfc3339(),
+        }))
+        .map_err(|e| AttestationError::SerializationError(e.to_string()))
     }
 }
 
