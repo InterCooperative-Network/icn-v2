@@ -112,21 +112,44 @@ mod tests {
     use super::*;
     use icn_identity_core::vc::execution_receipt::ExecutionSubject;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use chrono::Utc;
 
     fn current_timestamp() -> u64 {
         SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
     }
 
     fn mock_receipt(id: &str) -> StoredReceipt {
-        let did: Did = "did:example:federation".parse().unwrap();
+        let did_str = "did:example:federation";
+        let did: Did = did_str.parse().unwrap();
+        let submitter_str = "did:example:submitter";
+        
+        // Create a proper ExecutionSubject with updated structure
         let subject = ExecutionSubject {
-            module_cid: Some(Cid::default()),
-            status: ExecutionStatus::Completed,
-            scope: ExecutionScope::Federation,
-            submitter: Some(did.clone()),
+            id: submitter_str.to_string(),
+            module_cid: "cid:example:module123".to_string(),
+            result_cid: "cid:example:result456".to_string(),
+            event_id: None,
+            status: ExecutionStatus::Success, // Updated from Completed to Success
+            scope: ExecutionScope::Federation {
+                federation_id: did_str.to_string(),
+            },
+            submitter: Some(submitter_str.to_string()),
             timestamp: current_timestamp(),
-            result_summary: "Test execution completed".to_string(),
-            ..Default::default()
+            additional_properties: Some(serde_json::json!({
+                "result_summary": "Test execution completed",
+                "test_data": "Additional test metadata"
+            })),
+        };
+        
+        // Create a minimal ExecutionReceipt for testing
+        let raw_vc = ExecutionReceipt {
+            context: vec!["https://www.w3.org/2018/credentials/v1".to_string()],
+            id: id.to_string(),
+            types: vec!["VerifiableCredential".to_string(), "ExecutionReceipt".to_string()],
+            issuer: did_str.to_string(),
+            issuance_date: chrono::Utc::now(),
+            credential_subject: subject.clone(), 
+            proof: None,
         };
         
         StoredReceipt {
@@ -135,7 +158,7 @@ mod tests {
             federation_did: did,
             subject,
             execution_timestamp: current_timestamp(),
-            raw_vc: ExecutionReceipt::default(),
+            raw_vc,
             source_event_id: None,
             wallet_stored_at: current_timestamp(),
         }
@@ -188,20 +211,27 @@ mod tests {
         // Create receipts with different properties
         let mut receipt1 = mock_receipt("r1");
         receipt1.federation_did = federation_did.clone();
-        receipt1.subject.submitter = Some(submitter_did.clone());
-        receipt1.subject.scope = ExecutionScope::Federation;
+        receipt1.subject.submitter = Some(submitter_did.to_string());
+        receipt1.subject.scope = ExecutionScope::Federation {
+            federation_id: "test-federation".to_string()
+        };
         receipt1.execution_timestamp = 1000;
         
         let mut receipt2 = mock_receipt("r2");
         receipt2.federation_did = "did:example:other".parse().unwrap();
-        receipt2.subject.submitter = Some(submitter_did.clone());
-        receipt2.subject.scope = ExecutionScope::MeshCompute;
+        receipt2.subject.submitter = Some(submitter_did.to_string());
+        receipt2.subject.scope = ExecutionScope::MeshCompute {
+            task_id: "task123".to_string(),
+            job_id: "job456".to_string()
+        };
         receipt2.execution_timestamp = 2000;
         
         let mut receipt3 = mock_receipt("r3");
         receipt3.federation_did = federation_did.clone();
-        receipt3.subject.submitter = Some("did:example:other".parse().unwrap());
-        receipt3.subject.scope = ExecutionScope::Federation;
+        receipt3.subject.submitter = Some("did:example:other".to_string());
+        receipt3.subject.scope = ExecutionScope::Federation {
+            federation_id: "test-federation".to_string()
+        };
         receipt3.execution_timestamp = 3000;
         
         // Save all receipts
@@ -232,7 +262,10 @@ mod tests {
         
         // Test: filter by scope
         let filter = ReceiptFilter {
-            scope: Some(ExecutionScope::MeshCompute),
+            scope: Some(ExecutionScope::MeshCompute {
+                task_id: "task123".to_string(),
+                job_id: "job456".to_string()
+            }),
             ..Default::default()
         };
         let results = store.list_receipts(filter).unwrap();

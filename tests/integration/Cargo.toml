@@ -1,0 +1,24 @@
+[package]
+name = "icn-integration-tests-dag"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+ed25519-dalek = { version = "2.0", features = ["rand_core"] }
+hex = "0.4"
+icn-core-types = { path = "../../crates/common/icn-core-types" }
+icn-identity-core = { path = "../../crates/common/icn-identity-core" }
+icn-types = { path = "../../crates/common/icn-types" }
+icn-wallet = { path = "../../crates/wallet/icn-wallet" }
+rand = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+uuid = { version = "1.4", features = ["v4", "serde"] }
+
+[[test]]
+name = "dag_store_task_receipt"
+path = "dag_store_task_receipt.rs" 

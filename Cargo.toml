@@ -7,7 +7,8 @@ members = [
     "crates/planetary-mesh",
     "crates/wallet/icn-wallet",
     "crates/tools/icn-cli",
-    "tests"
+    "tests",
+    "tests/integration"
 ]
 resolver = "2"
 
