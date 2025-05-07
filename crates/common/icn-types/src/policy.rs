@@ -15,6 +15,27 @@ pub struct ScopePolicyConfig {
     pub allowed_actions: Vec<PolicyRule>
 }
 
+impl ScopePolicyConfig {
+    /// Generate a canonical byte representation for consistent hashing and signing
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, String> {
+        // Use canonical JSON serialization for consistent representation
+        serde_json::to_vec(self)
+            .map_err(|e| format!("Failed to serialize policy config: {}", e))
+    }
+    
+    /// Convert to a JSON string representation for storage in DAG
+    pub fn to_json_string(&self) -> Result<String, String> {
+        serde_json::to_string(self)
+            .map_err(|e| format!("Failed to serialize policy config to JSON string: {}", e))
+    }
+    
+    /// Create a policy from a JSON string representation
+    pub fn from_json_string(json: &str) -> Result<Self, String> {
+        serde_json::from_str(json)
+            .map_err(|e| format!("Failed to deserialize policy config from JSON: {}", e))
+    }
+}
+
 /// Rule defining who can perform a specific action
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct PolicyRule {

@@ -20,6 +20,7 @@ use commands::handle_vote_commands; // Add vote handler
 use commands::{handle_bundle_command, handle_receipt_command, handle_dag_sync_command}; // ADDED
 use commands::handle_policy_command; // Add policy handler import
 use commands::handle_key_gen; // Add keygen handler
+use commands::handle_observability_command; // Add observability handler
 // use icn_types::ExecutionResult; // Needs locating
 use std::path::PathBuf;
 use tokio;
@@ -31,6 +32,7 @@ use commands::community::CommunityCommands;
 use commands::community::handle_community_command;
 use commands::federation::FederationCommands;
 use commands::scope::ScopeCommands;
+use commands::ObservabilityCommands;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -111,6 +113,10 @@ enum Commands {
     /// Generic scope commands (works with both cooperatives and communities)
     #[command(subcommand)]
     Scope(ScopeCommands),
+    
+    /// Observability commands for federation transparency
+    #[command(subcommand)]
+    Observe(ObservabilityCommands),
 }
 
 // Removed DagCommands enum definition from here (moved to commands/dag.rs)
@@ -165,6 +171,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Vote(cmd) => {
             handle_vote_commands(cmd.clone(), &mut ctx).await?
+        }
+        Commands::Observe(cmd) => {
+            handle_observability_command(cmd, &mut ctx).await?
         }
     }
     

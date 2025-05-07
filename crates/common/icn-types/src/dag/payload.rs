@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 use crate::Cid;
+use crate::Did;
+use crate::policy::ScopePolicyConfig;
+use crate::receipts::QuorumProof;
 
 /// Trait for DAG payload types that can provide their action type for policy enforcement
 pub trait ActionType {
@@ -38,6 +41,25 @@ pub enum EventPayload {
         join_request_cid: String,
         attestation_cid: String,
         lineage_cid: String 
+    },
+    // Policy update flow payloads
+    PolicyUpdateProposal {
+        scope_type: String,        // "Federation", "Cooperative", or "Community"
+        scope_id: String,          // ID of the scope being updated
+        proposed_policy: String,   // JSON serialized ScopePolicyConfig
+        proposer_did: String,      // DID of the proposer
+        description: String,       // Description of the policy change
+    },
+    PolicyUpdateVote {
+        proposal_cid: String,      // CID of the PolicyUpdateProposal
+        choice: String,            // "approve" or "reject"
+        reason: Option<String>,    // Optional reason for the vote
+        voter_did: String,         // DID of the voter
+    },
+    PolicyUpdateApproval {
+        proposal_cid: String,      // CID of the PolicyUpdateProposal
+        quorum_proof: QuorumProof, // Proof of sufficient votes
+        approver_did: String,      // DID of the approver (federation authority)
     },
     Custom { fields: serde_json::Value },
 }
@@ -121,6 +143,51 @@ impl EventPayload {
         }
     }
     
+    /// Create a PolicyUpdateProposal payload
+    pub fn policy_update_proposal(
+        scope_type: impl Into<String>,
+        scope_id: impl Into<String>,
+        proposed_policy: impl Into<String>,
+        proposer_did: impl Into<String>,
+        description: impl Into<String>
+    ) -> Self {
+        EventPayload::PolicyUpdateProposal {
+            scope_type: scope_type.into(),
+            scope_id: scope_id.into(),
+            proposed_policy: proposed_policy.into(),
+            proposer_did: proposer_did.into(),
+            description: description.into(),
+        }
+    }
+    
+    /// Create a PolicyUpdateVote payload
+    pub fn policy_update_vote(
+        proposal_cid: impl Into<String>,
+        choice: impl Into<String>,
+        reason: Option<String>,
+        voter_did: impl Into<String>
+    ) -> Self {
+        EventPayload::PolicyUpdateVote {
+            proposal_cid: proposal_cid.into(),
+            choice: choice.into(),
+            reason,
+            voter_did: voter_did.into(),
+        }
+    }
+    
+    /// Create a PolicyUpdateApproval payload
+    pub fn policy_update_approval(
+        proposal_cid: impl Into<String>,
+        quorum_proof: QuorumProof,
+        approver_did: impl Into<String>
+    ) -> Self {
+        EventPayload::PolicyUpdateApproval {
+            proposal_cid: proposal_cid.into(),
+            quorum_proof,
+            approver_did: approver_did.into(),
+        }
+    }
+    
     /// Create a Custom payload
     pub fn custom(fields: serde_json::Value) -> Self {
         EventPayload::Custom { fields }
@@ -139,6 +206,11 @@ impl ActionType for EventPayload {
             EventPayload::JoinRequest { .. } => Some("submit_join_request".to_string()),
             EventPayload::JoinVote { .. } => Some("submit_join_vote".to_string()),
             EventPayload::JoinApproval { .. } => Some("approve_join_request".to_string()),
+            
+            // Policy update flow action types
+            EventPayload::PolicyUpdateProposal { .. } => Some("submit_policy_update_proposal".to_string()),
+            EventPayload::PolicyUpdateVote { .. } => Some("submit_policy_update_vote".to_string()),
+            EventPayload::PolicyUpdateApproval { .. } => Some("approve_policy_update_proposal".to_string()),
             
             // Custom and other payloads - would need to be handled in their individual contexts
             EventPayload::Custom { fields } => {
