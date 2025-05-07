@@ -23,7 +23,7 @@ pub enum DidKeyError {
 }
 
 /// Manages an Ed25519 keypair (SigningKey + VerifyingKey) associated with a DID.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DidKey {
     signing_key: SigningKey,
     verifying_key: VerifyingKey,

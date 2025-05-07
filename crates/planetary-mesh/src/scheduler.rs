@@ -5,7 +5,7 @@ use icn_identity_core::did::DidKey;
 use icn_identity_core::manifest::NodeManifest;
 use icn_types::Did;
 use icn_types::Cid;
-use icn_types::dag::{DagStore, DagNodeBuilder, DagPayload, SignedDagNode};
+use icn_types::dag::{DagStore, DagNodeBuilder, DagPayload, SignedDagNode, DagNode};
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -14,6 +14,7 @@ use tokio::sync::RwLock;
 use log::{debug, info, warn, error};
 use uuid::Uuid;
 use hex;
+use ed25519_dalek::Signature;
 
 /// Architecture type with Default implementation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -696,6 +697,33 @@ impl Scheduler {
         info!("Accepted bid {} from {}", result.bid_cid, result.bid.bidder);
         
         Ok(())
+    }
+}
+
+impl SignedDagNode {
+    pub fn with_empty_signature(node: DagNode) -> Self {
+        // Create an empty signature (all zeros)
+        let empty_sig = Signature::from_bytes(&[0u8; 64]).unwrap();
+        
+        SignedDagNode {
+            node,
+            signature: empty_sig,
+            cid: None,
+        }
+    }
+    
+    // New helper method to create a signed node
+    pub fn sign(node: DagNode, did_key: &DidKey) -> Result<Self, anyhow::Error> {
+        let node_bytes = serde_json::to_vec(&node)
+            .context("Failed to serialize node")?;
+        
+        let signature = did_key.sign(&node_bytes);
+        
+        Ok(SignedDagNode {
+            node,
+            signature,
+            cid: None,
+        })
     }
 }
 

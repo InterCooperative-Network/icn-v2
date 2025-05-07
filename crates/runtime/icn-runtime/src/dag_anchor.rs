@@ -58,7 +58,7 @@ pub async fn anchor_execution_receipt(
         }
     };
 
-    let event_payload = EventPayload::Receipt { receipt_cid };
+    let event_payload = EventPayload::Receipt { receipt_cid: receipt_cid.clone() };
 
     // Create the DagEvent using its constructor
     let dag_event = DagEvent::new(
@@ -73,12 +73,12 @@ pub async fn anchor_execution_receipt(
         .with_payload(DagPayload::ExecutionReceipt(receipt_cid))
         .with_author(author_did)
         .with_label("ExecutionReceipt".to_string())
-        .with_timestamp(Utc::now())
         .build()
         .map_err(|e| AnchorError::DagStore(e))?;
 
     // Create a placeholder Signature (64 bytes of zeros)
-    let empty_sig = Signature::from_bytes(&[0u8; 64]).unwrap();
+    // In this version of ed25519-dalek, from_bytes doesn't return a Result
+    let empty_sig = Signature::from_bytes(&[0u8; 64]);
 
     // Create a SignedDagNode with the DagNode
     let signed_node = SignedDagNode {

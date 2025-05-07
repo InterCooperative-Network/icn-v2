@@ -113,9 +113,9 @@ mod tests {
 
     #[test]
     fn test_issue_basic_receipt() {
-        let node_key = DidKey::generate().unwrap();
-        let federation_key = DidKey::generate().unwrap();
-        let caller_key = DidKey::generate().unwrap();
+        let node_key = DidKey::new();
+        let federation_key = DidKey::new();
+        let caller_key = DidKey::new();
 
         let ctx = MockContext {
             node_did: Some(node_key.did().clone()),
