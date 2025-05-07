@@ -1,20 +1,29 @@
-use crate::cap_index::{CapabilitySelector};
-use crate::manifest_verifier::{ManifestVerifier, ManifestVerificationError};
-use anyhow::{Result, anyhow, Context};
-use icn_identity_core::did::DidKey;
-use icn_identity_core::manifest::NodeManifest;
-use icn_types::Did;
-use icn_types::Cid;
-use icn_types::dag::{DagStore, DagNodeBuilder, DagPayload, SignedDagNode, DagNode};
+use anyhow::{anyhow, Context, Result};
+use log::{debug, info, warn};
+use ed25519_dalek::Signature;
+use icn_core_types::Did;
+use icn_identity_core::{
+    did::DidKey,
+    manifest::{
+        Architecture as IdArchitecture, CapabilitySelector, EnergyInfo as IdEnergyInfo, 
+        EnergySource, GpuApi, GpuProfile, NodeManifest
+    },
+};
+use icn_types::{
+    dag::{DagNode, DagNodeBuilder, DagNodeMetadata, DagPayload, DagStore, SharedDagStore, SignedDagNode},
+    Cid,
+};
 use serde::{Serialize, Deserialize};
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
-use log::{debug, info, warn, error};
 use uuid::Uuid;
 use hex;
-use ed25519_dalek::Signature;
+use chrono::Utc;
+
+// Use crate imports for manifest verification
+use crate::manifest_verifier::{ManifestVerifier, ManifestVerificationError};
+// Use our own Architecture and EnergyInfo types to avoid conflicts
+use crate::cap_index::CapabilitySelector as MeshCapabilitySelector;
 
 /// Architecture type with Default implementation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,7 +161,7 @@ pub struct CapabilityIndex {
     pub manifests: RwLock<HashMap<Did, (NodeManifest, String)>>,
     
     /// DAG store for retrieving manifests
-    dag_store: Arc<Box<dyn DagStore>>,
+    dag_store: SharedDagStore,
     
     /// Manifest verifier for signature checking
     verifier: ManifestVerifier,
@@ -166,18 +175,12 @@ pub struct CapabilityIndex {
 
 impl CapabilityIndex {
     /// Create a new capability index with default configuration
-    pub fn new(dag_store: Arc<Box<dyn DagStore>>) -> Self {
-        Self {
-            manifests: RwLock::new(HashMap::new()),
-            dag_store,
-            verifier: ManifestVerifier::new(),
-            config: CapabilityIndexConfig::default(),
-            verification_failure_handler: RwLock::new(None),
-        }
+    pub fn new(dag_store: SharedDagStore) -> Self {
+        Self::with_config(dag_store, CapabilityIndexConfig::default())
     }
     
     /// Create a new capability index with custom configuration
-    pub fn with_config(dag_store: Arc<Box<dyn DagStore>>, config: CapabilityIndexConfig) -> Self {
+    pub fn with_config(dag_store: SharedDagStore, config: CapabilityIndexConfig) -> Self {
         let verifier = if let Some(trusted_dids) = &config.trusted_dids {
             ManifestVerifier::with_trusted_dids(trusted_dids.clone())
         } else {
@@ -260,7 +263,7 @@ impl CapabilityIndex {
     }
     
     /// Filter manifests based on a capability selector
-    pub async fn filter_manifests(&self, selector: &CapabilitySelector) -> Vec<(NodeManifest, String)> {
+    pub async fn filter_manifests(&self, selector: &MeshCapabilitySelector) -> Vec<(NodeManifest, String)> {
         let manifests = self.manifests.read().await;
         manifests
             .values()
@@ -358,7 +361,7 @@ pub struct Scheduler {
     cap_index: Arc<CapabilityIndex>,
     
     /// DAG store for publishing task tickets and bids
-    dag_store: Arc<Box<dyn DagStore>>,
+    dag_store: SharedDagStore,
     
     /// Scheduler's DID
     scheduler_did: Did,
@@ -372,7 +375,7 @@ impl Scheduler {
     pub fn new(
         federation_id: String,
         cap_index: Arc<CapabilityIndex>,
-        dag_store: Arc<Box<dyn DagStore>>,
+        dag_store: SharedDagStore,
         scheduler_did: Did,
     ) -> Self {
         Self {
@@ -388,7 +391,7 @@ impl Scheduler {
     pub fn new_with_key(
         federation_id: String,
         cap_index: Arc<CapabilityIndex>,
-        dag_store: Arc<Box<dyn DagStore>>,
+        dag_store: SharedDagStore,
         did_key: DidKey,
     ) -> Self {
         let scheduler_did = did_key.did().clone();
@@ -409,12 +412,12 @@ impl Scheduler {
     }
     
     /// Dispatch a task request to suitable nodes
-    pub async fn dispatch(&self, request: TaskRequest, capabilities: Option<CapabilitySelector>) -> Result<MatchResult> {
+    pub async fn dispatch(&self, request: TaskRequest, capabilities: Option<MeshCapabilitySelector>) -> Result<MatchResult> {
         info!("Dispatching task request from {}", request.requestor);
         
         // Create a default capability selector if none was provided
         let selector = capabilities.unwrap_or_else(|| {
-            let mut selector = CapabilitySelector::new();
+            let mut selector = MeshCapabilitySelector::new();
             
             // Set minimum requirements based on the task request
             selector.min_cores = Some(request.cores as u16);
@@ -500,7 +503,7 @@ impl Scheduler {
     async fn create_dispatch_audit_record(
         &self,
         request: &TaskRequest,
-        selector: &CapabilitySelector,
+        selector: &MeshCapabilitySelector,
         matching_manifests: &[(NodeManifest, String)],
         selected_bid: &TaskBid,
         bid_cid: &Cid,
@@ -726,21 +729,23 @@ fn create_signed_node(node: DagNode, did_key: &DidKey) -> Result<SignedDagNode, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cap_index::CapabilitySelector;
     use icn_identity_core::manifest::{
-        Architecture, GpuApi, EnergySource,
         NodeManifest, EnergyInfo, GpuProfile
     };
     use icn_types::dag::memory::MemoryDagStore;
     
     async fn create_test_scheduler() -> (Scheduler, Arc<CapabilityIndex>) {
-        let dag_store = Arc::new(Box::new(MemoryDagStore::new()) as Box<dyn DagStore>);
+        // Create a memory DagStore and wrap it in SharedDagStore
+        let memory_store = MemoryDagStore::new();
+        let dag_store = SharedDagStore::new(Box::new(memory_store) as Box<dyn DagStore + Send + Sync>);
+        
+        // Create the capability index with shared store
         let cap_index = Arc::new(CapabilityIndex::new(dag_store.clone()));
         
         // Add some test manifests
         let manifest1 = NodeManifest {
             did: "did:icn:node1".into(),
-            arch: Architecture::X86_64,
+            arch: IdArchitecture::X86_64,
             cores: 8,
             gpu: Some(GpuProfile {
                 model: "Test GPU".to_string(),
@@ -754,7 +759,7 @@ mod tests {
             storage_bytes: 1_000_000_000_000, // 1TB
             sensors: vec![],
             actuators: vec![],
-            energy_profile: EnergyInfo {
+            energy_profile: IdEnergyInfo {
                 renewable_percentage: 75,
                 battery_percentage: Some(80),
                 charging: Some(true),
@@ -769,14 +774,14 @@ mod tests {
         
         let manifest2 = NodeManifest {
             did: "did:icn:node2".into(),
-            arch: Architecture::Arm64,
+            arch: IdArchitecture::Arm64,
             cores: 4,
             gpu: None,
             ram_mb: 8192,
             storage_bytes: 500_000_000_000, // 500GB
             sensors: vec![],
             actuators: vec![],
-            energy_profile: EnergyInfo {
+            energy_profile: IdEnergyInfo {
                 renewable_percentage: 0,
                 battery_percentage: None,
                 charging: None,
@@ -820,8 +825,8 @@ mod tests {
         };
         
         // Create a selector that only matches x86_64 architecture
-        let mut selector = CapabilitySelector::new();
-        selector.arch = Some(Architecture::X86_64);
+        let mut selector = MeshCapabilitySelector::new();
+        selector.arch = Some(IdArchitecture::X86_64);
         
         let result = scheduler.dispatch(request, Some(selector)).await;
         assert!(result.is_ok());
@@ -850,7 +855,7 @@ mod tests {
         };
         
         // Create a selector that requires a GPU with CUDA
-        let mut selector = CapabilitySelector::new();
+        let mut selector = MeshCapabilitySelector::new();
         selector.gpu_requirements = Some(crate::cap_index::GpuRequirements {
             min_vram_mb: Some(4096),
             min_cores: None,
@@ -886,7 +891,7 @@ mod tests {
         };
         
         // Create a selector that requires renewable energy
-        let mut selector = CapabilitySelector::new();
+        let mut selector = MeshCapabilitySelector::new();
         selector.energy_requirements = Some(crate::cap_index::EnergyRequirements {
             min_renewable_percentage: Some(50),
             required_sources: Some(vec![EnergySource::Solar]),
@@ -922,7 +927,7 @@ mod tests {
         };
         
         // Create a selector with requirements that no node can meet
-        let mut selector = CapabilitySelector::new();
+        let mut selector = MeshCapabilitySelector::new();
         selector.min_cores = Some(32); // Much more than any node has
         
         let result = scheduler.dispatch(request, Some(selector)).await;

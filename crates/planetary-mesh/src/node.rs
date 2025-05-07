@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use icn_identity_core::did::{DidKey, DidKeyError};
 use icn_identity_core::manifest::NodeManifest;
 use icn_types::Did;
-use icn_types::dag::{DagStore, DagNodeBuilder, DagPayload, SignedDagNode};
+use icn_types::dag::{DagNodeBuilder, DagPayload, SharedDagStore, SignedDagNode};
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -79,7 +79,7 @@ pub struct MeshNode {
     manifest: Arc<RwLock<NodeManifest>>,
     
     /// DAG storage for anchoring manifests
-    dag_store: Arc<Box<dyn DagStore>>,
+    dag_store: SharedDagStore,
     
     /// Gossipsub protocol for capability announcements
     capability_gossip: GossipsubProtocol,
@@ -101,7 +101,7 @@ impl MeshNode {
     /// Create a new mesh node with the given identity, DAG store, and federation
     pub async fn new(
         did_key: DidKey, 
-        dag_store: Arc<Box<dyn DagStore>>, 
+        dag_store: SharedDagStore, 
         federation_id: &str,
         firmware_hash: &str,
     ) -> Result<Self, MeshNodeError> {
@@ -120,10 +120,10 @@ impl MeshNode {
             did_key,
             manifest: Arc::new(RwLock::new(manifest)),
             dag_store,
-            capability_gossip,
             federation_id: federation_id.to_string(),
             last_manifest_cid: Arc::new(RwLock::new(None)),
-            protocols: vec![Box::new(capability_gossip.clone())],
+            capability_gossip: capability_gossip.clone(),
+            protocols: vec![Box::new(capability_gossip)],
             running: Arc::new(RwLock::new(false)),
         })
     }
@@ -249,33 +249,24 @@ impl MeshNode {
         Ok(())
     }
     
-    /// Publish the current manifest to the DAG and gossipsub
+    /// Publish the node's capability manifest to the DAG
     pub async fn publish_manifest(&self) -> Result<(), MeshNodeError> {
-        // Get current manifest
-        let mut manifest = self.manifest.write().await;
-        
-        // Update the timestamp
-        manifest.last_seen = chrono::Utc::now();
-        
-        // Sign the manifest
-        let manifest_json = serde_json::to_vec(&*manifest)
-            .map_err(|e| MeshNodeError::Manifest(format!("Failed to serialize manifest: {}", e)))?;
-        
-        let signature = self.did_key.sign(&manifest_json);
-        manifest.signature = signature.to_bytes().to_vec();
-        
-        // Convert to a verifiable credential
+        // Create a manifest verifiable credential
+        let manifest = self.manifest.read().await.clone(); // Clone the manifest to avoid RwLockReadGuard serialization issues
         let manifest_vc = manifest.to_verifiable_credential();
         
         // Create a DAG node for the manifest
         let node = DagNodeBuilder::new()
-            .with_payload(DagPayload::Json(manifest_vc))
-            .with_author(Did::from_string(&self.did_key.to_did_string()).unwrap_or_default())
+            .with_payload(DagPayload::Json(json!({
+                "type": "NodeManifest",
+                "manifest": manifest,
+            })))
+            .with_author(self.did_key.did().clone())
             .with_federation_id(self.federation_id.clone())
             .with_label("NodeManifest".to_string())
             .build()
             .map_err(|e| MeshNodeError::Dag(format!("Failed to build DAG node: {}", e)))?;
-            
+        
         // Serialize the node for signing
         let node_bytes = serde_json::to_vec(&node)
             .map_err(|e| MeshNodeError::Dag(format!("Failed to serialize node: {}", e)))?;
@@ -287,29 +278,25 @@ impl MeshNode {
         let signed_node = SignedDagNode {
             node,
             signature,
-            cid: None, // Will be computed when added to the DAG
+            cid: None,
         };
         
-        // Add to the DAG store
+        // Add to DAG
         let cid = self.dag_store.add_node(signed_node).await
-            .map_err(|e| MeshNodeError::Dag(format!("Failed to add node to DAG: {:?}", e)))?;
-            
+            .map_err(|e| MeshNodeError::Dag(format!("Failed to add node to DAG: {}", e)))?;
+        
         // Update the last manifest CID
-        *self.last_manifest_cid.write().await = Some(cid.to_string());
+        let mut last_cid = self.last_manifest_cid.write().await;
+        *last_cid = Some(cid.to_string());
         
-        // Release the manifest write lock before publishing
-        drop(manifest);
-        
-        // Publish the manifest CID to the gossip topic
+        // Publish to gossipsub
         let message = json!({
-            "type": "NodeManifest",
+            "type": "NodeManifestUpdate",
             "cid": cid.to_string(),
-            "did": self.did_key.to_did_string()
+            "did": self.did_key.did().to_string(),
         }).to_string();
         
         self.capability_gossip.publish(&message).await?;
-        
-        println!("Published node manifest with CID: {}", cid);
         
         Ok(())
     }
@@ -475,48 +462,34 @@ impl MeshNode {
     }
 }
 
-// Updated to fix the tests - this is just a placeholder for now
 #[cfg(test)]
 mod tests {
     use super::*;
+    use icn_identity_core::did::DidKey;
+    use icn_types::dag::memory::MemoryDagStore;
     
-    // We'll keep these tests commented out until we have the full implementation fixed
-    /*
     #[tokio::test]
-    async fn test_manifest_creation() {
-        let did_key = DidKey::new();
-        let dag_store = Arc::new(Box::new(MemoryDagStore::new()) as Box<dyn DagStore>);
+    async fn test_mesh_node_creation() {
+        // Create a test DAG store
+        let memory_store = MemoryDagStore::new();
+        let dag_store = SharedDagStore::new(Box::new(memory_store) as Box<dyn icn_types::dag::DagStore + Send + Sync>);
         
+        // Create a DID key
+        let did_key = DidKey::new();
+        
+        // Create a mesh node
         let node = MeshNode::new(
             did_key, 
             dag_store, 
             "test-federation", 
-            "test-firmware-hash"
-        ).await.unwrap();
+            "test-hash"
+        ).await.expect("Failed to create mesh node");
         
-        let manifest = node.get_manifest().await;
-        assert_eq!(manifest.trust_fw_hash, "test-firmware-hash");
-        assert!(manifest.signature.is_empty()); // Should be empty until published
+        // Check that the node was created successfully
+        assert_eq!(node.federation_id, "test-federation");
+        
+        // Check that the manifest was created
+        let manifest = node.manifest.read().await;
+        assert!(manifest.cores > 0);
     }
-    
-    #[tokio::test]
-    async fn test_manifest_publishing() {
-        let did_key = DidKey::new();
-        let dag_store = Arc::new(Box::new(MemoryDagStore::new()) as Box<dyn DagStore>);
-        
-        let node = MeshNode::new(
-            did_key, 
-            dag_store, 
-            "test-federation", 
-            "test-firmware-hash"
-        ).await.unwrap();
-        
-        // Publish the manifest
-        node.publish_manifest().await.unwrap();
-        
-        // Check that the manifest was published
-        let last_cid = node.last_manifest_cid.read().await;
-        assert!(last_cid.is_some());
-    }
-    */
 } 

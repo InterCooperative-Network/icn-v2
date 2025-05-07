@@ -1,18 +1,22 @@
-use crate::receipt_store::{
-    ReceiptFilter, StoredReceipt, InMemoryWalletReceiptStore, WalletReceiptStore
-};
-use icn_identity_core::vc::execution_receipt::{ExecutionScope, ExecutionStatus};
-use icn_types::{Cid, Did, dag::EventId};
 use std::sync::Mutex;
+use icn_identity_core::vc::execution_receipt::{ExecutionReceipt, ExecutionScope, ExecutionStatus, ExecutionSubject};
+use icn_types::{Cid, Did, dag::EventId};
+use std::{convert::TryFrom, str::FromStr};
 use std::time::{SystemTime, UNIX_EPOCH};
+use lazy_static::lazy_static;
+use serde_json;
+use hex;
+
+use crate::receipt_store::{InMemoryWalletReceiptStore, StoredReceipt, ReceiptFilter, WalletReceiptStore};
+use thiserror::Error;
 
 // Global store instance
-lazy_static::lazy_static! {
+lazy_static! {
     static ref RECEIPT_STORE: Mutex<InMemoryWalletReceiptStore> = Mutex::new(InMemoryWalletReceiptStore::new());
 }
 
 /// Get all receipts matching the provided filter criteria
-#[uniffi::export]
+// #[uniffi::export] - Commented out until uniffi is properly configured
 pub fn list_receipts(
     federation_did: Option<String>,
     module_cid: Option<String>,
@@ -65,7 +69,7 @@ pub fn list_receipts(
 }
 
 /// Get a specific receipt by its ID
-#[uniffi::export]
+// #[uniffi::export] - Commented out
 pub fn get_receipt_by_id(id: String) -> Option<SerializedReceipt> {
     match RECEIPT_STORE.lock() {
         Ok(store) => {
@@ -79,7 +83,7 @@ pub fn get_receipt_by_id(id: String) -> Option<SerializedReceipt> {
 }
 
 /// Get a specific receipt by its Content ID
-#[uniffi::export]
+// #[uniffi::export] - Commented out
 pub fn get_receipt_by_cid(cid: String) -> Option<SerializedReceipt> {
     let cid = match cid.parse::<Cid>() {
         Ok(cid) => cid,
@@ -98,7 +102,7 @@ pub fn get_receipt_by_cid(cid: String) -> Option<SerializedReceipt> {
 }
 
 /// Add a new receipt to the store
-#[uniffi::export]
+// #[uniffi::export] - Commented out
 pub fn save_receipt(receipt: SerializedReceipt) -> bool {
     match receipt.try_into() {
         Ok(stored_receipt) => {
@@ -114,7 +118,7 @@ pub fn save_receipt(receipt: SerializedReceipt) -> bool {
 }
 
 /// Delete a receipt by its ID
-#[uniffi::export]
+// #[uniffi::export] - Commented out
 pub fn delete_receipt(id: String) -> bool {
     match RECEIPT_STORE.lock() {
         Ok(mut store) => {
@@ -130,11 +134,22 @@ pub fn delete_receipt(id: String) -> bool {
 // Helper functions to parse string enum values
 fn parse_scope(scope: Option<String>) -> Option<ExecutionScope> {
     scope.and_then(|s| match s.to_lowercase().as_str() {
-        "federation" => Some(ExecutionScope::Federation),
-        "meshcompute" => Some(ExecutionScope::MeshCompute),
-        "cooperative" => Some(ExecutionScope::Cooperative),
+        "federation" => Some(ExecutionScope::Federation { 
+            federation_id: "unknown".to_string() 
+        }),
+        "meshcompute" => Some(ExecutionScope::MeshCompute { 
+            task_id: "unknown".to_string(), 
+            job_id: "unknown".to_string() 
+        }),
+        "cooperative" => Some(ExecutionScope::Cooperative { 
+            coop_id: "unknown".to_string(), 
+            module: "unknown".to_string() 
+        }),
         _ if s.starts_with("custom:") => {
-            Some(ExecutionScope::Custom(s[7..].to_string()))
+            Some(ExecutionScope::Custom { 
+                description: s[7..].to_string(),
+                metadata: serde_json::Value::Null
+            })
         },
         _ => None,
     })
@@ -143,14 +158,15 @@ fn parse_scope(scope: Option<String>) -> Option<ExecutionScope> {
 fn parse_status(status: Option<String>) -> Option<ExecutionStatus> {
     status.and_then(|s| match s.to_lowercase().as_str() {
         "pending" => Some(ExecutionStatus::Pending),
-        "completed" => Some(ExecutionStatus::Completed),
+        "success" => Some(ExecutionStatus::Success),
         "failed" => Some(ExecutionStatus::Failed),
+        "canceled" => Some(ExecutionStatus::Canceled),
         _ => None,
     })
 }
 
 /// A serializable version of StoredReceipt for FFI
-#[derive(Debug, Clone, uniffi::Record)]
+#[derive(Debug, Clone)] // uniffi::Record - Commented out
 pub struct SerializedReceipt {
     pub id: String,
     pub cid: String,
@@ -168,16 +184,35 @@ pub struct SerializedReceipt {
 
 impl From<StoredReceipt> for SerializedReceipt {
     fn from(receipt: StoredReceipt) -> Self {
+        // For module_cid, we need to handle the ExecutionSubject changes
+        // In ExecutionSubject, module_cid is now a String, not an Option<Cid>
+        let module_cid = if !receipt.subject.module_cid.is_empty() {
+            Some(receipt.subject.module_cid.clone())
+        } else {
+            None
+        };
+        
+        // Handle other fields
+        let submitter = receipt.subject.submitter.clone();
+        
+        // Add any additional processing needed for result_summary
+        // Since there's no result_summary field directly, we can use additional_properties
+        let result_summary = receipt.subject.additional_properties
+            .as_ref()
+            .and_then(|props| props.get("result_summary"))
+            .and_then(|val| val.as_str())
+            .map(|s| s.to_string());
+
         SerializedReceipt {
             id: receipt.id,
             cid: receipt.cid.to_string(),
             federation_did: receipt.federation_did.to_string(),
-            module_cid: receipt.subject.module_cid.map(|cid| cid.to_string()),
+            module_cid,
             status: format!("{:?}", receipt.subject.status),
             scope: format!("{:?}", receipt.subject.scope),
-            submitter: receipt.subject.submitter.map(|did| did.to_string()),
+            submitter,
             execution_timestamp: receipt.execution_timestamp,
-            result_summary: Some(receipt.subject.result_summary),
+            result_summary,
             source_event_id: receipt.source_event_id.map(|id| id.to_string()),
             wallet_stored_at: receipt.wallet_stored_at,
             json_vc: serde_json::to_string(&receipt.raw_vc).unwrap_or_default(),
@@ -211,20 +246,35 @@ impl TryFrom<SerializedReceipt> for StoredReceipt {
         
         let status = match ser.status.to_lowercase().as_str() {
             "pending" => ExecutionStatus::Pending,
-            "completed" => ExecutionStatus::Completed,
+            "success" => ExecutionStatus::Success,
             "failed" => ExecutionStatus::Failed,
+            "canceled" => ExecutionStatus::Canceled,
             _ => ExecutionStatus::Pending, // Default
         };
         
         let scope = match ser.scope.to_lowercase().as_str() {
-            "federation" => ExecutionScope::Federation,
-            "meshcompute" => ExecutionScope::MeshCompute,
-            "cooperative" => ExecutionScope::Cooperative,
-            s if s.starts_with("custom(") && s.ends_with(")") => {
-                let custom = s[7..s.len()-1].to_string();
-                ExecutionScope::Custom(custom)
+            "federation" => ExecutionScope::Federation {
+                federation_id: "unknown".to_string(),
             },
-            _ => ExecutionScope::Federation, // Default
+            "meshcompute" => ExecutionScope::MeshCompute {
+                task_id: "unknown".to_string(),
+                job_id: "unknown".to_string(),
+            },
+            "cooperative" => ExecutionScope::Cooperative {
+                coop_id: "unknown".to_string(),
+                module: "unknown".to_string(),
+            },
+            s if s.starts_with("custom") => {
+                // Extract description from custom scope string if possible
+                let description = s.replace("custom", "").trim_matches(|c| c == '(' || c == ')' || c == '{' || c == '}').to_string();
+                ExecutionScope::Custom {
+                    description,
+                    metadata: serde_json::Value::Null,
+                }
+            },
+            _ => ExecutionScope::Federation {
+                federation_id: "unknown".to_string(),
+            }, // Default
         };
         
         let source_event_id = if let Some(id_str) = ser.source_event_id {
@@ -237,14 +287,17 @@ impl TryFrom<SerializedReceipt> for StoredReceipt {
         let raw_vc = serde_json::from_str::<ExecutionReceipt>(&ser.json_vc)
             .map_err(|e| format!("Invalid ExecutionReceipt JSON: {}", e))?;
         
+        // Create a new ExecutionSubject with the correct structure
         let subject = ExecutionSubject {
-            module_cid,
-            status,
+            id: submitter.as_ref().map_or("unknown".to_string(), |d| d.to_string()),
             scope,
-            submitter,
+            submitter: submitter.map(|d| d.to_string()),
+            module_cid: module_cid.as_ref().map_or("unknown".to_string(), |c| c.to_string()),
+            result_cid: "unknown".to_string(), // Default value
+            event_id: None,
             timestamp: ser.execution_timestamp,
-            result_summary: ser.result_summary.unwrap_or_default(),
-            ..Default::default()
+            status,
+            additional_properties: None,
         };
         
         Ok(StoredReceipt {

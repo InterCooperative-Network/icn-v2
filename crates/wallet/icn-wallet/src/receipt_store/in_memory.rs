@@ -1,9 +1,28 @@
 use std::collections::HashMap;
 use std::sync::RwLock;
+use std::error::Error as StdError;
+use std::fmt;
 use icn_identity_core::vc::execution_receipt::{ExecutionReceipt, ExecutionScope, ExecutionStatus};
 use icn_types::{Cid, Did};
 
 use crate::receipt_store::{StoredReceipt, WalletReceiptStore, ReceiptFilter};
+
+#[derive(Debug)]
+pub struct InMemoryError(String);
+
+impl fmt::Display for InMemoryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "In-memory store error: {}", self.0)
+    }
+}
+
+impl StdError for InMemoryError {}
+
+impl From<String> for InMemoryError {
+    fn from(s: String) -> Self {
+        InMemoryError(s)
+    }
+}
 
 /// An in-memory implementation of the WalletReceiptStore trait.
 /// 
@@ -23,26 +42,26 @@ impl InMemoryWalletReceiptStore {
 }
 
 impl WalletReceiptStore for InMemoryWalletReceiptStore {
-    type Error = String;
+    type Error = InMemoryError;
 
     fn save_receipt(&mut self, receipt: StoredReceipt) -> Result<(), Self::Error> {
-        let mut lock = self.receipts.write().map_err(|e| e.to_string())?;
+        let mut lock = self.receipts.write().map_err(|e| InMemoryError(e.to_string()))?;
         lock.insert(receipt.id.clone(), receipt);
         Ok(())
     }
 
     fn get_receipt_by_id(&self, id: &str) -> Result<Option<StoredReceipt>, Self::Error> {
-        let lock = self.receipts.read().map_err(|e| e.to_string())?;
+        let lock = self.receipts.read().map_err(|e| InMemoryError(e.to_string()))?;
         Ok(lock.get(id).cloned())
     }
 
     fn get_receipt_by_cid(&self, cid: &Cid) -> Result<Option<StoredReceipt>, Self::Error> {
-        let lock = self.receipts.read().map_err(|e| e.to_string())?;
+        let lock = self.receipts.read().map_err(|e| InMemoryError(e.to_string()))?;
         Ok(lock.values().find(|r| &r.cid == cid).cloned())
     }
 
     fn list_receipts(&self, filter: ReceiptFilter) -> Result<Vec<StoredReceipt>, Self::Error> {
-        let lock = self.receipts.read().map_err(|e| e.to_string())?;
+        let lock = self.receipts.read().map_err(|e| InMemoryError(e.to_string()))?;
         
         let mut results: Vec<_> = lock
             .values()
@@ -50,12 +69,14 @@ impl WalletReceiptStore for InMemoryWalletReceiptStore {
                 // Apply all filter conditions
                 filter.federation_did.as_ref().map_or(true, |f| f == &r.federation_did)
                     && filter.module_cid.as_ref().map_or(true, |m| {
-                        r.subject.module_cid.as_ref().map_or(false, |rc| rc == m)
+                        // For module_cid, check if it exists in the subject
+                        r.subject.module_cid == m.to_string()
                     })
                     && filter.scope.as_ref().map_or(true, |s| &r.subject.scope == s)
                     && filter.status.as_ref().map_or(true, |s| &r.subject.status == s)
                     && filter.submitter_did.as_ref().map_or(true, |d| {
-                        r.subject.submitter.as_ref().map_or(false, |rs| rs == d)
+                        // For submitter, check if it matches the DID string
+                        r.subject.submitter.as_ref().map_or(false, |rs| rs == &d.to_string())
                     })
                     && filter.execution_date_range.as_ref().map_or(true, |(start, end)| {
                         r.execution_timestamp >= *start && r.execution_timestamp <= *end
@@ -81,7 +102,7 @@ impl WalletReceiptStore for InMemoryWalletReceiptStore {
     }
 
     fn delete_receipt_by_id(&mut self, id: &str) -> Result<bool, Self::Error> {
-        let mut lock = self.receipts.write().map_err(|e| e.to_string())?;
+        let mut lock = self.receipts.write().map_err(|e| InMemoryError(e.to_string()))?;
         Ok(lock.remove(id).is_some())
     }
 }
