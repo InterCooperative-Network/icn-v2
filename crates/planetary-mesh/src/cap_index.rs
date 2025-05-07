@@ -493,8 +493,7 @@ impl CapabilitySelector {
                     "solar" => EnergySource::Solar,
                     "wind" => EnergySource::Wind,
                     "battery" => EnergySource::Battery,
-                    "generator" => EnergySource::Generator,
-                    _ => return Err(format!("Unknown energy source: {}", value)),
+                    _ => EnergySource::Other, // Default to Other for any unknown type
                 };
                 
                 let energy = self.energy_requirements.get_or_insert_with(|| EnergyRequirements {

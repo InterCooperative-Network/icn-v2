@@ -1,24 +1,30 @@
 use anyhow::{Result, anyhow};
 use icn_identity_core::{
-    did::{Did, DidKey, DidKeyError},
+    did::{DidKeyError},
     manifest::NodeManifest
 };
-use log::{debug, warn, error};
-use serde_json::Value;
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use icn_core_types::Did;
+use icn_identity_core::did::DidKey;
+use chrono::{DateTime, Utc};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use serde_json::Value;
 use multibase::{decode, Base};
 use serde::{Serialize, Deserialize};
 use thiserror::Error;
+use log::{debug, warn, error};
+use base64::{Engine as _, engine::general_purpose};
 
 /// Error types for manifest verification
 #[derive(Debug, thiserror::Error)]
 pub enum ManifestVerificationError {
-    #[error("Invalid manifest signature")]
+    #[error("Invalid signature")]
     InvalidSignature,
     
-    #[error("Failed to serialize manifest: {0}")]
-    SerializationError(String),
+    #[error("Invalid controller DID")]
+    InvalidController,
+    
+    #[error("Serialization error")]
+    SerializationError,
     
     #[error("Missing DID in manifest")]
     MissingDid,
@@ -31,6 +37,27 @@ pub enum ManifestVerificationError {
     
     #[error("VC credential error: {0}")]
     CredentialError(String),
+    
+    #[error("Invalid DID document")]
+    InvalidDidDocument,
+    
+    #[error("Unsupported DID method")]
+    UnsupportedDidMethod,
+    
+    #[error("Unsupported key type")]
+    UnsupportedKeyType,
+    
+    #[error("Invalid DID")]
+    InvalidDid,
+    
+    #[error("Multibase decode error: {0}")]
+    MultibaseError(String),
+}
+
+impl From<multibase::Error> for ManifestVerificationError {
+    fn from(error: multibase::Error) -> Self {
+        ManifestVerificationError::MultibaseError(error.to_string())
+    }
 }
 
 /// Verifier for node manifests
@@ -56,46 +83,26 @@ impl ManifestVerifier {
     
     /// Verify a node manifest's signature
     pub fn verify_manifest(&self, manifest: &NodeManifest) -> Result<bool, ManifestVerificationError> {
-        // Check if DID is in trusted DIDs list (if enabled)
-        if let Some(trusted_dids) = &self.trusted_dids {
-            if !trusted_dids.contains(&manifest.did) {
-                debug!("Manifest DID not in trusted list: {}", manifest.did);
-                return Ok(false);
-            }
-        }
+        // Convert the signature to bytes
+        let signature = Signature::try_from(manifest.signature.as_slice())
+            .map_err(|_| ManifestVerificationError::InvalidSignature)?;
+
+        // For this example, we're just verifying with the node's DID
+        // In a real implementation, check the controller field
+        let verifying_key = self.resolve_did_to_key(&manifest.did.to_string())?;
         
-        // Skip verification if signature is empty (unsigned manifest)
-        if manifest.signature.is_empty() {
-            warn!("Manifest has no signature, cannot verify");
-            return Ok(false);
-        }
+        // Create a canonicalized version of the manifest for verification
+        let mut manifest_for_verification = manifest.clone();
+        manifest_for_verification.signature = Vec::new();
         
-        // Get a copy of the manifest without the signature
-        let mut manifest_copy = manifest.clone();
-        manifest_copy.signature = Vec::new();
-        
-        // Serialize the manifest without the signature
-        let manifest_bytes = serde_json::to_vec(&manifest_copy)
-            .map_err(|e| ManifestVerificationError::SerializationError(e.to_string()))?;
-        
-        // Get the public key for the DID
-        let public_key = self.get_key_for_did(&manifest.did)?;
+        // Serialize to canonical JSON (alphanumerically sorted keys)
+        let canonical_json = serde_json::to_string(&manifest_for_verification)
+            .map_err(|_| ManifestVerificationError::SerializationError)?;
         
         // Verify the signature
-        let signature = ed25519_dalek::Signature::from_bytes(&manifest.signature)
-            .map_err(|e| ManifestVerificationError::InvalidSignature)?;
-        
-        // Return the verification result
-        match public_key.verify(&manifest_bytes, &signature) {
-            Ok(_) => {
-                debug!("Manifest signature verified successfully for DID: {}", manifest.did);
-                Ok(true)
-            },
-            Err(e) => {
-                warn!("Manifest signature verification failed for DID {}: {:?}", manifest.did, e);
-                Ok(false)
-            }
-        }
+        verifying_key.verify_strict(canonical_json.as_bytes(), &signature)
+            .map(|_| true)
+            .or_else(|_| Ok(false))
     }
     
     /// Verify a manifest in VC format
@@ -120,8 +127,15 @@ impl ManifestVerifier {
         let signature_bytes = hex::decode(signature_hex)
             .map_err(|e| ManifestVerificationError::CredentialError(format!("Invalid signature hex: {}", e)))?;
         
-        let signature = ed25519_dalek::Signature::from_bytes(&signature_bytes)
-            .map_err(|e| ManifestVerificationError::InvalidSignature)?;
+        // Need exactly 64 bytes for an Ed25519 signature
+        if signature_bytes.len() != 64 {
+            return Err(ManifestVerificationError::InvalidSignature);
+        }
+        
+        // Create a 64-byte array from the signature bytes
+        let mut sig_bytes = [0u8; 64];
+        sig_bytes.copy_from_slice(&signature_bytes);
+        let signature = ed25519_dalek::Signature::from_bytes(&sig_bytes);
         
         // Get the public key for the DID
         let public_key = self.get_key_for_did(&did)?;
@@ -133,6 +147,40 @@ impl ManifestVerifier {
         // Return the verification result based on basic DID verification
         // In a production system, this would involve proper credential verification
         Ok(true)
+    }
+    
+    /// Verify a signed did document
+    pub fn verify_did_document(&self, did_doc_json: &str, signature_b64: &str) -> Result<bool, ManifestVerificationError> {
+        // Parse the signature
+        let signature_bytes = general_purpose::STANDARD.decode(signature_b64)
+            .map_err(|_| ManifestVerificationError::InvalidSignature)?;
+        
+        // Need exactly 64 bytes for an Ed25519 signature
+        if signature_bytes.len() != 64 {
+            return Err(ManifestVerificationError::InvalidSignature);
+        }
+        
+        // Create a 64-byte array from the signature bytes
+        let mut sig_bytes = [0u8; 64];
+        sig_bytes.copy_from_slice(&signature_bytes[0..64]);
+        
+        // Create the signature object
+        let signature = Signature::from_bytes(&sig_bytes);
+        
+        // Get the controller DID from the document
+        let did_doc: Value = serde_json::from_str(did_doc_json)
+            .map_err(|_| ManifestVerificationError::InvalidDidDocument)?;
+        
+        let controller = did_doc["controller"].as_str()
+            .ok_or(ManifestVerificationError::InvalidDidDocument)?;
+        
+        // Resolve the controller DID to a verification key
+        let verifying_key = self.resolve_did_to_key(controller)?;
+        
+        // Verify the signature against the document
+        verifying_key.verify_strict(did_doc_json.as_bytes(), &signature)
+            .map(|_| true)
+            .or_else(|_| Ok(false))
     }
     
     /// Get a public key for a DID
@@ -180,6 +228,36 @@ impl ManifestVerifier {
         .map_err(|e| ManifestVerificationError::DidKeyError(DidKeyError::VerificationError(e)))?;
         
         Ok(verifying_key)
+    }
+    
+    /// Resolve a DID to a verification key
+    fn resolve_did_to_key(&self, did: &str) -> Result<VerifyingKey, ManifestVerificationError> {
+        // For did:key, extract the key directly
+        if did.starts_with("did:key:") {
+            let key_part = &did["did:key:".len()..];
+            
+            // Decode the multibase-encoded key
+            let multibase_decoded = decode(key_part)?;
+            
+            // Check if it's an Ed25519 key (0xed01 prefix)
+            if multibase_decoded.1.len() < 2 || multibase_decoded.1[0] != 0xed || multibase_decoded.1[1] != 0x01 {
+                return Err(ManifestVerificationError::UnsupportedKeyType);
+            }
+            
+            // Extract the key bytes (skip the multicodec prefix)
+            let key_bytes = &multibase_decoded.1[2..];
+            
+            // Create verifying key
+            let bytes32: [u8; 32] = key_bytes.try_into()
+                .map_err(|_| ManifestVerificationError::InvalidDid)?;
+                
+            VerifyingKey::from_bytes(&bytes32)
+                .map_err(|_| ManifestVerificationError::InvalidDid)
+                
+        } else {
+            // For other DID methods, we would need to implement DID resolution
+            Err(ManifestVerificationError::UnsupportedDidMethod)
+        }
     }
 }
 

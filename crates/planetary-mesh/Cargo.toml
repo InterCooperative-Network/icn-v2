@@ -45,6 +45,8 @@ prometheus = { version = "0.13", features = ["process"] }
 uuid = { version = "1.6", features = ["v4"] }
 toml = "0.8"
 lazy_static = "1.4"
+tempfile = "3.19.1"
+base64 = "0.22.1"
 
 [features]
 metrics = []

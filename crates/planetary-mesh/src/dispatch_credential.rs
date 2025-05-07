@@ -1,8 +1,9 @@
 use anyhow::{Result, anyhow, Context};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Utc, Duration};
 use icn_core_types::Did;
+use icn_core_types::Cid;
 use icn_identity_core::did::DidKey;
-use icn_types::dag::{DagStore, Cid, DagPayload, SignedDagNode};
+use icn_types::dag::{DagStore, DagPayload, SignedDagNode};
 use serde::{Serialize, Deserialize};
 use std::sync::Arc;
 use log::{debug, info, warn, error};
@@ -249,12 +250,12 @@ impl DispatchCredential {
             .map_err(|e| anyhow!("Failed to decode key part: {}", e))?;
         
         // Check for Ed25519 prefix (0xed01)
-        if multibase_decoded.len() < 2 || multibase_decoded[0] != 0xed || multibase_decoded[1] != 0x01 {
+        if multibase_decoded.1.len() < 2 || multibase_decoded.1[0] != 0xed || multibase_decoded.1[1] != 0x01 {
             return Err(anyhow!("Unsupported key type, expected Ed25519"));
         }
         
         // Extract public key bytes
-        let key_bytes = &multibase_decoded[2..];
+        let key_bytes = &multibase_decoded.1[2..];
         if key_bytes.len() != 32 {
             return Err(anyhow!("Invalid key length"));
         }
@@ -271,8 +272,10 @@ impl DispatchCredential {
             return Err(anyhow!("Invalid signature length"));
         }
         
-        let signature = ed25519_dalek::Signature::from_bytes(&signature_bytes)
-            .map_err(|_| anyhow!("Invalid signature format"))?;
+        // Create a 64-byte array for Signature::from_bytes
+        let mut sig_bytes = [0u8; 64];
+        sig_bytes.copy_from_slice(&signature_bytes);
+        let signature = ed25519_dalek::Signature::from_bytes(&sig_bytes);
         
         // Verify signature
         match verifying_key.verify(&canonical_bytes, &signature) {
@@ -335,15 +338,15 @@ pub async fn get_latest_dispatch_credentials(
     let mut credentials = Vec::new();
     
     for node in nodes {
-        // Skip nodes from different federations
-        if node.node.federation_id != federation_id {
+        // Check if the federation ID matches
+        if node.node.metadata.federation_id != federation_id {
             continue;
         }
         
         if let DagPayload::Json(payload) = &node.node.payload {
             if payload.get("type").and_then(|t| t.as_str()) == Some("DispatchAuditRecord") {
                 if let Some(credential) = payload.get("credential") {
-                    if let Ok(dispatch_cred) = serde_json::from_value(credential.clone()) {
+                    if let Ok(dispatch_cred) = serde_json::from_value::<DispatchCredential>(credential.clone()) {
                         if let Some(cid) = &node.cid {
                             credentials.push((cid.clone(), dispatch_cred));
                             
@@ -357,7 +360,7 @@ pub async fn get_latest_dispatch_credentials(
         }
     }
     
-    // Sort by issuance date (newest first)
+    // Sort credentials by issuance date (newest first)
     credentials.sort_by(|(_, a), (_, b)| b.issuanceDate.cmp(&a.issuanceDate));
     
     Ok(credentials)
@@ -614,4 +617,45 @@ mod tests {
         let result = credential.verify().unwrap();
         assert_eq!(result, VerificationStatus::Unsigned);
     }
+}
+
+// Helper function to verify a signature
+fn verify_signature(public_key_multibase: &str, message: &[u8], signature_multibase: &str) -> Result<bool> {
+    // Decode the public key from multibase
+    let multibase_decoded = decode(public_key_multibase)
+        .map_err(|_| anyhow!("Invalid public key format"))?;
+    
+    // Check if it's an Ed25519 key
+    if multibase_decoded.1.len() < 2 || multibase_decoded.1[0] != 0xed || multibase_decoded.1[1] != 0x01 {
+        return Err(anyhow!("Invalid public key format - not Ed25519"));
+    }
+    
+    // Extract the key bytes
+    let key_bytes = &multibase_decoded.1[2..];
+    
+    // Create the verifying key
+    let bytes32: [u8; 32] = key_bytes.try_into()
+        .map_err(|_| anyhow!("Invalid key length"))?;
+        
+    let verifying_key = VerifyingKey::from_bytes(&bytes32)
+        .map_err(|_| anyhow!("Invalid public key"))?;
+    
+    // Decode the signature from multibase
+    let signature_bytes = decode(signature_multibase)
+        .map_err(|_| anyhow!("Invalid signature format"))?.1;
+    
+    // Need exactly 64 bytes for an Ed25519 signature
+    if signature_bytes.len() != 64 {
+        return Err(anyhow!("Invalid signature length"));
+    }
+    
+    // Create a 64-byte array for Signature::from_bytes
+    let mut sig_bytes = [0u8; 64];
+    sig_bytes.copy_from_slice(&signature_bytes);
+    let signature = ed25519_dalek::Signature::from_bytes(&sig_bytes);
+    
+    // Verify the signature
+    verifying_key.verify_strict(message, &signature)
+        .map(|_| true)
+        .or_else(|_| Ok(false))
 } 

@@ -1,11 +1,10 @@
 use async_trait::async_trait;
 use icn_identity_core::did::{DidKey, DidKeyError};
 use icn_identity_core::manifest::NodeManifest;
-use icn_types::Did;
 use icn_types::dag::{DagNodeBuilder, DagPayload, SharedDagStore, SignedDagNode, NodeScope};
 use serde_json::json;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, broadcast};
 use thiserror::Error;
 use std::time::Duration;
 use ed25519_dalek::Signature;
@@ -14,14 +13,13 @@ use chrono::{DateTime, Utc};
 use icn_core_types::{Did, Cid};
 use serde::{Serialize, Deserialize};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock, Mutex};
-use tokio::sync::broadcast;
+use std::sync::Mutex;
 use log::{debug, info, warn, error};
 use prometheus::{IntGaugeVec, Registry};
 use rand::Rng;
 use num_cpus;
 
-use crate::types::{JobManifest, NodeCapability, Bid, JobStatus, ResourceType};
+use crate::types::{JobManifest, NodeCapability, NodeCapabilityInfo, Bid, JobStatus, ResourceType};
 use crate::cap_index::CapabilitySelector;
 
 /// Errors that can occur in mesh node operations

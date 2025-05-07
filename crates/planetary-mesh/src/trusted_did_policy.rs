@@ -2,16 +2,21 @@ use anyhow::{Result, anyhow, Context};
 use icn_core_types::Did;
 use icn_identity_core::did::DidKey;
 use icn_core_types::Cid;
-use icn_types::dag::{DagStore, DagPayload, SignedDagNode};
+use icn_types::dag::{DagStore, DagPayload, SignedDagNode, SharedDagStore};
 use serde::{Serialize, Deserialize};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::RwLock;
 use log::{debug, info, warn, error};
 use prometheus::{IntCounterVec, Registry};
 use chrono::{DateTime, Utc};
 use multibase::{Base, encode, decode};
 use ed25519_dalek::{Signature, VerifyingKey, Verifier};
+use std::fs;
+use icn_types::dag::DagNodeBuilder;
+use std::pin::Pin;
+use async_trait;
 
 /// Trust level for DIDs in the policy
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -452,7 +457,7 @@ impl TrustedDidPolicy {
     
     /// Load a trust policy from a DAG record
     pub async fn from_dag(
-        dag_store: &Arc<Box<dyn DagStore>>,
+        dag_store: &Arc<Box<dyn DagStore + Send + Sync>>,
         cid: &Cid,
     ) -> Result<Self> {
         // Get the node from the DAG
@@ -563,7 +568,7 @@ impl TrustPolicyFactory {
     /// Load a policy from the DAG
     pub async fn from_dag(
         &self,
-        dag_store: &Arc<Box<dyn DagStore>>,
+        dag_store: &Arc<Box<dyn DagStore + Send + Sync>>,
         cid: &Cid,
     ) -> Result<TrustedDidPolicy> {
         let mut policy = TrustedDidPolicy::from_dag(dag_store, cid).await?;
@@ -737,18 +742,18 @@ impl TrustPolicyCredential {
             .map_err(|e| anyhow!("Failed to decode key part: {}", e))?;
         
         // Check for Ed25519 prefix (0xed01)
-        if multibase_decoded.len() < 2 || multibase_decoded[0] != 0xed || multibase_decoded[1] != 0x01 {
+        if multibase_decoded.1.len() < 2 || multibase_decoded.1[0] != 0xed || multibase_decoded.1[1] != 0x01 {
             return Err(anyhow!("Unsupported key type, expected Ed25519"));
         }
         
         // Extract public key bytes
-        let key_bytes = &multibase_decoded[2..];
+        let key_bytes = &multibase_decoded.1[2..];
         if key_bytes.len() != 32 {
             return Err(anyhow!("Invalid key length"));
         }
         
         // Create verifying key
-        let verifying_key = VerifyingKey::from_bytes(key_bytes.try_into().unwrap())
+        let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(key_bytes.try_into().unwrap())
             .map_err(|e| anyhow!("Invalid public key: {}", e))?;
         
         // Decode signature
@@ -759,8 +764,10 @@ impl TrustPolicyCredential {
             return Err(anyhow!("Invalid signature length"));
         }
         
-        let signature = Signature::from_bytes(&signature_bytes)
-            .map_err(|_| anyhow!("Invalid signature format"))?;
+        // Convert Vec<u8> to [u8; 64] for Signature::from_bytes
+        let mut sig_bytes = [0u8; 64];
+        sig_bytes.copy_from_slice(&signature_bytes);
+        let signature = Signature::from_bytes(&sig_bytes);
         
         // Verify signature
         match verifying_key.verify(&canonical_bytes, &signature) {
@@ -781,10 +788,10 @@ impl TrustPolicyCredential {
     /// Anchor this credential to the DAG
     pub async fn anchor_to_dag(
         &self,
-        dag_store: &Arc<Box<dyn DagStore>>,
+        dag_store: &Arc<Box<dyn DagStore + Send + Sync>>,
         did_key: &DidKey,
     ) -> Result<Cid> {
-        // Create a trust policy record
+        // Create a policy record for DAG storage
         let record = TrustPolicyRecord::new(
             self.credentialSubject.federationId.clone(),
             self.clone(),
@@ -792,15 +799,15 @@ impl TrustPolicyCredential {
         
         // Convert to DAG payload
         let payload = record.to_dag_payload()?;
-        
-        // Create a DAG node for this record
-        let node = icn_types::dag::DagNodeBuilder::new()
+
+        // Create a DAG node for the policy
+        let node = DagNodeBuilder::new()
             .with_payload(payload)
-            .with_author(did_key.did())
+            .with_author(did_key.did().clone())
             .with_federation_id(self.credentialSubject.federationId.clone())
             .with_label("TrustPolicyCredential".to_string())
             .build()?;
-            
+        
         // Serialize the node for signing
         let node_bytes = serde_json::to_vec(&node)
             .context("Failed to serialize node")?;
@@ -809,16 +816,18 @@ impl TrustPolicyCredential {
         let signature = did_key.sign(&node_bytes);
         
         // Create a signed node
-        let signed_node = icn_types::dag::SignedDagNode {
+        let mut signed_node = SignedDagNode {
             node,
             signature,
-            cid: None, // Will be computed when added to the DAG
+            cid: None,
         };
         
-        // Add to the DAG store to get its CID
-        let cid = dag_store.add_node(signed_node)
-            .await
-            .map_err(|e| anyhow!("Failed to add policy to DAG: {}", e))?;
+        // Calculate the CID
+        signed_node.ensure_cid()?;
+        
+        // Add to the DAG store
+        let shared_store = SharedDagStore::from_arc(dag_store.clone());
+        let cid = shared_store.add_node(signed_node).await?;
             
         Ok(cid)
     }
@@ -828,88 +837,97 @@ impl TrustPolicyCredential {
 impl TrustedDidPolicy {
     /// Verify the policy lineage in the DAG
     pub async fn verify_policy_lineage(
-        dag_store: &Arc<Box<dyn DagStore>>,
+        dag_store: &Arc<Box<dyn DagStore + Send + Sync>>,
         cid: &Cid,
     ) -> Result<bool> {
-        // Get the node from the DAG
-        let node = dag_store.get_node(cid).await
-            .context("Failed to get trust policy from DAG")?;
+        let dag_store_clone = dag_store.clone();
+        let cid_clone = cid.clone();
         
-        // Check if it's a TrustPolicy record
-        if let DagPayload::Json(payload) = &node.node.payload {
-            if payload.get("type").and_then(|t| t.as_str()) == Some("TrustPolicyRecord") {
-                // Extract the policy credential
-                if let Some(credential_value) = payload.get("policy") {
-                    // Parse the credential
-                    let credential: TrustPolicyCredential = serde_json::from_value(credential_value.clone())
-                        .context("Failed to parse trust policy credential")?;
-                    
-                    // Verify the signature
-                    if !credential.verify()? {
-                        debug!("Policy credential signature verification failed");
-                        return Ok(false);
-                    }
-                    
-                    // Check if expired
-                    if credential.is_expired() {
-                        debug!("Policy credential is expired");
-                        return Ok(false);
-                    }
-                    
-                    // Check previous policy reference if exists
-                    if let Some(prev_cid_str) = &credential.credentialSubject.previousPolicyId {
-                        // Parse the CID
-                        let prev_cid = icn_types::cid::Cid::try_from(prev_cid_str.as_str())
-                            .map_err(|_| anyhow!("Invalid previous policy CID: {}", prev_cid_str))?;
+        // Create a future that can be sent between threads
+        let future = async move {
+            // Get the node from the DAG
+            let node = dag_store_clone.get_node(&cid_clone).await
+                .context("Failed to get trust policy from DAG")?;
+            
+            // Check if it's a TrustPolicy record
+            if let DagPayload::Json(payload) = &node.node.payload {
+                if payload.get("type").and_then(|t| t.as_str()) == Some("TrustPolicyRecord") {
+                    // Extract the policy credential
+                    if let Some(credential_value) = payload.get("policy") {
+                        // Parse the credential
+                        let credential: TrustPolicyCredential = serde_json::from_value(credential_value.clone())
+                            .context("Failed to parse trust policy credential")?;
                         
-                        // Verify that the previous node exists and is reachable
-                        match dag_store.get_node(&prev_cid).await {
-                            Ok(_) => {
-                                // Verify previous policy lineage recursively
-                                if !Self::verify_policy_lineage(dag_store, &prev_cid).await? {
-                                    debug!("Previous policy lineage verification failed");
+                        // Verify the signature
+                        if !credential.verify()? {
+                            debug!("Policy credential signature verification failed");
+                            return Ok(false);
+                        }
+                        
+                        // Check if expired
+                        if credential.is_expired() {
+                            debug!("Policy credential is expired");
+                            return Ok(false);
+                        }
+                        
+                        // Check previous policy reference if exists
+                        if let Some(prev_cid_str) = &credential.credentialSubject.previousPolicyId {
+                            // Check if the CID matches the previous CID
+                            let prev_cid = Cid::try_from(prev_cid_str.as_str())
+                                .map_err(|_| anyhow!("Invalid previous CID format"))?;
+                            
+                            // Verify that the previous node exists and is reachable
+                            match dag_store_clone.get_node(&prev_cid).await {
+                                Ok(_) => {
+                                    // Verify previous policy lineage recursively
+                                    if !Self::verify_policy_lineage(&dag_store_clone, &prev_cid).await? {
+                                        debug!("Previous policy lineage verification failed");
+                                        return Ok(false);
+                                    }
+                                },
+                                Err(e) => {
+                                    debug!("Failed to get previous policy: {}", e);
                                     return Ok(false);
                                 }
-                            },
-                            Err(e) => {
-                                debug!("Failed to get previous policy: {}", e);
+                            }
+                        }
+                        
+                        // Verify that the issuer is authorized to update the policy
+                        // For the genesis policy, any issuer is accepted
+                        // For updates, the issuer must be in the previous policy's admin list
+                        if let Some(prev_cid_str) = &credential.credentialSubject.previousPolicyId {
+                            // Check if the CID matches the previous CID
+                            let prev_cid = Cid::try_from(prev_cid_str.as_str())
+                                .map_err(|_| anyhow!("Invalid previous CID format"))?;
+                            
+                            // Load the previous policy
+                            let prev_policy = Self::from_dag(&dag_store_clone, &prev_cid).await?;
+                            
+                            // Check if the issuer is in the admins list
+                            let issuer_did = Did::from(credential.issuer.clone());
+                            if !prev_policy.is_trusted_for(&issuer_did, TrustLevel::Admin) {
+                                debug!("Policy update issuer is not authorized");
                                 return Ok(false);
                             }
                         }
-                    }
-                    
-                    // Verify that the issuer is authorized to update the policy
-                    // For the genesis policy, any issuer is accepted
-                    // For updates, the issuer must be in the previous policy's admin list
-                    if let Some(prev_cid_str) = &credential.credentialSubject.previousPolicyId {
-                        // Parse the CID
-                        let prev_cid = icn_types::cid::Cid::try_from(prev_cid_str.as_str())
-                            .map_err(|_| anyhow!("Invalid previous policy CID: {}", prev_cid_str))?;
                         
-                        // Load the previous policy
-                        let prev_policy = Self::from_dag(dag_store, &prev_cid).await?;
-                        
-                        // Check if the issuer is in the admins list
-                        let issuer_did = Did::from(credential.issuer.clone());
-                        if !prev_policy.is_trusted_for(&issuer_did, TrustLevel::Admin) {
-                            debug!("Policy update issuer is not authorized");
-                            return Ok(false);
-                        }
+                        // All checks passed
+                        return Ok(true);
                     }
-                    
-                    // All checks passed
-                    return Ok(true);
                 }
             }
-        }
+            
+            debug!("Node is not a TrustPolicy record or lacks a policy credential");
+            Ok(false)
+        };
         
-        debug!("Node is not a TrustPolicy record or lacks a policy credential");
-        Ok(false)
+        // Box the future to resolve the recursion issue
+        Box::pin(future).await
     }
 
     /// Find the latest valid policy in the DAG starting from a specific CID
     pub async fn find_latest_valid_policy(
-        dag_store: &Arc<Box<dyn DagStore>>,
+        dag_store: &Arc<Box<dyn DagStore + Send + Sync>>,
         cid: &Cid,
     ) -> Result<Option<(Cid, TrustedDidPolicy)>> {
         // Verify the policy lineage
@@ -977,7 +995,7 @@ pub async fn publish_trust_policy_to_dag(
     policy: &TrustedDidPolicy,
     issuer_did: &str,
     issuer_key: &DidKey,
-    dag_store: &Arc<Box<dyn DagStore>>,
+    dag_store: &Arc<Box<dyn DagStore + Send + Sync>>,
     prev_policy_cid: Option<&str>,
 ) -> Result<Cid> {
     // Create a credential from the policy
@@ -993,4 +1011,100 @@ pub async fn publish_trust_policy_to_dag(
     
     // Anchor to DAG
     signed_credential.anchor_to_dag(dag_store, issuer_key).await
+}
+
+// Helper function to verify a signature
+fn verify_signature(public_key_multibase: &str, message: &[u8], signature_multibase: &str) -> Result<bool> {
+    // Decode the public key from multibase
+    let multibase_decoded = decode(public_key_multibase)
+        .map_err(|_| anyhow!("Invalid public key format"))?;
+    
+    // Check if it's an Ed25519 key
+    if multibase_decoded.1.len() < 2 || multibase_decoded.1[0] != 0xed || multibase_decoded.1[1] != 0x01 {
+        return Err(anyhow!("Invalid public key format - not Ed25519"));
+    }
+    
+    // Extract the key bytes
+    let key_bytes = &multibase_decoded.1[2..];
+    
+    // Create the verifying key
+    let bytes32: [u8; 32] = key_bytes.try_into()
+        .map_err(|_| anyhow!("Invalid key length"))?;
+        
+    let verifying_key = VerifyingKey::from_bytes(&bytes32)
+        .map_err(|_| anyhow!("Invalid public key"))?;
+    
+    // Decode the signature from multibase
+    let signature_bytes = decode(signature_multibase)
+        .map_err(|_| anyhow!("Invalid signature format"))?.1;
+    
+    // Need exactly 64 bytes for an Ed25519 signature
+    if signature_bytes.len() != 64 {
+        return Err(anyhow!("Invalid signature length"));
+    }
+    
+    // Create a 64-byte array from the signature bytes
+    let mut sig_bytes = [0u8; 64];
+    sig_bytes.copy_from_slice(&signature_bytes[0..64]);
+    
+    // Create the signature object
+    let signature = Signature::from_bytes(&sig_bytes);
+    
+    // Verify the signature
+    verifying_key.verify_strict(message, &signature)
+        .map(|_| true)
+        .or_else(|_| Ok(false))
+}
+
+// Replace CloneDagStore with a Send + Sync + 'static compatible version
+/// Helper structure to wrap DagStore in a way that can be cloned
+pub(crate) struct CloneDagStore {
+    store: Arc<Box<dyn DagStore + Send + Sync + 'static>>,
+}
+
+impl CloneDagStore {
+    pub(crate) fn new(store: Arc<Box<dyn DagStore + Send + Sync + 'static>>) -> Self {
+        Self { store }
+    }
+}
+
+#[async_trait::async_trait]
+impl DagStore for CloneDagStore {
+    async fn add_node(&mut self, node: SignedDagNode) -> Result<Cid, icn_types::dag::DagError> {
+        // Use SharedDagStore::from_arc which is specifically designed for this case
+        let shared_store = SharedDagStore::from_arc(self.store.clone());
+        shared_store.add_node(node).await
+    }
+
+    async fn get_node(&self, cid: &Cid) -> Result<SignedDagNode, icn_types::dag::DagError> {
+        self.store.get_node(cid).await
+    }
+
+    async fn get_data(&self, cid: &Cid) -> Result<Option<Vec<u8>>, icn_types::dag::DagError> {
+        self.store.get_data(cid).await
+    }
+
+    async fn get_tips(&self) -> Result<Vec<Cid>, icn_types::dag::DagError> {
+        self.store.get_tips().await
+    }
+
+    async fn get_ordered_nodes(&self) -> Result<Vec<SignedDagNode>, icn_types::dag::DagError> {
+        self.store.get_ordered_nodes().await
+    }
+
+    async fn get_nodes_by_author(&self, author: &Did) -> Result<Vec<SignedDagNode>, icn_types::dag::DagError> {
+        self.store.get_nodes_by_author(author).await
+    }
+
+    async fn get_nodes_by_payload_type(&self, payload_type: &str) -> Result<Vec<SignedDagNode>, icn_types::dag::DagError> {
+        self.store.get_nodes_by_payload_type(payload_type).await
+    }
+
+    async fn find_path(&self, from: &Cid, to: &Cid) -> Result<Vec<SignedDagNode>, icn_types::dag::DagError> {
+        self.store.find_path(from, to).await
+    }
+
+    async fn verify_branch(&self, tip: &Cid, resolver: &(dyn icn_types::dag::PublicKeyResolver + Send + Sync)) -> Result<(), icn_types::dag::DagError> {
+        self.store.verify_branch(tip, resolver).await
+    }
 } 

@@ -40,72 +40,115 @@ pub enum PolicyUpdateError {
     PolicyError(#[from] PolicyError),
 }
 
-/// DAG processor with policy enforcement
+/// A processor for handling DAG operations with policy validation
+#[derive(Clone)]
 pub struct DagProcessor {
     /// Membership index to check federation/cooperative/community memberships
-    membership_index: Arc<MembershipIndex>,
+    membership_index: Arc<dyn MembershipIndex + Send + Sync>,
     
     /// Policy loader to retrieve policies for different scopes
-    policy_loader: Arc<PolicyLoader>,
+    policy_loader: Arc<dyn PolicyLoader + Send + Sync>,
 }
 
 impl DagProcessor {
     /// Create a new DAG processor with policy enforcement
-    pub fn new(membership_index: Arc<MembershipIndex>, policy_loader: Arc<PolicyLoader>) -> Self {
+    pub fn new(
+        membership_index: Arc<dyn MembershipIndex + Send + Sync>,
+        policy_loader: Arc<dyn PolicyLoader + Send + Sync>,
+    ) -> Self {
         Self {
             membership_index,
             policy_loader,
         }
     }
     
-    /// Validate a node against policy requirements before adding it to the DAG
-    pub fn validate_node(&self, node: &SignedDagNode) -> ValidationResult {
-        // Check if this node requires policy enforcement
-        let action_type = match node.node.payload.action_type() {
-            Some(action) => action,
-            None => return ValidationResult::Valid, // No policy enforcement needed
-        };
+    /// Validate that a DAG node complies with applicable policies
+    pub async fn validate_node(&self, node: &SignedDagNode) -> ValidationResult {
+        // Skip validation for special node types that don't require it
+        if self.is_exempt_from_validation(node) {
+            return ValidationResult::Valid;
+        }
         
-        // Get scope information from the node
-        let scope_type = match &node.node.metadata.scope {
-            icn_types::dag::NodeScope::Federation => "Federation",
-            icn_types::dag::NodeScope::Cooperative => "Cooperative",
-            icn_types::dag::NodeScope::Community => "Community",
-        };
-        
-        let scope_id = match &node.node.metadata.scope_id {
-            Some(id) => id.clone(),
-            None => {
-                if scope_type != "Federation" {
-                    return ValidationResult::OtherError(DagError::InvalidNodeData(
-                        format!("Scope ID is required for {} scope", scope_type)
-                    ));
+        // For nodes that require validation, check if authorization is needed based on payload
+        if let Some(action) = self.get_action_type(node) {
+            debug!("Validating node with action: {}", action);
+            let did = Did::try_from(node.node.issuer.clone())
+                .map_err(|e| {
+                    error!("Invalid DID format in node: {}", e);
+                    ValidationResult::OtherError(DagError::InvalidData(format!("Invalid DID: {}", e)))
+                })?;
+            
+            // Apply the authorization check
+            match self.check_authorization(&node.node.scope_id, &action, &did).await {
+                Ok(_) => ValidationResult::Valid,
+                Err(err) => {
+                    warn!("Policy validation failed for {} performing '{}' in scope {}: {}", 
+                         did, action, node.node.scope_id, err);
+                    ValidationResult::PolicyViolation(err)
                 }
-                // For federation scope, use federation_id as scope_id
-                node.node.metadata.federation_id.clone()
             }
-        };
+        } else {
+            // If no action type is defined, the node doesn't require authorization
+            ValidationResult::Valid
+        }
+    }
+    
+    /// Check if a node is exempt from policy validation
+    fn is_exempt_from_validation(&self, node: &SignedDagNode) -> bool {
+        // Genesis nodes and certain system operations may be exempt
+        if node.node.scope_id.is_empty() || node.node.scope_id == "system" {
+            return true;
+        }
         
-        // Load policy for this scope
-        let policy = match self.policy_loader.load_for_scope(scope_type, &scope_id) {
-            Ok(policy) => policy,
-            Err(PolicyError::PolicyNotFound) => {
-                // No policy defined for this scope, allow the operation
-                debug!("No policy found for scope {}/{}, allowing operation", scope_type, scope_id);
-                return ValidationResult::Valid;
+        // Exemption logic based on payload type could go here
+        // ...
+        
+        false
+    }
+    
+    /// Extract the action type from a node's payload for policy checking
+    fn get_action_type(&self, node: &SignedDagNode) -> Option<String> {
+        // Parse the payload to determine what action is being performed
+        // This will depend on how your payloads are structured
+        match &node.node.payload {
+            DagPayload::Event(event) => event.action_type(),
+            DagPayload::Raw(raw_json) => {
+                // Attempt to extract action_type from raw JSON if available
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw_json) {
+                    value.get("action_type")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                } else {
+                    None
+                }
             }
-            Err(err) => return ValidationResult::PolicyViolation(err),
-        };
+            // Other payload types may not require authorization
+            _ => None
+        }
+    }
+    
+    /// Check authorization for an action in a scope
+    async fn check_authorization(&self, scope_id: &str, action: &str, did: &Did) -> Result<(), PolicyError> {
+        // Determine the scope type from the scope ID
+        // This might involve parsing the ID or lookup in a registry
+        let scope_type = self.determine_scope_type(scope_id);
         
-        // Evaluate policy
-        match crate::policy::evaluate_policy(
-            &policy, 
-            &action_type, 
-            &node.node.author, 
-            &self.membership_index
-        ) {
-            Ok(()) => ValidationResult::Valid,
-            Err(err) => ValidationResult::PolicyViolation(err),
+        // Use the policy loader to check authorization
+        self.policy_loader.check_authorization(&scope_type, scope_id, action, did)
+    }
+    
+    /// Determine the scope type from a scope ID
+    fn determine_scope_type(&self, scope_id: &str) -> String {
+        // This is a simplified implementation
+        // In reality, you might have a more complex mapping of IDs to types
+        if scope_id.starts_with("fed:") {
+            "Federation".to_string()
+        } else if scope_id.starts_with("coop:") {
+            "Cooperative".to_string()
+        } else if scope_id.starts_with("com:") {
+            "Community".to_string()
+        } else {
+            "Unknown".to_string()
         }
     }
     
@@ -136,8 +179,8 @@ impl DagProcessor {
                     // Extract proposed policy from proposal
                     let proposed_policy = self.extract_policy_from_proposal(&proposal_node)?;
                     
-                    // Verify quorum proof (simplified here, would be more complex in real implementation)
-                    let quorum_proof = payload.get("quorum_proof")
+                    // Verify quorum proof
+                    let _quorum_proof = payload.get("quorum_proof")
                         .ok_or(PolicyUpdateError::InvalidQuorumProof("Missing quorum proof".to_string()))?;
                     
                     // TODO: Validate the quorum proof properly
@@ -192,7 +235,7 @@ impl DagProcessor {
         }
         
         // Validate node against policy
-        match self.validate_node(&node) {
+        match self.validate_node(&node).await {
             ValidationResult::Valid => {
                 // Node passes policy validation, add it to the DAG
                 dag_store.add_node(node).await
@@ -229,6 +272,19 @@ impl DagProcessor {
                 error!("Node validation error: {}", err);
                 Err(err)
             }
+        }
+    }
+}
+
+impl ValidationResult {
+    /// Convert validation result to a DagError if invalid
+    pub fn to_dag_error(self) -> Result<(), DagError> {
+        match self {
+            ValidationResult::Valid => Ok(()),
+            ValidationResult::PolicyViolation(err) => {
+                Err(DagError::AuthorizationError(format!("Policy violation: {}", err)))
+            },
+            ValidationResult::OtherError(err) => Err(err),
         }
     }
 } 

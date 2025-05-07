@@ -26,7 +26,8 @@ use crate::manifest_verifier::{ManifestVerifier, ManifestVerificationError};
 use crate::cap_index::CapabilitySelector as MeshCapabilitySelector;
 
 use icn_types::dag::NodeScope;
-use icn_economics::token::{ResourceType as EconomicResourceType};
+// Use fully qualified names for different ResourceType implementations
+use icn_economics::token::ResourceType as EconomicResourceType;
 use icn_economics::storage::TokenStore;
 use icn_economics::transaction::{ResourceTransaction, TransactionType};
 use crate::types::ResourceType as MeshResourceType;
@@ -757,7 +758,7 @@ impl Scheduler {
         self.verify_resource_budget(&request, &origin_coop).await?;
         
         // Find the best node for the job
-        let match_result = self.dispatch(&request, None).await?;
+        let match_result = self.dispatch(request.clone(), None).await?;
         
         // Get the executor cooperative ID from the selected node's manifest
         let executor_coop = self.get_coop_for_node(&match_result.bid.bidder).await?;
@@ -923,11 +924,23 @@ impl Scheduler {
         let manifest_opt = self.cap_index.get_manifest(node_did).await;
         
         if let Some((manifest, _)) = manifest_opt {
-            // In a real implementation, we would have a field in the manifest for the cooperative ID
-            // For now, derive it from the metadata or another field
-            if let Some(metadata) = manifest.metadata {
-                if let Some(coop_id) = metadata.get("coop_id") {
-                    return Ok(coop_id.as_str().unwrap_or("unknown").to_string());
+            // Check for cooperative ID in various fields
+            // Since NodeManifest doesn't have a metadata field directly,
+            // check other relevant fields that might contain this information
+            
+            // Check in trust_fw_hash, which might encode the coop ID
+            if manifest.trust_fw_hash.contains("coop:") {
+                let parts: Vec<&str> = manifest.trust_fw_hash.split("coop:").collect();
+                if parts.len() > 1 {
+                    let coop_part = parts[1].split(":").next().unwrap_or("unknown");
+                    return Ok(coop_part.to_string());
+                }
+            }
+            
+            // Check mesh protocols for coop info
+            for protocol in &manifest.mesh_protocols {
+                if protocol.starts_with("coop:") {
+                    return Ok(protocol.trim_start_matches("coop:").to_string());
                 }
             }
             

@@ -11,7 +11,7 @@ icn-identity-core = { path = "../icn-identity-core" }
 icn-core-types = { path = "../icn-core-types" }
 
 # Async/networking
-tokio = { version = "1.28", features = ["full"] }
+tokio = { version = "1.28", features = ["full"], optional = true }
 async-trait = "0.1"
 futures = "0.3"
 
@@ -29,6 +29,7 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # Cryptography
 ed25519-dalek = { version = "2.0.0", features = ["serde"] }
+rand = "0.8.5"
 
 # Logging and metrics
 log = "0.4"

@@ -21,4 +21,4 @@ pub use cap_index::CapabilitySelector;
 pub use manifest_verifier::{ManifestVerifier, ManifestVerificationError};
 
 pub mod types;
-pub use types::{JobManifest, NodeCapability, Bid, JobStatus, ResourceType}; 
+pub use types::{JobManifest, NodeCapability, NodeCapabilityInfo, Bid, JobStatus, ResourceType}; 

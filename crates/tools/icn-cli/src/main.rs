@@ -155,7 +155,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             handle_receipt_command(&mut ctx, cmd).await?
         }
         Commands::Mesh(cmd) => {
-            handle_mesh_command(&mut ctx, cmd).await?
+            handle_mesh_command(cmd.clone(), &ctx).await?
         }
          Commands::SyncP2P(cmd) => {
             handle_dag_sync_command(&mut ctx, cmd).await?

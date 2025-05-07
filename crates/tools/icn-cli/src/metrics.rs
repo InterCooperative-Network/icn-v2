@@ -70,6 +70,117 @@ pub enum MetricsError {
     Other(String),
 }
 
+/// Metrics server for collecting and exposing mesh activity
+pub struct MetricsServer {
+    handle: PrometheusHandle,
+    registry: Arc<prometheus::Registry>,
+    address: SocketAddr,
+}
+
+impl MetricsServer {
+    /// Create a new metrics server listening on the given address
+    pub fn new(address: SocketAddr) -> Result<Self, MetricsError> {
+        let registry = Arc::new(prometheus::Registry::new());
+        let builder = PrometheusBuilder::new();
+        
+        let handle = builder
+            .with_http_listener(address.clone())
+            .build()
+            .map_err(|e| MetricsError::ServerError(format!("Failed to create metrics server: {}", e)))?;
+            
+        Ok(Self {
+            handle,
+            registry,
+            address,
+        })
+    }
+    
+    /// Start the metrics server in a background thread
+    pub fn start_server(&self) -> Result<(), MetricsError> {
+        info!("Starting metrics server on {}", self.address);
+        
+        // The PrometheusBuilder already starts the server when build() is called
+        
+        Ok(())
+    }
+    
+    /// Register a counter metric
+    pub fn register_counter(&self, name: &str, help: &str, labels: &[&str]) -> Result<IntCounter, MetricsError> {
+        let counter = IntCounter::new(name, help)
+            .map_err(|e| MetricsError::RegistrationError(format!("Failed to create counter: {}", e)))?;
+            
+        self.registry.register(Box::new(counter.clone()))
+            .map_err(|e| MetricsError::RegistrationError(format!("Failed to register counter: {}", e)))?;
+            
+        Ok(counter)
+    }
+    
+    /// Register a gauge metric
+    pub fn register_gauge(&self, name: &str, help: &str, labels: &[&str]) -> Result<IntGauge, MetricsError> {
+        let gauge = IntGauge::new(name, help)
+            .map_err(|e| MetricsError::RegistrationError(format!("Failed to create gauge: {}", e)))?;
+            
+        self.registry.register(Box::new(gauge.clone()))
+            .map_err(|e| MetricsError::RegistrationError(format!("Failed to register gauge: {}", e)))?;
+            
+        Ok(gauge)
+    }
+    
+    /// Increment a counter metric
+    pub fn increment_counter(&self, metric_type: MetricType, value: u64) {
+        let name = self.get_metric_name(metric_type);
+        counter!(&name, value as u64);
+    }
+    
+    /// Set a gauge metric
+    pub fn set_gauge(&self, metric_type: MetricType, value: i64) {
+        let name = self.get_metric_name(metric_type);
+        gauge!(&name, value as f64);
+    }
+    
+    /// Record a histogram value
+    pub fn record_histogram(&self, metric_type: MetricType, value: f64) {
+        let name = self.get_metric_name(metric_type);
+        histogram!(&name, value);
+    }
+    
+    /// Get the metric name for a metric type
+    fn get_metric_name(&self, metric_type: MetricType) -> String {
+        match metric_type {
+            MetricType::TaskPublished => "icn_mesh_tasks_published_total",
+            MetricType::TaskExecuted => "icn_mesh_tasks_executed_total",
+            MetricType::TaskRejected => "icn_mesh_tasks_rejected_total",
+            
+            MetricType::BidSubmitted => "icn_mesh_bids_submitted_total",
+            MetricType::BidAccepted => "icn_mesh_bids_accepted_total",
+            MetricType::BidRejected => "icn_mesh_bids_rejected_total",
+            
+            MetricType::ExecutionTime => "icn_mesh_execution_time_seconds",
+            MetricType::ExecutionMemory => "icn_mesh_execution_memory_bytes",
+            MetricType::ExecutionCpu => "icn_mesh_execution_cpu_percent",
+            
+            MetricType::TokensTransferred => "icn_mesh_tokens_transferred_total",
+            MetricType::TokenBalance => "icn_mesh_token_balance",
+            
+            MetricType::PeersConnected => "icn_mesh_peers_connected",
+            MetricType::PeerSync => "icn_mesh_peer_sync_total",
+            MetricType::PeerLatency => "icn_mesh_peer_latency_seconds",
+            
+            MetricType::ResourceUsageCpu => "icn_mesh_resource_usage_cpu_percent",
+            MetricType::ResourceUsageMemory => "icn_mesh_resource_usage_memory_bytes",
+            MetricType::ResourceUsageIO => "icn_mesh_resource_usage_io_bytes",
+            MetricType::ResourceUsageGpu => "icn_mesh_resource_usage_gpu_percent",
+            MetricType::ResourceUsageStorage => "icn_mesh_resource_usage_storage_bytes",
+            MetricType::ResourceUsageBandwidthIn => "icn_mesh_resource_usage_bandwidth_in_bytes",
+            MetricType::ResourceUsageBandwidthOut => "icn_mesh_resource_usage_bandwidth_out_bytes",
+            MetricType::ResourceUsageSensor => "icn_mesh_resource_usage_sensor_total",
+            MetricType::ResourceUsageEnvironmental => "icn_mesh_resource_usage_environmental_total",
+            MetricType::ResourceUsageActuation => "icn_mesh_resource_usage_actuation_total",
+            MetricType::ResourceUsageSpecialized => "icn_mesh_resource_usage_specialized_total",
+        }.to_string()
+    }
+}
+
 /// Metrics context for collecting and exposing mesh activity
 pub struct MetricsContext {
     prometheus_handle: PrometheusHandle,

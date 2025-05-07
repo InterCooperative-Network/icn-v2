@@ -8,6 +8,13 @@ scrape_configs:
       - targets: ['host.docker.internal:9090']
         labels:
           federation: 'default'
+          
+  - job_name: 'mesh-metrics'
+    static_configs:
+      - targets: ['host.docker.internal:9091']
+        labels:
+          component: 'mesh'
+          federation: 'default'
     
   # Add more mesh nodes here as needed
   # - job_name: 'federation-2'

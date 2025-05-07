@@ -2,7 +2,7 @@ use serde::{Serialize, Deserialize};
 use chrono::{DateTime, Utc};
 use icn_types::Did;
 use icn_identity_core::did::DidKey;
-use ed25519_dalek::Signature;
+use ed25519_dalek::{Signature, VerifyingKey, Verifier};
 use thiserror::Error;
 
 /// Error types for token operations
@@ -167,11 +167,12 @@ impl ScopedResourceToken {
         )).map_err(|e| TokenError::SerializationError(e.to_string()))?;
         
         // Convert signature bytes to Signature
-        let signature = Signature::from_bytes(&self.signature)
+        let signature_bytes: [u8; 64] = self.signature.as_slice().try_into()
             .map_err(|_| TokenError::InvalidSignature)?;
+        let signature = Signature::from_bytes(&signature_bytes);
         
         // Verify the signature
-        match public_key.verify(&token_data, &signature) {
+        match public_key.verify_strict(&token_data, &signature) {
             Ok(_) => Ok(true),
             Err(_) => Err(TokenError::InvalidSignature),
         }
@@ -208,7 +209,7 @@ mod tests {
         let verifying_key = signing_key.verifying_key();
         
         // Create a DID key and a DID
-        let did_key = DidKey::from_signing_key(&signing_key);
+        let did_key = DidKey::from_signing_key(signing_key);
         let did = Did::from_string(&did_key.to_did_string()).unwrap();
         
         // Create a scoped resource token

@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow, Context};
 use icn_core_types::Did;
 use icn_identity_core::did::DidKey;
 use icn_core_types::Cid;
-use icn_types::dag::{DagStore, DagPayload, SignedDagNode};
+use icn_types::dag::{DagStore, DagPayload, SignedDagNode, DagNodeBuilder, SharedDagStore};
 use serde::{Serialize, Deserialize};
 use log::{debug, info, warn, error};
 use ed25519_dalek::{Signature, VerifyingKey, Verifier};
@@ -196,13 +196,14 @@ impl RevocationNoticeCredential {
         // Sign the bytes
         let signature = did_key.sign(&canonical_bytes);
         
-        // Create the proof
+        // For proofValue, convert signature to hex string
+        let signature_bytes = signature.to_bytes();
         let proof = CredentialProof {
             proof_type: "Ed25519Signature2020".to_string(),
             created: Utc::now(),
             verificationMethod: format!("{}#key-1", did_key.did()),
             proofPurpose: "assertionMethod".to_string(),
-            proofValue: hex::encode(signature),
+            proofValue: hex::encode(signature_bytes),
         };
         
         // Set the proof
@@ -246,12 +247,12 @@ impl RevocationNoticeCredential {
             .map_err(|e| anyhow!("Failed to decode key part: {}", e))?;
         
         // Check for Ed25519 prefix (0xed01)
-        if multibase_decoded.len() < 2 || multibase_decoded[0] != 0xed || multibase_decoded[1] != 0x01 {
+        if multibase_decoded.1.len() < 2 || multibase_decoded.1[0] != 0xed || multibase_decoded.1[1] != 0x01 {
             return Err(anyhow!("Unsupported key type, expected Ed25519"));
         }
         
         // Extract public key bytes
-        let key_bytes = &multibase_decoded[2..];
+        let key_bytes = &multibase_decoded.1[2..];
         if key_bytes.len() != 32 {
             return Err(anyhow!("Invalid key length"));
         }
@@ -268,8 +269,10 @@ impl RevocationNoticeCredential {
             return Err(anyhow!("Invalid signature length"));
         }
         
-        let signature = ed25519_dalek::Signature::from_bytes(&signature_bytes)
-            .map_err(|_| anyhow!("Invalid signature format"))?;
+        // Create a 64-byte array for Signature::from_bytes
+        let mut sig_bytes = [0u8; 64];
+        sig_bytes.copy_from_slice(&signature_bytes);
+        let signature = ed25519_dalek::Signature::from_bytes(&sig_bytes);
         
         // Verify signature
         match verifying_key.verify(&canonical_bytes, &signature) {
@@ -281,10 +284,10 @@ impl RevocationNoticeCredential {
     /// Anchor this revocation notice to the DAG
     pub async fn anchor_to_dag(
         &self,
-        dag_store: &Arc<Box<dyn DagStore>>,
+        dag_store: &Arc<Box<dyn DagStore + Send + Sync>>,
         did_key: &DidKey,
     ) -> Result<Cid> {
-        // Create a revocation record
+        // Create a record for DAG storage
         let record = RevocationRecord::new(
             self.credentialSubject.federationId.clone(),
             self.clone(),
@@ -293,14 +296,14 @@ impl RevocationNoticeCredential {
         // Convert to DAG payload
         let payload = record.to_dag_payload()?;
         
-        // Create a DAG node for this record
-        let node = icn_types::dag::DagNodeBuilder::new()
+        // Create a DAG node for the revocation notice
+        let node = DagNodeBuilder::new()
             .with_payload(payload)
-            .with_author(did_key.did())
+            .with_author(did_key.did().clone())
             .with_federation_id(self.credentialSubject.federationId.clone())
             .with_label("RevocationNotice".to_string())
             .build()?;
-            
+        
         // Serialize the node for signing
         let node_bytes = serde_json::to_vec(&node)
             .context("Failed to serialize node")?;
@@ -309,14 +312,18 @@ impl RevocationNoticeCredential {
         let signature = did_key.sign(&node_bytes);
         
         // Create a signed node
-        let signed_node = icn_types::dag::SignedDagNode {
+        let mut signed_node = SignedDagNode {
             node,
             signature,
-            cid: None, // Will be computed when added to the DAG
+            cid: None,
         };
         
+        // Ensure CID is calculated
+        signed_node.ensure_cid()?;
+        
         // Add to the DAG store to get its CID
-        let cid = dag_store.add_node(signed_node)
+        let shared_store = SharedDagStore::from_arc(dag_store.clone());
+        let cid = shared_store.add_node(signed_node)
             .await
             .map_err(|e| anyhow!("Failed to add revocation notice to DAG: {}", e))?;
             
@@ -326,7 +333,7 @@ impl RevocationNoticeCredential {
 
 /// Check if a DID has been revoked
 pub async fn is_did_revoked(
-    dag_store: &Arc<Box<dyn DagStore>>,
+    dag_store: &Arc<Box<dyn DagStore + Send + Sync>>,
     did: &str,
     federation_id: &str,
 ) -> Result<bool> {
@@ -335,11 +342,13 @@ pub async fn is_did_revoked(
     
     // Filter for revocation notices in this federation
     for node in nodes {
-        if node.node.federation_id != federation_id {
+        // Skip nodes from different federations
+        if node.node.metadata.federation_id != federation_id {
             continue;
         }
         
-        if let Some(label) = &node.node.label {
+        // Check if this is a revocation notice node
+        if let Some(label) = &node.node.metadata.label {
             if label != "RevocationNotice" {
                 continue;
             }
@@ -379,7 +388,7 @@ pub async fn is_did_revoked(
 
 /// Check if a credential has been revoked
 pub async fn is_credential_revoked(
-    dag_store: &Arc<Box<dyn DagStore>>,
+    dag_store: &Arc<Box<dyn DagStore + Send + Sync>>,
     credential_cid: &str,
     federation_id: &str,
 ) -> Result<bool> {
@@ -388,11 +397,13 @@ pub async fn is_credential_revoked(
     
     // Filter for revocation notices in this federation
     for node in nodes {
-        if node.node.federation_id != federation_id {
+        // Skip nodes from different federations
+        if node.node.metadata.federation_id != federation_id {
             continue;
         }
         
-        if let Some(label) = &node.node.label {
+        // Check if this is a revocation notice node
+        if let Some(label) = &node.node.metadata.label {
             if label != "RevocationNotice" {
                 continue;
             }
@@ -432,7 +443,7 @@ pub async fn is_credential_revoked(
 
 /// Issue a DID revocation notice
 pub async fn revoke_did(
-    dag_store: &Arc<Box<dyn DagStore>>,
+    dag_store: &Arc<Box<dyn DagStore + Send + Sync>>,
     federation_id: &str,
     did_to_revoke: &str,
     reason: &str,
@@ -456,7 +467,7 @@ pub async fn revoke_did(
 
 /// Issue a credential revocation notice
 pub async fn revoke_credential(
-    dag_store: &Arc<Box<dyn DagStore>>,
+    dag_store: &Arc<Box<dyn DagStore + Send + Sync>>,
     federation_id: &str,
     credential_cid: &str,
     reason: &str,
@@ -476,4 +487,47 @@ pub async fn revoke_credential(
     
     // Anchor to DAG
     notice.anchor_to_dag(dag_store, issuer_key).await
+}
+
+// Helper function to verify a signature
+fn verify_signature(public_key_multibase: &str, message: &[u8], signature_multibase: &str) -> Result<bool> {
+    // Decode the public key from multibase
+    let multibase_decoded = decode(public_key_multibase)
+        .map_err(|_| anyhow!("Invalid public key format"))?;
+    
+    // Check if it's an Ed25519 key
+    if multibase_decoded.1.len() < 2 || multibase_decoded.1[0] != 0xed || multibase_decoded.1[1] != 0x01 {
+        return Err(anyhow!("Invalid public key format - not Ed25519"));
+    }
+    
+    // Extract the key bytes
+    let key_bytes = &multibase_decoded.1[2..];
+    
+    // Create the verifying key
+    let bytes32: [u8; 32] = key_bytes.try_into()
+        .map_err(|_| anyhow!("Invalid key length"))?;
+        
+    let verifying_key = VerifyingKey::from_bytes(&bytes32)
+        .map_err(|_| anyhow!("Invalid public key"))?;
+    
+    // Decode the signature from multibase
+    let signature_bytes = decode(signature_multibase)
+        .map_err(|_| anyhow!("Invalid signature format"))?.1;
+    
+    // Need exactly 64 bytes for an Ed25519 signature
+    if signature_bytes.len() != 64 {
+        return Err(anyhow!("Invalid signature length"));
+    }
+    
+    // Create a 64-byte array from the signature bytes
+    let mut sig_bytes = [0u8; 64];
+    sig_bytes.copy_from_slice(&signature_bytes[0..64]);
+    
+    // Create the signature object
+    let signature = Signature::from_bytes(&sig_bytes);
+    
+    // Verify the signature
+    verifying_key.verify_strict(message, &signature)
+        .map(|_| true)
+        .or_else(|_| Ok(false))
 } 

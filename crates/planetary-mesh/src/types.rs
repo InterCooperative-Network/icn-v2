@@ -82,10 +82,10 @@ pub struct JobManifest {
     pub max_compute_units: Option<u64>,
 }
 
-/// Placeholder definition for a Node Capability advertisement.
-/// (This might be closer to NodeManifest from icn-identity-core?)
+/// Complete definition for a Node Capability advertisement.
+/// This is the full node capability information for advertising to the network.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct NodeCapability {
+pub struct NodeCapabilityInfo {
      pub node_id: Did,
      pub available_resources: Vec<ResourceType>, // Simplified representation
      pub supported_features: Vec<String>, // e.g., "wasm", "sgx"

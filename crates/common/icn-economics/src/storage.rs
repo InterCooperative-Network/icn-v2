@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+#[cfg(feature = "async")]
 use tokio::sync::RwLock;
+#[cfg(not(feature = "async"))]
+use std::sync::RwLock;
 use crate::token::{ResourceType, TokenError};
 use crate::transaction::{ResourceTransaction, TransactionType, TransactionError};
 use async_trait::async_trait;
@@ -35,12 +38,22 @@ pub trait TokenStore: Send + Sync {
 }
 
 /// In-memory implementation of the TokenStore trait
+#[cfg(feature = "async")]
 pub struct InMemoryTokenStore {
     /// Balances indexed by cooperative/community ID and resource type
-    balances: RwLock<HashMap<String, HashMap<ResourceType, u64>>>,
+    balances: tokio::sync::RwLock<HashMap<String, HashMap<ResourceType, u64>>>,
     
     /// Transaction history indexed by cooperative/community ID
-    transactions: RwLock<HashMap<String, Vec<ResourceTransaction>>>,
+    transactions: tokio::sync::RwLock<HashMap<String, Vec<ResourceTransaction>>>,
+}
+
+#[cfg(not(feature = "async"))]
+pub struct InMemoryTokenStore {
+    /// Balances indexed by cooperative/community ID and resource type
+    balances: std::sync::RwLock<HashMap<String, HashMap<ResourceType, u64>>>,
+    
+    /// Transaction history indexed by cooperative/community ID
+    transactions: std::sync::RwLock<HashMap<String, Vec<ResourceTransaction>>>,
 }
 
 impl InMemoryTokenStore {
@@ -58,8 +71,38 @@ impl InMemoryTokenStore {
     }
     
     /// Add a transaction to the history
+    #[cfg(feature = "async")]
     async fn add_transaction(&self, transaction: ResourceTransaction) -> Result<(), TransactionError> {
         let mut transactions = self.transactions.write().await;
+        
+        // Add to source's history if applicable
+        if let Some(source_id) = &transaction.source_id {
+            if !transactions.contains_key(source_id) {
+                transactions.insert(source_id.clone(), Vec::new());
+            }
+            
+            if let Some(tx_list) = transactions.get_mut(source_id) {
+                tx_list.push(transaction.clone());
+            }
+        }
+        
+        // Add to destination's history if applicable
+        if let Some(destination_id) = &transaction.destination_id {
+            if !transactions.contains_key(destination_id) {
+                transactions.insert(destination_id.clone(), Vec::new());
+            }
+            
+            if let Some(tx_list) = transactions.get_mut(destination_id) {
+                tx_list.push(transaction);
+            }
+        }
+        
+        Ok(())
+    }
+    
+    #[cfg(not(feature = "async"))]
+    async fn add_transaction(&self, transaction: ResourceTransaction) -> Result<(), TransactionError> {
+        let mut transactions = self.transactions.write().unwrap();
         
         // Add to source's history if applicable
         if let Some(source_id) = &transaction.source_id {
@@ -89,6 +132,7 @@ impl InMemoryTokenStore {
 
 #[async_trait]
 impl TokenStore for InMemoryTokenStore {
+    #[cfg(feature = "async")]
     async fn get_balance(&self, scope_id: &str, resource_type: &ResourceType) -> Result<u64, TokenError> {
         let balances = self.balances.read().await;
         
@@ -103,6 +147,22 @@ impl TokenStore for InMemoryTokenStore {
         }
     }
     
+    #[cfg(not(feature = "async"))]
+    async fn get_balance(&self, scope_id: &str, resource_type: &ResourceType) -> Result<u64, TokenError> {
+        let balances = self.balances.read().unwrap();
+        
+        if let Some(scope_balances) = balances.get(scope_id) {
+            if let Some(balance) = scope_balances.get(resource_type) {
+                Ok(*balance)
+            } else {
+                Ok(0) // No balance for this resource type
+            }
+        } else {
+            Ok(0) // No balances for this scope
+        }
+    }
+    
+    #[cfg(feature = "async")]
     async fn credit(&self, scope_id: &str, resource_type: ResourceType, amount: u64) -> Result<(), TokenError> {
         if amount == 0 {
             return Err(TokenError::InvalidAmount);
@@ -124,12 +184,62 @@ impl TokenStore for InMemoryTokenStore {
         Ok(())
     }
     
+    #[cfg(not(feature = "async"))]
+    async fn credit(&self, scope_id: &str, resource_type: ResourceType, amount: u64) -> Result<(), TokenError> {
+        if amount == 0 {
+            return Err(TokenError::InvalidAmount);
+        }
+        
+        let mut balances = self.balances.write().unwrap();
+        
+        // Ensure the scope exists in the balances map
+        if !balances.contains_key(scope_id) {
+            balances.insert(scope_id.to_string(), HashMap::new());
+        }
+        
+        // Update the balance
+        if let Some(scope_balances) = balances.get_mut(scope_id) {
+            let current = scope_balances.get(&resource_type).copied().unwrap_or(0);
+            scope_balances.insert(resource_type, current + amount);
+        }
+        
+        Ok(())
+    }
+    
+    #[cfg(feature = "async")]
     async fn debit(&self, scope_id: &str, resource_type: ResourceType, amount: u64) -> Result<(), TokenError> {
         if amount == 0 {
             return Err(TokenError::InvalidAmount);
         }
         
         let mut balances = self.balances.write().await;
+        
+        // Check if the scope exists and has enough balance
+        if let Some(scope_balances) = balances.get(scope_id) {
+            let current = scope_balances.get(&resource_type).copied().unwrap_or(0);
+            if current < amount {
+                return Err(TokenError::InsufficientFunds);
+            }
+        } else {
+            return Err(TokenError::InsufficientFunds);
+        }
+        
+        // Update the balance
+        if let Some(scope_balances) = balances.get_mut(scope_id) {
+            let current = scope_balances.get(&resource_type).copied().unwrap_or(0);
+            scope_balances.insert(resource_type, current - amount);
+        }
+        
+        Ok(())
+    }
+    
+    #[cfg(not(feature = "async"))]
+    async fn debit(&self, scope_id: &str, resource_type: ResourceType, amount: u64) -> Result<(), TokenError> {
+        if amount == 0 {
+            return Err(TokenError::InvalidAmount);
+        }
+        
+        let mut balances = self.balances.write().unwrap();
         
         // Check if the scope exists and has enough balance
         if let Some(scope_balances) = balances.get(scope_id) {
@@ -178,7 +288,7 @@ impl TokenStore for InMemoryTokenStore {
                         source_id, 
                         transaction.resource_type.clone(), 
                         transaction.amount
-                    ).await.map_err(|e| TransactionError::VerificationFailed)?;
+                    ).await.map_err(|_| TransactionError::VerificationFailed)?;
                 }
             },
             TransactionType::Credit => {
@@ -187,7 +297,7 @@ impl TokenStore for InMemoryTokenStore {
                         destination_id, 
                         transaction.resource_type.clone(), 
                         transaction.amount
-                    ).await.map_err(|e| TransactionError::VerificationFailed)?;
+                    ).await.map_err(|_| TransactionError::VerificationFailed)?;
                 }
             },
             TransactionType::Transfer => {
@@ -197,7 +307,7 @@ impl TokenStore for InMemoryTokenStore {
                         destination_id,
                         transaction.resource_type.clone(),
                         transaction.amount
-                    ).await.map_err(|e| TransactionError::VerificationFailed)?;
+                    ).await.map_err(|_| TransactionError::VerificationFailed)?;
                 }
             },
             TransactionType::Mint => {
@@ -206,7 +316,7 @@ impl TokenStore for InMemoryTokenStore {
                         destination_id, 
                         transaction.resource_type.clone(), 
                         transaction.amount
-                    ).await.map_err(|e| TransactionError::VerificationFailed)?;
+                    ).await.map_err(|_| TransactionError::VerificationFailed)?;
                 }
             },
             TransactionType::Burn => {
@@ -215,19 +325,31 @@ impl TokenStore for InMemoryTokenStore {
                         source_id, 
                         transaction.resource_type.clone(), 
                         transaction.amount
-                    ).await.map_err(|e| TransactionError::VerificationFailed)?;
+                    ).await.map_err(|_| TransactionError::VerificationFailed)?;
                 }
             },
         }
         
-        // Add the transaction to history
+        // Add transaction to history
         self.add_transaction(transaction.clone()).await?;
         
         Ok(())
     }
     
+    #[cfg(feature = "async")]
     async fn get_transaction_history(&self, scope_id: &str) -> Result<Vec<ResourceTransaction>, TransactionError> {
         let transactions = self.transactions.read().await;
+        
+        if let Some(tx_list) = transactions.get(scope_id) {
+            Ok(tx_list.clone())
+        } else {
+            Ok(Vec::new())
+        }
+    }
+    
+    #[cfg(not(feature = "async"))]
+    async fn get_transaction_history(&self, scope_id: &str) -> Result<Vec<ResourceTransaction>, TransactionError> {
+        let transactions = self.transactions.read().unwrap();
         
         if let Some(tx_list) = transactions.get(scope_id) {
             Ok(tx_list.clone())
@@ -243,12 +365,14 @@ pub fn create_shared_token_store() -> Arc<dyn TokenStore> {
 }
 
 #[cfg(test)]
+#[cfg(feature = "async")]
 mod tests {
     use super::*;
     use icn_types::Did;
     use crate::token::ResourceType;
+    use tokio::test;
     
-    #[tokio::test]
+    #[test]
     async fn test_token_credit_and_debit() {
         let store = InMemoryTokenStore::new();
         
@@ -267,7 +391,7 @@ mod tests {
         assert_eq!(balance, 70);
     }
     
-    #[tokio::test]
+    #[test]
     async fn test_token_transfer() {
         let store = InMemoryTokenStore::new();
         
@@ -290,7 +414,7 @@ mod tests {
         assert_eq!(dest_balance, 50);
     }
     
-    #[tokio::test]
+    #[test]
     async fn test_apply_transaction() {
         let store = InMemoryTokenStore::new();
         let did = Did::from_string("did:icn:test").unwrap();
