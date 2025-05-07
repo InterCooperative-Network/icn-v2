@@ -1,13 +1,15 @@
-use icn_identity_core::vc::execution_receipt::ExecutionReceipt;
-use icn_types::dag::{DagEvent, EventPayload, EventType, EventId, DagStore, DagError};
-use icn_types::Cid; // Ensure Cid is imported
+use icn_identity_core::vc::execution_receipt::{ExecutionReceipt, ExecutionReceiptError};
+use icn_types::dag::{DagEvent, DagNode, EventPayload, EventType, EventId, DagStore, DagError, SignedDagNode};
+use icn_types::{DagPayload, Did, DagNodeBuilder};
+use ed25519_dalek::Signature;
 use thiserror::Error;
-use std::time::{SystemTime, UNIX_EPOCH};
+use sha2::{Sha256, Digest};
+use chrono::Utc;
 
 #[derive(Error, Debug)]
 pub enum AnchorError {
     #[error("Identity error: {0}")]
-    Identity(#[from] icn_identity_core::vc::execution_receipt::ExecutionReceiptError),
+    Identity(#[from] ExecutionReceiptError),
     #[error("DAG store error: {0}")]
     DagStore(#[from] DagError),
     #[error("System time error: {0}")]
@@ -19,30 +21,40 @@ pub enum AnchorError {
 /// Anchors an ExecutionReceipt to the DAG by creating a new DagEvent.
 pub async fn anchor_execution_receipt(
     receipt: &ExecutionReceipt,
-    dag_store: &mut (impl DagStore + Send + Sync), // Added Send + Sync for async context
+    dag_store: &mut (impl DagStore + Send + Sync + ?Sized), // Added ?Sized to allow trait objects
     triggering_event_id: Option<EventId>, // Optional ID of the event that triggered this execution
 ) -> Result<EventId, AnchorError> {
-    // Use the to_cid() method we added to ExecutionReceipt
-    let receipt_cid = receipt.to_cid()?;
+    // Convert the receipt to a CID
+    let receipt_cid = match receipt.to_cid() {
+        Ok(cid) => cid,
+        Err(e) => return Err(AnchorError::Identity(e)),
+    };
 
     // The author of the DagEvent will be the issuer of the receipt.
-    let author_did = receipt.issuer.clone();
+    let author_did = icn_types::Did::from_string(&receipt.issuer)
+        .map_err(|e| AnchorError::CidConversion(e.to_string()))?;
 
     // Determine parent events for the new DAG event.
     // If a triggering_event_id is provided, use it as a parent.
-    // Otherwise, try to use the latest event from the DAG store as a parent (common practice).
+    // Otherwise, use the tips from the DAG store as parents.
     let parent_events = if let Some(parent_id) = triggering_event_id {
         vec![parent_id]
     } else {
-        // Fallback to latest event if no specific parent is given.
-        // This requires DagStore to have a method like `get_latest_event_ids` or similar.
-        // For now, assuming a simple case or that it might be empty if no parent context.
-        // dag_store.get_latest_event_ids(1).await.unwrap_or_default()
-        // Let's assume for now, if no specific parent, it might be an initial event or link to a known anchor.
-        // For simplicity, if not provided, we'll use an empty vec, or one would fetch a relevant head.
-        match dag_store.get_head_cids().await {
-            Ok(heads) => heads.into_iter().map(EventId::from).collect(),
-            Err(_) => vec![], // Fallback if heads can't be fetched
+        // Get the current tips of the DAG as parents
+        match dag_store.get_tips().await {
+            Ok(tips) => {
+                // Convert Cid objects to EventId
+                // Since we're not actually able to convert from one to the other directly,
+                // we'll create new EventIds by hashing the CID string
+                let mut event_ids = Vec::new();
+                for cid in tips {
+                    let cid_str = cid.to_string();
+                    let event_id = EventId::new(cid_str.as_bytes());
+                    event_ids.push(event_id);
+                }
+                event_ids
+            }
+            Err(_) => vec![], // Fallback if tips can't be fetched
         }
     };
 
@@ -50,20 +62,36 @@ pub async fn anchor_execution_receipt(
 
     // Create the DagEvent using its constructor
     let dag_event = DagEvent::new(
-        EventType::Receipt, // Assuming EventType::Receipt is now defined
-        author_did,
+        EventType::Receipt, // Receipt event type
+        author_did.to_string(),
         parent_events,
         event_payload,
     );
 
-    // The DagEvent::new constructor initializes signature as empty.
-    // If the event itself needs to be signed (e.g., by the node/author creating this DAG entry),
-    // that would be a separate step, e.g.:
-    // let signed_event = dag_event.sign(author_keypair)?; // Assuming a sign method on DagEvent
-    // For now, we insert it with the default empty signature as per DagEvent::new.
+    // Create a DagNode using the DagNodeBuilder
+    let dag_node = DagNodeBuilder::new()
+        .with_payload(DagPayload::ExecutionReceipt(receipt_cid))
+        .with_author(author_did)
+        .with_label("ExecutionReceipt".to_string())
+        .with_timestamp(Utc::now())
+        .build()
+        .map_err(|e| AnchorError::DagStore(e))?;
 
-    // Insert the event into the DAG store and get its EventId (which is its CID).
-    let event_id = dag_store.add_event(dag_event).await?;
+    // Create a placeholder Signature (64 bytes of zeros)
+    let empty_sig = Signature::from_bytes(&[0u8; 64]).unwrap();
+
+    // Create a SignedDagNode with the DagNode
+    let signed_node = SignedDagNode {
+        node: dag_node,
+        signature: empty_sig,
+        cid: None
+    };
+
+    // Insert the event into the DAG store and get its Cid
+    let node_cid = dag_store.add_node(signed_node).await?;
+    
+    // Create an EventId from the CID by hashing it
+    let event_id = EventId::new(node_cid.to_string().as_bytes());
 
     Ok(event_id)
 } 

@@ -1,6 +1,6 @@
-use crate::VmContext;
+use crate::abi::context::HostContext;
+use icn_identity_core::vc::execution_receipt::{ExecutionReceipt, ExecutionReceiptError, ExecutionSubject, ExecutionStatus, ExecutionScope};
 use icn_identity_core::did::DidKey;
-use icn_identity_core::vc::execution_receipt::{ExecutionReceipt, ExecutionSubject, ExecutionStatus, ExecutionScope};
 use icn_types::dag::EventId;
 use icn_types::Cid;
 use thiserror::Error;
@@ -10,7 +10,7 @@ use uuid::Uuid;
 #[derive(Error, Debug)]
 pub enum ReceiptError {
     #[error("Identity error: {0}")]
-    Identity(#[from] icn_identity_core::vc::execution_receipt::ExecutionReceiptError),
+    Identity(#[from] ExecutionReceiptError),
     #[error("Keypair not found in VmContext")]
     KeypairNotFound,
     #[error("Host error: {0}")]
@@ -24,24 +24,31 @@ fn unix_ts() -> u64 {
         .as_secs()
 }
 
+// Define a trait as an extension to HostContext to provide the receipt-specific functionality
+pub trait ReceiptContextExt {
+    fn node_did(&self) -> Option<&icn_types::Did>;
+    fn federation_did(&self) -> Option<&icn_types::Did>;
+    fn caller_did(&self) -> Option<&icn_types::Did>;
+    fn federation_keypair(&self) -> Option<DidKey>;
+}
+
 pub fn issue_execution_receipt(
-    ctx: &VmContext,
+    ctx: &dyn ReceiptContextExt,
     module_cid: &Cid,
     result_cid: &Cid,
     event_id: Option<&EventId>, // Made event_id optional as per plan
-    // Potentially add more context if needed, like specific task_id for MeshCompute
 ) -> Result<ExecutionReceipt, ReceiptError> {
     // Determine the DID of the node executing
-    let executor_did = ctx.node_did.as_ref().ok_or_else(|| ReceiptError::HostError("Node DID not found in VmContext".to_string()))?;
+    let executor_did = ctx.node_did().ok_or_else(|| ReceiptError::HostError("Node DID not found in context".to_string()))?;
     
     // Determine the Federation DID for issuing
-    let federation_did = ctx.federation_did.as_ref().ok_or_else(|| ReceiptError::HostError("Federation DID not found in VmContext".to_string()))?;
+    let federation_did = ctx.federation_did().ok_or_else(|| ReceiptError::HostError("Federation DID not found in context".to_string()))?;
     
     // Determine the submitter DID (caller)
-    let submitter_did = ctx.caller_did.as_ref().map(|did| did.to_string());
+    let submitter_did = ctx.caller_did().map(|did| did.to_string());
 
     // Create the ExecutionSubject
-    // Scope might need to be more dynamic based on VmContext or execution type
+    // Scope might need to be more dynamic based on context or execution type
     let subject = ExecutionSubject {
         id: executor_did.to_string(),
         scope: ExecutionScope::Federation { // Defaulting to Federation scope for now
@@ -57,9 +64,7 @@ pub fn issue_execution_receipt(
     };
 
     // Get the federation keypair for signing
-    // This assumes VmContext has a method to retrieve the relevant DidKey
     let kp = ctx.federation_keypair().ok_or(ReceiptError::KeypairNotFound)?;
-    let verification_method = format!("{}#keys-1", federation_did); // Standard key ID assumption
 
     // Create and sign the ExecutionReceipt
     let receipt = ExecutionReceipt::new(
@@ -67,7 +72,8 @@ pub fn issue_execution_receipt(
         federation_did.to_string(),       // Issuer is the Federation
         subject,
     )
-    .sign(&kp)?;
+    .sign(&kp)
+    .map_err(|e| ReceiptError::Identity(e))?;
 
     Ok(receipt)
 }
@@ -75,12 +81,30 @@ pub fn issue_execution_receipt(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use icn_identity_core::did::DidKey;
     use icn_types::Did;
     use std::sync::Arc;
 
-    // Mock VmContext for testing
-    impl VmContext {
+    // Mock implementation of ReceiptContextExt for testing
+    struct MockContext {
+        node_did: Option<Did>,
+        federation_did: Option<Did>,
+        caller_did: Option<Did>,
+        signing_key: Option<DidKey>,
+    }
+
+    impl ReceiptContextExt for MockContext {
+        fn node_did(&self) -> Option<&Did> {
+            self.node_did.as_ref()
+        }
+        
+        fn federation_did(&self) -> Option<&Did> {
+            self.federation_did.as_ref()
+        }
+        
+        fn caller_did(&self) -> Option<&Did> {
+            self.caller_did.as_ref()
+        }
+        
         fn federation_keypair(&self) -> Option<DidKey> {
             self.signing_key.clone()
         }
@@ -93,22 +117,16 @@ mod tests {
         let federation_key = DidKey::generate().unwrap();
         let caller_key = DidKey::generate().unwrap();
 
-        let ctx = VmContext {
-            node_did: Some(node_key.did()),
-            federation_did: Some(federation_key.did()),
-            caller_did: Some(caller_key.did()),
+        let ctx = MockContext {
+            node_did: Some(node_key.did().clone()),
+            federation_did: Some(federation_key.did().clone()),
+            caller_did: Some(caller_key.did().clone()),
             signing_key: Some(federation_key.clone()), // Federation signs receipts
-            // ... other VmContext fields if needed, with defaults or mocks
-            gas_limit: 0, 
-            gas_used: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            host_abi_version: 0,
-            env_vars: std::collections::HashMap::new(),
-            max_memory_bytes: 0,
         };
 
-        let module_cid = Cid::try_from("bafyreibgnclts5p6s2jmjvkdbrj36fxxcL734eadwlp73w6k6mhl2gcue").unwrap();
-        let result_cid = Cid::try_from("bafyreihg3tkxnvw5t54bhyd67p2agenyycb4wvfxhdxrh2v2qtnPmdazby").unwrap();
-        let event_id_bytes = [1u8; 32];
+        let module_cid = Cid::from_bytes(&[1u8; 32]).unwrap();
+        let result_cid = Cid::from_bytes(&[2u8; 32]).unwrap();
+        let event_id_bytes = [3u8; 32];
         let event_id = EventId(event_id_bytes);
 
         let receipt_result = issue_execution_receipt(&ctx, &module_cid, &result_cid, Some(&event_id));

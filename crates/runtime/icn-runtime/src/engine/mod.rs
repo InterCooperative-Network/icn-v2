@@ -2,14 +2,72 @@ use wasmtime::*;
 use anyhow::Result;
 use std::sync::Arc;
 use crate::abi::{bindings::register_host_functions, context::HostContext};
-use icn_types::{Cid, dag::EventId};
-use crate::host::receipt::issue_execution_receipt;
+use icn_types::{Cid, dag::EventId, Did};
+use crate::host::receipt::{issue_execution_receipt, ReceiptContextExt};
 use crate::config::ExecutionConfig;
+use icn_identity_core::did::DidKey;
 
 // Placeholder for actual VmContext definition - this should provide config and dag_store access
 pub trait RuntimeContextExt {
     fn get_execution_config(&self) -> &ExecutionConfig;
     fn get_dag_store_mut(&mut self) -> Option<&mut (dyn icn_types::dag::DagStore + Send + Sync)>;
+    fn vm_context(&self) -> &dyn crate::abi::context::HostContext;
+    
+    // Implement convenience methods for ReceiptContextExt
+    fn node_did(&self) -> Option<&Did> { None }
+    fn federation_did(&self) -> Option<&Did> { None }
+    fn caller_did(&self) -> Option<&Did> { None }
+    fn federation_keypair(&self) -> Option<DidKey> { None }
+}
+
+// Implement ReceiptContextExt for any type that implements RuntimeContextExt
+impl<T: RuntimeContextExt> ReceiptContextExt for T {
+    fn node_did(&self) -> Option<&Did> {
+        self.node_did()
+    }
+    
+    fn federation_did(&self) -> Option<&Did> {
+        self.federation_did()
+    }
+    
+    fn caller_did(&self) -> Option<&Did> {
+        self.caller_did()
+    }
+    
+    fn federation_keypair(&self) -> Option<DidKey> {
+        self.federation_keypair()
+    }
+}
+
+// Implement RuntimeContextExt for Arc<T> where T: RuntimeContextExt
+impl<T: RuntimeContextExt + ?Sized> RuntimeContextExt for Arc<T> {
+    fn get_execution_config(&self) -> &ExecutionConfig {
+        (**self).get_execution_config()
+    }
+
+    fn get_dag_store_mut(&mut self) -> Option<&mut (dyn icn_types::dag::DagStore + Send + Sync)> {
+        Arc::get_mut(self).and_then(|inner| inner.get_dag_store_mut())
+    }
+
+    fn vm_context(&self) -> &dyn crate::abi::context::HostContext {
+        (**self).vm_context()
+    }
+    
+    fn node_did(&self) -> Option<&Did> {
+        (**self).node_did()
+    }
+    
+    fn federation_did(&self) -> Option<&Did> {
+        (**self).federation_did()
+    }
+    
+    fn caller_did(&self) -> Option<&Did> {
+        (**self).caller_did()
+    }
+    
+    fn federation_keypair(&self) -> Option<DidKey> {
+        (**self).federation_keypair()
+    }
 }
 
 /// Executes WASM modules within a HostContext.
@@ -41,13 +99,13 @@ impl<T: HostContext + RuntimeContextExt + Send + Sync + 'static> WasmExecutor<T>
 
         let entry_func_name;
         let entry_func: TypedFunc<(), ()>;
-        if let Ok(func) = instance.get_typed_func::<(), ()>(&mut store, "_start").await {
+        if let Ok(func) = instance.get_typed_func::<(), ()>(&mut store, "_start") {
             entry_func = func;
             entry_func_name = "_start";
-        } else if let Ok(func) = instance.get_typed_func::<(), ()>(&mut store, "main").await {
+        } else if let Ok(func) = instance.get_typed_func::<(), ()>(&mut store, "main") {
             entry_func = func;
             entry_func_name = "main";
-        } else if let Ok(func) = instance.get_typed_func::<(), ()>(&mut store, "run").await {
+        } else if let Ok(func) = instance.get_typed_func::<(), ()>(&mut store, "run") {
             entry_func = func;
             entry_func_name = "run";
         } else {
@@ -59,11 +117,19 @@ impl<T: HostContext + RuntimeContextExt + Send + Sync + 'static> WasmExecutor<T>
         log::info!("WASM module executed successfully (async).");
 
         // --- ExecutionReceipt Issuance Hook ---
-        let vm_ctx_ref = store.data().vm_context();
-        let exec_config = store.data().get_execution_config();
+        let vm_ctx_ref = store.data();
+        
+        // We need to get the configuration options first to avoid borrowing issues
+        let auto_issue_receipts = store.data().get_execution_config().auto_issue_receipts;
+        let anchor_receipts = store.data().get_execution_config().anchor_receipts;
+        let receipt_export_dir = store.data().get_execution_config().receipt_export_dir.clone();
 
-        if exec_config.auto_issue_receipts {
-            let result_cid = Cid::default();
+        if auto_issue_receipts {
+            // Create a dummy result CID - this should be properly implemented
+            let result_cid = Cid::from_bytes(&[0u8; 32]).unwrap_or_else(|_| {
+                // Fallback if the dummy CID creation fails
+                Cid::from_bytes(&[1u8; 32]).unwrap()
+            });
             
             match issue_execution_receipt(
                 vm_ctx_ref,      
@@ -74,32 +140,29 @@ impl<T: HostContext + RuntimeContextExt + Send + Sync + 'static> WasmExecutor<T>
                 Ok(receipt) => {
                     log::info!("🔏 ExecutionReceipt issued: {}", receipt.id);
 
-                    if exec_config.anchor_receipts {
+                    if anchor_receipts {
                         let mut dag_anchored_successfully = false;
-                        match store.data_mut() {
-                            Ok(mut host_data_mut) => {
-                                if let Some(dag_store_mut_ref) = host_data_mut.get_dag_store_mut() {
-                                    match crate::dag_anchor::anchor_execution_receipt(&receipt, dag_store_mut_ref, triggering_event_id).await {
-                                        Ok(anchored_event_id) => {
-                                            log::info!("🧾 ExecutionReceipt anchored to DAG. Event ID: {}", anchored_event_id);
-                                            dag_anchored_successfully = true;
-                                        }
-                                        Err(e) => log::error!("Failed to anchor receipt: {}", e),
-                                    }
-                                } else {
-                                    log::warn!("DAG store not available (get_dag_store_mut returned None). Receipt not anchored.");
+                        
+                        // Access the data mutably
+                        let host_data_mut = store.data_mut();
+                        if let Some(dag_store_mut_ref) = host_data_mut.get_dag_store_mut() {
+                            match crate::dag_anchor::anchor_execution_receipt(&receipt, dag_store_mut_ref, triggering_event_id).await {
+                                Ok(anchored_event_id) => {
+                                    log::info!("🧾 ExecutionReceipt anchored to DAG. Event ID: {}", anchored_event_id);
+                                    dag_anchored_successfully = true;
                                 }
+                                Err(e) => log::error!("Failed to anchor receipt: {}", e),
                             }
-                            Err(_) => {
-                                log::warn!("Could not obtain mutable access to host data for DAG anchoring. Receipt not anchored.");
-                            }
+                        } else {
+                            log::warn!("DAG store not available (get_dag_store_mut returned None). Receipt not anchored.");
                         }
-                        if !dag_anchored_successfully && exec_config.anchor_receipts {
+                        
+                        if !dag_anchored_successfully && anchor_receipts {
                             log::warn!("DAG anchoring was configured but could not be performed due to access issues.");
                         }
                     }
 
-                    if let Some(out_dir) = &exec_config.receipt_export_dir {
+                    if let Some(out_dir) = &receipt_export_dir {
                         if !out_dir.exists() {
                             if let Err(e) = std::fs::create_dir_all(out_dir) {
                                 log::error!("Failed to create receipt export directory {}: {}", out_dir.display(), e);

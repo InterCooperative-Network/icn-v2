@@ -7,6 +7,8 @@ pub mod federation;
 pub mod runtime;
 pub mod proposal;
 pub mod vote;
+pub mod policy;
+pub mod keygen;
 
 // Re-export handlers for main.rs
 pub use dag::handle_dag_command;
@@ -17,4 +19,6 @@ pub use vote::handle_vote_commands;
 // Add pub use for other handlers when created
 pub use bundle::handle_bundle_command;
 pub use receipt::handle_receipt_command;
-pub use sync_p2p::handle_dag_sync_command; 
+pub use sync_p2p::handle_dag_sync_command;
+pub use policy::handle_policy_command;
+pub use keygen::handle_key_gen; 

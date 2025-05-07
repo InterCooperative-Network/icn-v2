@@ -1,15 +1,51 @@
 use crate::cap_index::{CapabilitySelector};
 use crate::manifest_verifier::{ManifestVerifier, ManifestVerificationError};
 use anyhow::{Result, anyhow, Context};
-use icn_identity_core::{Did, manifest::NodeManifest, did::DidKey};
-use icn_types::dag::{DagStore, Cid, DagNodeBuilder, DagPayload, SignedDagNode};
+use icn_identity_core::did::DidKey;
+use icn_identity_core::manifest::NodeManifest;
+use icn_types::Did;
+use icn_types::Cid;
+use icn_types::dag::{DagStore, DagNodeBuilder, DagPayload, SignedDagNode};
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use log::{debug, info, warn, error};
-use uuid;
+use uuid::Uuid;
+use hex;
+
+/// Architecture type with Default implementation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Architecture {
+    pub name: String,
+    pub version: String,
+}
+
+impl Default for Architecture {
+    fn default() -> Self {
+        Self {
+            name: "unknown".to_string(),
+            version: "unknown".to_string(),
+        }
+    }
+}
+
+/// Energy info with Default implementation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnergyInfo {
+    pub source: String,
+    pub renewable_percentage: u8,
+}
+
+impl Default for EnergyInfo {
+    fn default() -> Self {
+        Self {
+            source: "unknown".to_string(),
+            renewable_percentage: 0,
+        }
+    }
+}
 
 /// Task request with requirements
 #[derive(Debug, Clone, Serialize, Deserialize)]

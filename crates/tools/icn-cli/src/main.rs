@@ -18,6 +18,8 @@ use commands::runtime::handle_runtime_command; // 👈 NEW
 use commands::handle_proposal_commands; // Add proposal handler
 use commands::handle_vote_commands; // Add vote handler
 use commands::{handle_bundle_command, handle_receipt_command, handle_dag_sync_command}; // ADDED
+use commands::handle_policy_command; // Add policy handler import
+use commands::handle_key_gen; // Add keygen handler
 // use icn_types::ExecutionResult; // Needs locating
 use std::path::PathBuf;
 use tokio;
@@ -75,7 +77,8 @@ enum Commands {
     Federation(commands::federation::FederationCommands),
 
     /// Manage trust policies
-    Policy,
+    #[command(subcommand)]
+    Policy(commands::policy::PolicyCommands),
 
     /// Runtime commands
     #[command(subcommand)]
@@ -107,10 +110,8 @@ async fn main() -> Result<(), CliError> {
         Commands::Dag(cmd) => {
             handle_dag_command(&mut context, cmd).await?
         }
-        Commands::KeyGen { output: _output } => {
-            println!("Executing key-gen...");
-            // TODO: Implement key-gen logic (could also be moved to commands/keygen.rs)
-            unimplemented!("KeyGen handler")
+        Commands::KeyGen { output } => {
+            handle_key_gen(&mut context, output).await?
         }
         Commands::Bundle(cmd) => {
             handle_bundle_command(&mut context, cmd).await?
@@ -130,8 +131,8 @@ async fn main() -> Result<(), CliError> {
         Commands::Runtime(cmd) => {
             handle_runtime_command(&mut context, cmd).await?
         }
-        Commands::Policy => {
-            todo!("Implement Policy commands")
+        Commands::Policy(cmd) => {
+            handle_policy_command(&mut context, cmd).await?
         }
         Commands::Proposal(cmd) => {
             handle_proposal_commands(cmd.clone(), &mut context).await?

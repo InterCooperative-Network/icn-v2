@@ -20,6 +20,7 @@ uuid = { version = "1.4", features = ["v4"] }
 serde_ipld_dagcbor = "0.5"
 futures = "0.3"
 multibase = "0.9"
+lazy_static = "1.4"
 
 # ICN internal crates
 icn-types = { path = "../../common/icn-types" }

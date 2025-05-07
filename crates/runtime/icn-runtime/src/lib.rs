@@ -8,8 +8,6 @@ pub mod config;
 
 // Re-export key components
 pub use engine::WasmExecutor;
-pub use engine::VmContext;
-pub use engine::WasmEngine;
 
 pub use host::receipt::{issue_execution_receipt, ReceiptError};
 pub use dag_anchor::{anchor_execution_receipt, AnchorError};

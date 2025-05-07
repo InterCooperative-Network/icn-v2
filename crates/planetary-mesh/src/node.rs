@@ -1,5 +1,7 @@
 use async_trait::async_trait;
-use icn_identity_core::{DidKey, Did, manifest::NodeManifest};
+use icn_identity_core::did::{DidKey, DidKeyError};
+use icn_identity_core::manifest::NodeManifest;
+use icn_types::Did;
 use icn_types::dag::{DagStore, DagNodeBuilder, DagPayload, SignedDagNode};
 use serde_json::json;
 use std::sync::Arc;
@@ -31,6 +33,7 @@ pub trait MeshProtocol: Send + Sync {
 }
 
 /// Gossipsub protocol for mesh communication
+#[derive(Clone)]
 pub struct GossipsubProtocol {
     topic: String,
 }

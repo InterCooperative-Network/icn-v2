@@ -7,7 +7,8 @@ use ed25519_dalek::{Signer, Verifier, Signature};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
 use thiserror::Error;
-use multihash::{MultihashDigest, Code as MultihashCode};
+use sha2::{Sha256, Digest};
+use multihash::Multihash;
 use serde_ipld_dagcbor;
 use icn_core_types::{Did, Cid as IcnCid};
 use cid::Cid as RawCid;
@@ -21,8 +22,8 @@ pub enum ExecutionReceiptError {
     #[error("JSON Serialization error: {0}")]
     JsonSerialization(#[from] serde_json::Error),
     
-    #[error("CBOR Serialization error: {0}")]
-    CborSerialization(#[from] serde_ipld_dagcbor::Error),
+    #[error("CBOR Serialization error")]
+    CborSerialization(String),
 
     #[error("Signature error: {0}")]
     Signature(String),
@@ -263,15 +264,21 @@ impl ExecutionReceipt {
     /// Calculate a CID for the ExecutionReceipt (content-addressed, typically excluding proof).
     /// The CID is generated from the DAG-CBOR representation of the receipt.
     pub fn to_cid(&self) -> Result<Cid, ExecutionReceiptError> {
-        let mut temp_receipt = self.clone();
-        // For content addressing, proof is usually excluded or handled differently.
-        // If the `id` field itself is intended to be a CID of the content after issuance,
-        // this method might be used to generate that ID, or verify it.
-        // Here, we generate a CID of the receipt *content* (proof excluded).
-        temp_receipt.proof = None; 
-
-        let bytes = serde_ipld_dagcbor::to_vec(&temp_receipt)?;
-        let hash = MultihashCode::Sha2_256.digest(&bytes);
-        Ok(RawCid::new_v1(DAG_CBOR_CODEC, hash).into())
+        let cbor = serde_ipld_dagcbor::to_vec(self)
+            .map_err(|e| ExecutionReceiptError::CborSerialization(e.to_string()))?;
+        
+        // Hash the CBOR with SHA-256
+        let mut hasher = Sha256::new();
+        hasher.update(&cbor);
+        let digest = hasher.finalize();
+        
+        // Create a Multihash (0x12 is the code for SHA2-256)
+        let mh = Multihash::wrap(0x12, &digest)
+            .map_err(ExecutionReceiptError::Multihash)?;
+        
+        // Create a CIDv1 with dag-cbor codec
+        let cid = RawCid::new_v1(DAG_CBOR_CODEC, mh);
+        
+        Ok(cid.into())
     }
 } 
