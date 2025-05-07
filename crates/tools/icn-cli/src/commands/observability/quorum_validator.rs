@@ -5,6 +5,7 @@ use icn_types::Cid;
 use serde_json::{json, Value};
 use std::path::Path;
 use std::collections::HashSet;
+use crate::context::MutableDagStore;
 
 /// Quorum information
 #[derive(Debug)]
@@ -36,13 +37,13 @@ pub struct SignerInfo {
 
 /// Quorum validator utility
 pub struct QuorumValidator {
-    dag_store: std::sync::Arc<dyn icn_types::dag::DagStore + Send + Sync>,
+    dag_store: MutableDagStore,
 }
 
 impl QuorumValidator {
     /// Create a new quorum validator
-    pub fn new(dag_store: std::sync::Arc<dyn icn_types::dag::DagStore + Send + Sync>) -> Self {
-        QuorumValidator { dag_store }
+    pub fn new(dag_store: MutableDagStore) -> Self {
+        Self { dag_store }
     }
     
     /// Validate quorum proof for a node
@@ -58,10 +59,10 @@ impl QuorumValidator {
                 if let Some(proof) = json.get("quorum_proof") {
                     proof.clone()
                 } else {
-                    return Err(CliError::ValidationError("Node does not contain a quorum proof".to_string()));
+                    return Err(CliError::SerializationError("Node does not contain a quorum proof".to_string()));
                 }
             },
-            _ => return Err(CliError::ValidationError("Node payload is not JSON".to_string())),
+            _ => return Err(CliError::SerializationError("Node payload is not JSON".to_string())),
         };
         
         // Extract required signers

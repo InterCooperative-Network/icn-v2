@@ -1,5 +1,5 @@
 use icn_identity_core::vc::execution_receipt::{ExecutionReceipt, ExecutionReceiptError};
-use icn_types::dag::{DagEvent, EventPayload, EventType, EventId, DagStore, DagError, SignedDagNode};
+use icn_types::dag::{EventId, DagStore, DagError, SignedDagNode};
 use icn_types::{DagPayload, DagNodeBuilder};
 use ed25519_dalek::Signature;
 use thiserror::Error;
@@ -35,7 +35,7 @@ pub async fn anchor_execution_receipt(
     // Determine parent events for the new DAG event.
     // If a triggering_event_id is provided, use it as a parent.
     // Otherwise, use the tips from the DAG store as parents.
-    let parent_events = if let Some(parent_id) = triggering_event_id {
+    let _parent_events = if let Some(parent_id) = triggering_event_id {
         vec![parent_id]
     } else {
         // Get the current tips of the DAG as parents

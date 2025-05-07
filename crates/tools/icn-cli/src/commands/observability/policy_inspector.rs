@@ -5,6 +5,7 @@ use icn_types::dag::{DagPayload, NodeScope, SignedDagNode};
 use icn_types::Cid;
 use serde_json::{json, Value};
 use std::path::Path;
+use crate::context::MutableDagStore;
 
 /// Policy information structure
 #[derive(Debug)]
@@ -47,13 +48,13 @@ pub struct VoteInfo {
 
 /// Policy inspector utility
 pub struct PolicyInspector {
-    dag_store: std::sync::Arc<dyn icn_types::dag::DagStore + Send + Sync>,
+    dag_store: MutableDagStore,
 }
 
 impl PolicyInspector {
     /// Create a new policy inspector
-    pub fn new(dag_store: std::sync::Arc<dyn icn_types::dag::DagStore + Send + Sync>) -> Self {
-        PolicyInspector { dag_store }
+    pub fn new(dag_store: MutableDagStore) -> Self {
+        Self { dag_store }
     }
     
     /// Get the current active policy for a scope
@@ -105,7 +106,7 @@ impl PolicyInspector {
         // Extract policy content
         let policy_content = match &latest_policy.node.payload {
             DagPayload::Json(json) => json.clone(),
-            _ => return Err(CliError::ValidationError("Policy node has invalid payload type".to_string())),
+            _ => return Err(CliError::SerializationError("Policy node has invalid payload type".to_string())),
         };
         
         // Build update trail
@@ -194,7 +195,7 @@ impl PolicyInspector {
                         reason,
                     })
                 } else {
-                    Err(CliError::ValidationError("Vote node has invalid payload type".to_string()))
+                    Err(CliError::SerializationError("Vote node has invalid payload type".to_string()))
                 }
             })
             .collect::<Result<Vec<_>, CliError>>()?;

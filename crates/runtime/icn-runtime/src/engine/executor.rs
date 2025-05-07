@@ -3,7 +3,6 @@ use anyhow::{Context, Result};
 use crate::config::ExecutionConfig;
 use crate::host::receipt::issue_execution_receipt;
 use crate::abi::bindings::register_host_functions;
-use crate::abi::context::HostContext;
 use icn_types::{Cid, dag::EventId, Did};
 use icn_identity_core::did::DidKey;
 use std::path::Path;
@@ -46,10 +45,10 @@ pub trait ContextExtension {
     fn federation_keypair(&self) -> Option<DidKey> { None }
     
     /// Get membership index if available
-    fn membership_index(&self) -> Option<std::sync::Arc<crate::policy::MembershipIndex>> { None }
+    fn membership_index(&self) -> Option<std::sync::Arc<dyn crate::policy::MembershipIndex + Send + Sync>> { None }
     
     /// Get policy loader if available
-    fn policy_loader(&self) -> Option<std::sync::Arc<crate::policy::PolicyLoader>> { None }
+    fn policy_loader(&self) -> Option<std::sync::Arc<dyn crate::policy::PolicyLoader + Send + Sync>> { None }
 }
 
 // Implement ContextExtension for Arc<T> where T: ContextExtension
@@ -78,11 +77,11 @@ impl<T: ContextExtension + ?Sized> ContextExtension for Arc<T> {
         (**self).federation_keypair()
     }
     
-    fn membership_index(&self) -> Option<std::sync::Arc<crate::policy::MembershipIndex>> {
+    fn membership_index(&self) -> Option<std::sync::Arc<dyn crate::policy::MembershipIndex + Send + Sync>> {
         (**self).membership_index()
     }
     
-    fn policy_loader(&self) -> Option<std::sync::Arc<crate::policy::PolicyLoader>> {
+    fn policy_loader(&self) -> Option<std::sync::Arc<dyn crate::policy::PolicyLoader + Send + Sync>> {
         (**self).policy_loader()
     }
 }
@@ -136,7 +135,7 @@ impl ModernWasmExecutor {
         fuel_limit: Option<u64>
     ) -> Result<ExecutionResult> 
     where 
-        T: HostContext + ContextExtension + Send + Sync + 'static 
+        T: crate::abi::context::HostContext + ContextExtension + Send + Sync + 'static 
     {
         let start_time = Instant::now();
         
@@ -211,7 +210,7 @@ impl ModernWasmExecutor {
         store: &mut Store<Arc<T>>
     ) -> Result<TypedFunc<(), ()>> 
     where 
-        T: HostContext + Send + Sync + 'static 
+        T: crate::abi::context::HostContext + Send + Sync + 'static 
     {
         // Try standard entry points in order of preference
         for name in &["_start", "main", "run", "execute"] {
@@ -232,7 +231,7 @@ impl ModernWasmExecutor {
         event_id: Option<EventId>
     ) -> Result<Option<String>>
     where 
-        T: HostContext + ContextExtension + Send + Sync + 'static 
+        T: crate::abi::context::HostContext + ContextExtension + Send + Sync + 'static 
     {
         // Check if receipt generation is enabled in the execution config
         // We can access this directly through the ContextExtension implementation on Store

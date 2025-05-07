@@ -1,4 +1,3 @@
-use crate::abi::context::HostContext;
 use icn_identity_core::vc::execution_receipt::{ExecutionReceipt, ExecutionReceiptError, ExecutionSubject, ExecutionStatus, ExecutionScope};
 use icn_identity_core::did::DidKey;
 use icn_types::dag::EventId;

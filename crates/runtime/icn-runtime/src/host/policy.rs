@@ -1,9 +1,24 @@
-use anyhow::{Result, anyhow};
 use wasmtime::Caller;
 use icn_types::{Did, PolicyError};
 use crate::abi::context::HostContext;
-use crate::policy::{MembershipIndex, PolicyLoader, ScopeType};
 use log::{debug, error};
+
+/// Helper function to read a string from WASM memory that also handles clone to avoid borrow checker issues
+fn read_string_safe<T: HostContext + Clone>(
+    caller: &mut Caller<'_, T>,
+    ptr: i32,
+    len: i32,
+    error_code: i32
+) -> Result<String, i32> {
+    let context = caller.data().clone();
+    match context.read_string(caller, ptr, len) {
+        Ok(s) => Ok(s),
+        Err(e) => {
+            error!("Failed to read string: {}", e);
+            Err(error_code)
+        }
+    }
+}
 
 /// Host function to check if a DID is authorized to perform an action within a scope
 ///
@@ -16,8 +31,8 @@ use log::{debug, error};
 /// # Returns
 /// * `0` if the action is authorized
 /// * Non-zero error code if the action is not authorized
-pub fn host_check_policy_authorization(
-    mut caller: Caller<'_, impl HostContext>,
+pub fn host_check_policy_authorization<T: HostContext + Clone>(
+    mut caller: Caller<'_, T>,
     scope_type_ptr: i32,
     scope_type_len: i32,
     scope_id_ptr: i32,
@@ -27,47 +42,31 @@ pub fn host_check_policy_authorization(
     did_ptr: i32,
     did_len: i32,
 ) -> i32 {
-    let ctx = caller.data();
-    
-    // First read all strings to avoid multiple mutable borrows of caller
-    let scope_type_result = ctx.read_string(&mut caller, scope_type_ptr, scope_type_len);
-    let scope_id_result = ctx.read_string(&mut caller, scope_id_ptr, scope_id_len);
-    let action_result = ctx.read_string(&mut caller, action_ptr, action_len);
-    let did_str_result = ctx.read_string(&mut caller, did_ptr, did_len);
-    
-    // Now process each result separately
-    let scope_type = match scope_type_result {
+    // Read scope_type
+    let scope_type = match read_string_safe(&mut caller, scope_type_ptr, scope_type_len, -1) {
         Ok(s) => s,
-        Err(e) => {
-            error!("Failed to read scope_type: {}", e);
-            return -1;
-        }
+        Err(code) => return code,
     };
     
-    let scope_id = match scope_id_result {
+    // Read scope_id
+    let scope_id = match read_string_safe(&mut caller, scope_id_ptr, scope_id_len, -2) {
         Ok(s) => s,
-        Err(e) => {
-            error!("Failed to read scope_id: {}", e);
-            return -2;
-        }
+        Err(code) => return code,
     };
     
-    let action = match action_result {
+    // Read action
+    let action = match read_string_safe(&mut caller, action_ptr, action_len, -3) {
         Ok(s) => s,
-        Err(e) => {
-            error!("Failed to read action: {}", e);
-            return -3;
-        }
+        Err(code) => return code,
     };
     
-    let did_str = match did_str_result {
+    // Read DID string
+    let did_str = match read_string_safe(&mut caller, did_ptr, did_len, -4) {
         Ok(s) => s,
-        Err(e) => {
-            error!("Failed to read did: {}", e);
-            return -4;
-        }
+        Err(code) => return code,
     };
     
+    // Parse the DID
     let did = match Did::try_from(did_str) {
         Ok(d) => d,
         Err(e) => {
@@ -76,8 +75,10 @@ pub fn host_check_policy_authorization(
         }
     };
     
-    // Now we can safely access policy_loader from the context
-    let ctx = caller.data();
+    // We need to clone the context to avoid borrowing issues
+    let ctx = caller.data().clone();
+    
+    // Get the policy loader
     let policy_loader = match ctx.policy_loader() {
         Some(loader) => loader,
         None => {
@@ -91,12 +92,10 @@ pub fn host_check_policy_authorization(
     // Perform the policy check
     match policy_loader.check_authorization(&scope_type, &scope_id, &action, &did) {
         Ok(()) => 0, // Authorized
-        Err(PolicyError::Unauthorized) => 1,
-        Err(PolicyError::InvalidScope) => 2,
-        Err(PolicyError::InvalidAction) => 3,
-        Err(e) => {
-            error!("Policy check error: {}", e);
-            -10
-        }
+        Err(PolicyError::ActionNotPermitted) => 1,
+        Err(PolicyError::UnauthorizedScopeAccess) => 2,
+        Err(PolicyError::DidNotInAllowlist) => 3,
+        Err(PolicyError::PolicyNotFound) => 4,
+        Err(PolicyError::InternalError(_)) => 5,
     }
 } 

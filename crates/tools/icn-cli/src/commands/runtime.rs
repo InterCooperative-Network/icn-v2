@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::str::FromStr;
 use anyhow::Context as AnyhowContext;
 use async_trait::async_trait;
+use std::sync::OnceLock;
 
 #[derive(Subcommand, Debug)]
 pub enum RuntimeCommands {
@@ -76,6 +77,9 @@ struct RuntimeExecutionContext {
     log_enabled: bool,
 }
 
+// Add this static
+static DUMMY_DID: OnceLock<Did> = OnceLock::new();
+
 impl RuntimeExecutionContext {
     fn new(config: ExecutionConfig, verbose: bool) -> Self {
         Self {
@@ -103,9 +107,11 @@ impl ContextExtension for RuntimeExecutionContext {
     }
     
     fn caller_did(&self) -> Option<&Did> {
-        // This is a placeholder - in a real implementation, we'd derive from context
-        static DUMMY_DID: Did = Did::new_unchecked("did:icn:placeholder");
-        Some(&DUMMY_DID)
+        // Initialize the static DID once
+        let did = DUMMY_DID.get_or_init(|| {
+            Did::from_string("did:icn:placeholder").unwrap_or_else(|_| Did::from(String::from("did:icn:placeholder")))
+        });
+        Some(did)
     }
 }
 
@@ -119,7 +125,7 @@ impl HostContext for RuntimeExecutionContext {
     
     fn get_caller_did(&self) -> Did {
         // This is a placeholder - in a real implementation, we'd have a valid DID
-        Did::new_unchecked("did:icn:placeholder")
+        Did::from_string("did:icn:placeholder").unwrap_or_else(|_| Did::from(String::from("did:icn:placeholder")))
     }
     
     async fn verify_signature(&self, _did: &Did, _message: &[u8], _signature: &[u8]) -> bool {

@@ -5,6 +5,7 @@ use icn_types::Cid;
 use serde_json::{json, Value};
 use std::path::Path;
 use std::collections::{HashMap, HashSet};
+use crate::context::MutableDagStore;
 
 /// Member information
 #[derive(Debug)]
@@ -38,13 +39,13 @@ pub struct FederationOverview {
 
 /// Federation overview utility
 pub struct FederationInspector {
-    dag_store: std::sync::Arc<dyn icn_types::dag::DagStore + Send + Sync>,
+    dag_store: MutableDagStore,
 }
 
 impl FederationInspector {
     /// Create a new federation inspector
-    pub fn new(dag_store: std::sync::Arc<dyn icn_types::dag::DagStore + Send + Sync>) -> Self {
-        FederationInspector { dag_store }
+    pub fn new(dag_store: MutableDagStore) -> Self {
+        Self { dag_store }
     }
     
     /// Get federation overview

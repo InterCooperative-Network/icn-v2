@@ -1,5 +1,5 @@
 use clap::{Args, Subcommand, ValueHint};
-use crate::context::CliContext;
+use crate::context::{CliContext, get_cid};
 use crate::error::{CliError, CliResult};
 use std::path::PathBuf;
 use std::fs;
@@ -27,7 +27,7 @@ impl ScopeType {
         match s.to_lowercase().as_str() {
             "cooperative" | "coop" => Ok(ScopeType::Cooperative),
             "community" => Ok(ScopeType::Community),
-            _ => Err(CliError::ValidationError(format!("Invalid scope type: {}", s))),
+            _ => Err(CliError::SerializationError(format!("Invalid scope type: {}", s))),
         }
     }
 }
@@ -272,7 +272,7 @@ pub async fn handle_scope_command(command: &ScopeCommands, ctx: &mut CliContext)
     match command {
         ScopeCommands::Create { options, description } => {
             let scope_type = ScopeType::from_str(&options.scope_type)?;
-            let dag_store = ctx.get_dag_store(options.dag_dir.as_deref())?;
+            let mut dag_store = ctx.get_dag_store(options.dag_dir.as_deref())?;
             let did_key = ctx.load_did_key(&options.key)?;
             let did = Did::from_string(&did_key.to_did_string())?;
             
@@ -323,7 +323,7 @@ pub async fn handle_scope_command(command: &ScopeCommands, ctx: &mut CliContext)
         
         ScopeCommands::Propose { options, title, content } => {
             let scope_type = ScopeType::from_str(&options.scope_type)?;
-            let dag_store = ctx.get_dag_store(options.dag_dir.as_deref())?;
+            let mut dag_store = ctx.get_dag_store(options.dag_dir.as_deref())?;
             let did_key = ctx.load_did_key(&options.key)?;
             let did = Did::from_string(&did_key.to_did_string())?;
             
@@ -358,7 +358,7 @@ pub async fn handle_scope_command(command: &ScopeCommands, ctx: &mut CliContext)
             for node in scope_nodes {
                 if let Some(scope) = node.node.metadata.scope_id.as_ref() {
                     if scope == &options.scope_id {
-                        let cid = node.ensure_cid()?;
+                        let cid = get_cid(&node)?;
                         parent_cids.push(cid);
                     }
                 }
@@ -394,7 +394,7 @@ pub async fn handle_scope_command(command: &ScopeCommands, ctx: &mut CliContext)
         
         ScopeCommands::Vote { options, proposal_cid, vote, comment } => {
             let scope_type = ScopeType::from_str(&options.scope_type)?;
-            let dag_store = ctx.get_dag_store(options.dag_dir.as_deref())?;
+            let mut dag_store = ctx.get_dag_store(options.dag_dir.as_deref())?;
             let did_key = ctx.load_did_key(&options.key)?;
             let did = Did::from_string(&did_key.to_did_string())?;
             
@@ -440,7 +440,7 @@ pub async fn handle_scope_command(command: &ScopeCommands, ctx: &mut CliContext)
         
         ScopeCommands::CreateCharter { options, title, content } => {
             let scope_type = ScopeType::from_str(&options.scope_type)?;
-            let dag_store = ctx.get_dag_store(options.dag_dir.as_deref())?;
+            let mut dag_store = ctx.get_dag_store(options.dag_dir.as_deref())?;
             let did_key = ctx.load_did_key(&options.key)?;
             let did = Did::from_string(&did_key.to_did_string())?;
             
@@ -475,7 +475,7 @@ pub async fn handle_scope_command(command: &ScopeCommands, ctx: &mut CliContext)
             for node in scope_nodes {
                 if let Some(scope) = node.node.metadata.scope_id.as_ref() {
                     if scope == &options.scope_id {
-                        let cid = node.ensure_cid()?;
+                        let cid = get_cid(&node)?;
                         parent_cid = Some(cid);
                         break;
                     }
@@ -512,7 +512,7 @@ pub async fn handle_scope_command(command: &ScopeCommands, ctx: &mut CliContext)
         
         ScopeCommands::ExportThread { options, output } => {
             let scope_type = ScopeType::from_str(&options.scope_type)?;
-            let dag_store = ctx.get_dag_store(options.dag_dir.as_deref())?;
+            let mut dag_store = ctx.get_dag_store(options.dag_dir.as_deref())?;
             
             // Get all nodes for this scope
             let all_nodes = dag_store.get_ordered_nodes().await?;
@@ -546,19 +546,19 @@ pub async fn handle_scope_command(command: &ScopeCommands, ctx: &mut CliContext)
         
         ScopeCommands::JoinFederation { options } => {
             let scope_type = ScopeType::from_str(&options.scope_type)?;
-            let dag_store = ctx.get_dag_store(options.dag_dir.as_deref())?;
+            let mut dag_store = ctx.get_dag_store(options.dag_dir.as_deref())?;
             let did_key = ctx.load_did_key(&options.key)?;
             let did = Did::from_string(&did_key.to_did_string())?;
             
             // Get the federation genesis node
             let federation_nodes = dag_store.get_nodes_by_payload_type("FederationGenesis").await?;
             if federation_nodes.is_empty() {
-                return Err(CliError::ValidationError(
+                return Err(CliError::SerializationError(
                     format!("Federation '{}' not found", options.federation_id)));
             }
             
             let federation_genesis = &federation_nodes[0];
-            let federation_genesis_cid = federation_genesis.ensure_cid()?;
+            let federation_genesis_cid = get_cid(federation_genesis)?;
             
             // Get the scope genesis node
             let genesis_type = match scope_type {
@@ -570,8 +570,8 @@ pub async fn handle_scope_command(command: &ScopeCommands, ctx: &mut CliContext)
             let mut scope_genesis = None;
             
             for node in scope_nodes {
-                if let Some(scope_id) = &node.node.metadata.scope_id {
-                    if scope_id == &options.scope_id {
+                if let Some(scope) = node.node.metadata.scope_id.as_ref() {
+                    if scope == &options.scope_id {
                         scope_genesis = Some(node);
                         break;
                     }
@@ -585,12 +585,12 @@ pub async fn handle_scope_command(command: &ScopeCommands, ctx: &mut CliContext)
                         ScopeType::Cooperative => "Cooperative",
                         ScopeType::Community => "Community",
                     };
-                    return Err(CliError::ValidationError(
+                    return Err(CliError::SerializationError(
                         format!("{} '{}' not found", scope_name, options.scope_id)));
                 },
             };
             
-            let scope_genesis_cid = scope_genesis.ensure_cid()?;
+            let scope_genesis_cid = get_cid(&scope_genesis)?;
             
             // Create a join request node
             let request_type = match scope_type {
@@ -647,7 +647,7 @@ pub async fn handle_scope_command(command: &ScopeCommands, ctx: &mut CliContext)
         
         ScopeCommands::SetPolicy { options, policy_file } => {
             let scope_type = ScopeType::from_str(&options.scope_type)?;
-            let dag_store = ctx.get_dag_store(options.dag_dir.as_deref())?;
+            let mut dag_store = ctx.get_dag_store(options.dag_dir.as_deref())?;
             let did_key = ctx.load_did_key(&options.key)?;
             let did = Did::from_string(&did_key.to_did_string())?;
             
@@ -689,7 +689,7 @@ pub async fn handle_scope_command(command: &ScopeCommands, ctx: &mut CliContext)
             for node in scope_nodes {
                 if let Some(scope) = node.node.metadata.scope_id.as_ref() {
                     if scope == &options.scope_id {
-                        let cid = node.ensure_cid()?;
+                        let cid = get_cid(&node)?;
                         parent_cids.push(cid);
                     }
                 }
@@ -725,7 +725,7 @@ pub async fn handle_scope_command(command: &ScopeCommands, ctx: &mut CliContext)
         
         ScopeCommands::ProposeUpdatePolicy { options, policy_file, description } => {
             let scope_type = ScopeType::from_str(&options.scope_type)?;
-            let dag_store = ctx.get_dag_store(options.dag_dir.as_deref())?;
+            let mut dag_store = ctx.get_dag_store(options.dag_dir.as_deref())?;
             let did_key = ctx.load_did_key(&options.key)?;
             let did = Did::from_string(&did_key.to_did_string())?;
             
@@ -767,7 +767,7 @@ pub async fn handle_scope_command(command: &ScopeCommands, ctx: &mut CliContext)
             for node in scope_nodes {
                 if let Some(scope) = node.node.metadata.scope_id.as_ref() {
                     if scope == &options.scope_id {
-                        let cid = node.ensure_cid()?;
+                        let cid = get_cid(&node)?;
                         parent_cids.push(cid);
                     }
                 }
@@ -804,7 +804,7 @@ pub async fn handle_scope_command(command: &ScopeCommands, ctx: &mut CliContext)
         
         ScopeCommands::VoteUpdatePolicy { options, proposal_cid, vote, reason } => {
             let scope_type = ScopeType::from_str(&options.scope_type)?;
-            let dag_store = ctx.get_dag_store(options.dag_dir.as_deref())?;
+            let mut dag_store = ctx.get_dag_store(options.dag_dir.as_deref())?;
             let did_key = ctx.load_did_key(&options.key)?;
             let did = Did::from_string(&did_key.to_did_string())?;
             
@@ -849,7 +849,7 @@ pub async fn handle_scope_command(command: &ScopeCommands, ctx: &mut CliContext)
         
         ScopeCommands::FinalizeUpdatePolicy { options, proposal_cid } => {
             let scope_type = ScopeType::from_str(&options.scope_type)?;
-            let dag_store = ctx.get_dag_store(options.dag_dir.as_deref())?;
+            let mut dag_store = ctx.get_dag_store(options.dag_dir.as_deref())?;
             let did_key = ctx.load_did_key(&options.key)?;
             let did = Did::from_string(&did_key.to_did_string())?;
             
@@ -879,7 +879,7 @@ pub async fn handle_scope_command(command: &ScopeCommands, ctx: &mut CliContext)
             
             // Simple quorum check (in a real implementation, this would be more sophisticated)
             if votes.len() < 3 {
-                return Err(CliError::ValidationError(
+                return Err(CliError::SerializationError(
                     format!("Not enough votes to approve policy update. Need at least 3, got {}", votes.len())
                 ));
             }
@@ -898,24 +898,20 @@ pub async fn handle_scope_command(command: &ScopeCommands, ctx: &mut CliContext)
             
             // Check if majority approved
             if approvals * 2 <= votes.len() {
-                return Err(CliError::ValidationError(
+                return Err(CliError::SerializationError(
                     format!("Policy update not approved. Need majority, got {}/{}", approvals, votes.len())
                 ));
             }
             
             // Create a simplified QuorumProof (in a real implementation, this would include signatures, etc.)
             let quorum_proof = icn_types::receipts::QuorumProof {
-                id: uuid::Uuid::new_v4().to_string(),
-                proposal_id: proposal_cid.to_string(),
-                votes: votes.iter().map(|v| v.ensure_cid().unwrap().to_string()).collect(),
-                threshold: votes.len() as u32 / 2 + 1,
-                approved: true,
-                timestamp: chrono::Utc::now().to_rfc3339(),
-                federation_id: options.federation_id.clone(),
-                // These fields would normally be populated with more data
-                issuer: did.to_string(),
-                signature: vec![],
-                signers: vec![],
+                content_cid: proposal_cid_obj.clone(),
+                signatures: votes.iter().map(|v| {
+                    let did = v.node.author.clone();
+                    // This is a simplified version; in a real implementation, proper signatures would be collected
+                    let signature_bytes = vec![]; // Empty signature as placeholder
+                    (did, signature_bytes)
+                }).collect(),
             };
             
             // Create the approval node
@@ -925,7 +921,14 @@ pub async fn handle_scope_command(command: &ScopeCommands, ctx: &mut CliContext)
             let payload = DagPayload::Json(json!({
                 "type": node_type,
                 "proposal_cid": proposal_cid,
-                "quorum_proof": quorum_proof,
+                "quorum_proof": {
+                    "content_cid": quorum_proof.content_cid.to_string(),
+                    "signatures": quorum_proof.signatures.iter().map(|(did, _)| did.to_string()).collect::<Vec<_>>(),
+                    "approved": true,
+                    "timestamp": chrono::Utc::now().to_rfc3339(),
+                    "federation_id": options.federation_id,
+                    "issuer": did.to_string()
+                },
                 "approver_did": did.to_string(),
                 "approved_at": chrono::Utc::now().to_rfc3339(),
             }));
@@ -988,5 +991,5 @@ pub async fn handle_scope_command(command: &ScopeCommands, ctx: &mut CliContext)
 // Helper function to parse a CID from a string
 fn cid_from_string(cid_str: &str) -> CliResult<icn_types::Cid> {
     icn_types::Cid::from_bytes(cid_str.as_bytes())
-        .map_err(|e| CliError::ValidationError(format!("Invalid CID: {}", e)))
+        .map_err(|e| CliError::SerializationError(format!("Invalid CID: {}", e)))
 } 

@@ -20,7 +20,14 @@ use commands::handle_vote_commands; // Add vote handler
 use commands::{handle_bundle_command, handle_receipt_command, handle_dag_sync_command}; // ADDED
 use commands::handle_policy_command; // Add policy handler import
 use commands::handle_key_gen; // Add keygen handler
-use commands::handle_observability_command; // Add observability handler
+// Import the individual observability handlers
+use commands::observability::{
+    handle_dag_view, 
+    handle_inspect_policy, 
+    handle_validate_quorum, 
+    handle_activity_log, 
+    handle_federation_overview
+};
 // use icn_types::ExecutionResult; // Needs locating
 use std::path::PathBuf;
 use tokio;
@@ -32,7 +39,8 @@ use commands::community::CommunityCommands;
 use commands::community::handle_community_command;
 use commands::federation::FederationCommands;
 use commands::scope::ScopeCommands;
-use commands::ObservabilityCommands;
+use commands::scope::handle_scope_command;
+use commands::observability::ObservabilityCommands;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -137,7 +145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             commands::community::handle_community_command(community_cmd, &mut ctx).await?;
         },
         Commands::Federation(federation_cmd) => {
-            commands::federation::handle_federation_command(federation_cmd, &mut ctx).await?;
+            commands::federation::handle_federation_command(&mut ctx, federation_cmd).await?;
         },
         Commands::Scope(scope_cmd) => {
             commands::scope::handle_scope_command(scope_cmd, &mut ctx).await?;
@@ -173,7 +181,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             handle_vote_commands(cmd.clone(), &mut ctx).await?
         }
         Commands::Observe(cmd) => {
-            handle_observability_command(cmd, &mut ctx).await?
+            match cmd {
+                ObservabilityCommands::DagView(options) => {
+                    handle_dag_view(&mut ctx, &options).await?
+                },
+                ObservabilityCommands::InspectPolicy(options) => {
+                    handle_inspect_policy(&mut ctx, &options).await?
+                },
+                ObservabilityCommands::ValidateQuorum(options) => {
+                    handle_validate_quorum(&mut ctx, &options).await?
+                },
+                ObservabilityCommands::ActivityLog(options) => {
+                    handle_activity_log(&mut ctx, &options).await?
+                },
+                ObservabilityCommands::FederationOverview(options) => {
+                    handle_federation_overview(&mut ctx, &options).await?
+                },
+            }
         }
     }
     

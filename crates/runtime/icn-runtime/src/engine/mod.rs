@@ -58,11 +58,11 @@ impl<T: ContextExtension + Send + Sync + 'static> ContextExtension for wasmtime:
         self.data().federation_keypair()
     }
     
-    fn membership_index(&self) -> Option<std::sync::Arc<crate::policy::MembershipIndex>> {
+    fn membership_index(&self) -> Option<std::sync::Arc<dyn crate::policy::MembershipIndex + Send + Sync>> {
         self.data().membership_index()
     }
     
-    fn policy_loader(&self) -> Option<std::sync::Arc<crate::policy::PolicyLoader>> {
+    fn policy_loader(&self) -> Option<std::sync::Arc<dyn crate::policy::PolicyLoader + Send + Sync>> {
         self.data().policy_loader()
     }
 }
@@ -94,11 +94,11 @@ impl<'a, T: ContextExtension + Send + Sync + 'static> ContextExtension for wasmt
         self.data().federation_keypair()
     }
     
-    fn membership_index(&self) -> Option<std::sync::Arc<crate::policy::MembershipIndex>> {
+    fn membership_index(&self) -> Option<std::sync::Arc<dyn crate::policy::MembershipIndex + Send + Sync>> {
         self.data().membership_index()
     }
     
-    fn policy_loader(&self) -> Option<std::sync::Arc<crate::policy::PolicyLoader>> {
+    fn policy_loader(&self) -> Option<std::sync::Arc<dyn crate::policy::PolicyLoader + Send + Sync>> {
         self.data().policy_loader()
     }
 }
@@ -134,11 +134,11 @@ impl<'a, T: ContextExtension + Send + Sync + 'static> ContextExtension for wasmt
         self.data().federation_keypair()
     }
     
-    fn membership_index(&self) -> Option<std::sync::Arc<crate::policy::MembershipIndex>> {
+    fn membership_index(&self) -> Option<std::sync::Arc<dyn crate::policy::MembershipIndex + Send + Sync>> {
         self.data().membership_index()
     }
     
-    fn policy_loader(&self) -> Option<std::sync::Arc<crate::policy::PolicyLoader>> {
+    fn policy_loader(&self) -> Option<std::sync::Arc<dyn crate::policy::PolicyLoader + Send + Sync>> {
         self.data().policy_loader()
     }
 }

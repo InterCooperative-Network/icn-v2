@@ -7,7 +7,7 @@ use icn_core_types::Did;
 use cid;
 use chrono::{Utc, DateTime};
 use anyhow::{Result, Context, anyhow};
-use icn_core_types::{Cid, PeerId};
+use icn_core_types::{Cid};
 use std::fs;
 use std::str::FromStr;
 use serde::{Serialize, Deserialize};
@@ -26,6 +26,8 @@ use rand::Rng;
 use tokio;
 use ed25519_dalek::Signer;
 use ed25519_dalek::Verifier;
+use planetary_mesh::types::NodeCapabilityInfo;
+use sys_info;
 
 /// Commands for interacting with the ICN Mesh
 #[derive(Subcommand, Debug, Clone)]
@@ -386,7 +388,7 @@ async fn handle_submit_job(
         }
         
         if let Some(cpu_cores) = args.cpu_cores {
-            resource_requirements.push(ResourceType::CpuCores(cpu_cores));
+            resource_requirements.push(ResourceType::CpuCores(cpu_cores.into()));
         }
         
         // Parse parameters if provided
@@ -402,11 +404,14 @@ async fn handle_submit_job(
         
         JobManifest {
             id: job_id,
-            wasm_module_cid: cid,
+            wasm_module_cid: cid.to_string(),
             resource_requirements,
             parameters,
-            owner: owner_did.clone(),
+            owner: owner_did.to_string(),
             deadline: None,
+            federation_id: args.federation_id.clone().unwrap_or_else(|| "default".to_string()),
+            max_compute_units: Some(1000), // Default value
+            origin_coop_id: "default".to_string(), // Default value
         }
     };
     
@@ -466,49 +471,109 @@ async fn handle_list_nodes(
 ) -> CliResult<()> {
     println!("Listing capable nodes in the network:");
     
-    // Create some sample nodes for demonstration
-    let nodes = vec![
+    // Create a vector of individual NodeCapability instances instead of a struct with node_id etc.
+    let node_capabilities = vec![
         NodeCapability {
+            resource_type: ResourceType::CpuCores(4),
+            available: true,
+            updated_at: Utc::now(),
+        },
+        NodeCapability {
+            resource_type: ResourceType::RamMb(2048),
+            available: true,
+            updated_at: Utc::now(),
+        },
+        NodeCapability {
+            resource_type: ResourceType::StorageMb(500 * 1024),
+            available: true,
+            updated_at: Utc::now(),
+        },
+    ];
+    
+    // Create a separate structure to hold the node information
+    struct NodeInfo {
+        node_id: Did,
+        capabilities: Vec<NodeCapability>,
+        supported_features: Vec<String>,
+    }
+    
+    let nodes = vec![
+        NodeInfo {
             node_id: Did::from_str("did:icn:node:12345")
                 .map_err(|_| CliError::InvalidArgument("Invalid node DID".into()))?,
-            available_resources: vec![
-                ResourceType::CpuCores(4),
-                ResourceType::RamMb(2048),
-                ResourceType::StorageGb(500),
+            capabilities: vec![
+                NodeCapability {
+                    resource_type: ResourceType::CpuCores(4),
+                    available: true,
+                    updated_at: Utc::now(),
+                },
+                NodeCapability {
+                    resource_type: ResourceType::RamMb(2048),
+                    available: true,
+                    updated_at: Utc::now(),
+                },
+                NodeCapability {
+                    resource_type: ResourceType::StorageMb(500 * 1024),
+                    available: true,
+                    updated_at: Utc::now(),
+                },
             ],
             supported_features: vec!["wasm".to_string(), "sgx".to_string()],
         },
-        NodeCapability {
+        NodeInfo {
             node_id: Did::from_str("did:icn:node:67890")
                 .map_err(|_| CliError::InvalidArgument("Invalid node DID".into()))?,
-            available_resources: vec![
-                ResourceType::CpuCores(2),
-                ResourceType::RamMb(1024),
-                ResourceType::StorageGb(200),
+            capabilities: vec![
+                NodeCapability {
+                    resource_type: ResourceType::CpuCores(2),
+                    available: true,
+                    updated_at: Utc::now(),
+                },
+                NodeCapability {
+                    resource_type: ResourceType::RamMb(1024),
+                    available: true,
+                    updated_at: Utc::now(),
+                },
+                NodeCapability {
+                    resource_type: ResourceType::StorageMb(200 * 1024),
+                    available: true,
+                    updated_at: Utc::now(),
+                },
             ],
             supported_features: vec!["wasm".to_string()],
         },
-        NodeCapability {
+        NodeInfo {
             node_id: Did::from_str("did:icn:node:abcde")
                 .map_err(|_| CliError::InvalidArgument("Invalid node DID".into()))?,
-            available_resources: vec![
-                ResourceType::CpuCores(8),
-                ResourceType::RamMb(4096),
-                ResourceType::StorageGb(1000),
-                ResourceType::Gpu("NVIDIA_A100".to_string()),
+            capabilities: vec![
+                NodeCapability {
+                    resource_type: ResourceType::CpuCores(8),
+                    available: true,
+                    updated_at: Utc::now(),
+                },
+                NodeCapability {
+                    resource_type: ResourceType::RamMb(4096),
+                    available: true,
+                    updated_at: Utc::now(),
+                },
+                NodeCapability {
+                    resource_type: ResourceType::StorageMb(1000 * 1024),
+                    available: true,
+                    updated_at: Utc::now(),
+                },
             ],
             supported_features: vec!["wasm".to_string(), "sgx".to_string(), "gpu".to_string()],
         },
     ];
     
-    // Filter nodes based on criteria
+    // Filtering code below needs to be updated to use the new structure
     let filtered_nodes = nodes.into_iter()
         .filter(|node| {
             // Filter by minimum memory
             if let Some(min_memory) = args.min_memory {
-                if !node.available_resources.iter().any(|r| {
-                    if let ResourceType::RamMb(ram) = r {
-                        *ram >= min_memory
+                if !node.capabilities.iter().any(|cap| {
+                    if let ResourceType::RamMb(ram) = cap.resource_type {
+                        ram >= min_memory
                     } else {
                         false
                     }
@@ -519,9 +584,9 @@ async fn handle_list_nodes(
             
             // Filter by minimum cores
             if let Some(min_cores) = args.min_cores {
-                if !node.available_resources.iter().any(|r| {
-                    if let ResourceType::CpuCores(cores) = r {
-                        *cores >= min_cores
+                if !node.capabilities.iter().any(|cap| {
+                    if let ResourceType::CpuCores(cores) = cap.resource_type {
+                        cores >= min_cores.into()
                     } else {
                         false
                     }
@@ -533,13 +598,8 @@ async fn handle_list_nodes(
             // Filter by specific resource
             if let Some(resource) = &args.has_resource {
                 if resource.to_lowercase() == "gpu" {
-                    if !node.available_resources.iter().any(|r| {
-                        if let ResourceType::Gpu(_) = r {
-                            true
-                        } else {
-                            false
-                        }
-                    }) {
+                    // Check for GPU in supported_features
+                    if !node.supported_features.iter().any(|f| f.to_lowercase() == "gpu") {
                         return false;
                     }
                 }
@@ -549,24 +609,18 @@ async fn handle_list_nodes(
         })
         .take(args.limit)
         .collect::<Vec<_>>();
-    
-    // Print the nodes
-    if filtered_nodes.is_empty() {
-        println!("No nodes found matching the criteria");
-        return Ok(());
-    }
-    
+
+    // Update the display code as well
     println!("Found {} nodes:", filtered_nodes.len());
     println!("{:<25} {:<30} {:<20}", "Node ID", "Resources", "Features");
     println!("{}", "-".repeat(80));
     
     for node in filtered_nodes {
-        let resources = node.available_resources.iter()
-            .map(|r| match r {
+        let resources = node.capabilities.iter()
+            .map(|cap| match cap.resource_type {
                 ResourceType::CpuCores(cores) => format!("{}CPU", cores),
                 ResourceType::RamMb(ram) => format!("{}MB", ram),
-                ResourceType::StorageGb(storage) => format!("{}GB", storage),
-                ResourceType::Gpu(gpu) => format!("GPU:{}", gpu),
+                ResourceType::StorageMb(storage) => format!("{}MB", storage),
                 _ => "Other".to_string(),
             })
             .collect::<Vec<_>>()
@@ -596,34 +650,32 @@ async fn handle_job_status(
     
     // Generate a random status
     let status = match rand::thread_rng().gen_range(0..5) {
-        0 => JobStatus::Pending,
+        0 => JobStatus::Submitted,
         1 => JobStatus::Scheduled,
-        2 => JobStatus::Running { progress_percent: rand::thread_rng().gen_range(10..95) },
+        2 => JobStatus::Running,
         3 => {
             let result_cid = Cid::from_str("bafybeihykld7uyxzogax6vgyvag42y7464eywpf55hnrwvgzxwvjmnx7fy")
                 .map_err(|_| CliError::Other("Failed to parse CID".into()))?;
-            JobStatus::Completed { result_cid: Some(result_cid) }
+            JobStatus::Completed
         },
-        _ => JobStatus::Failed { error_message: "Insufficient resources".to_string() },
+        _ => JobStatus::Failed,
     };
     
     println!("Status: {:?}", status);
     
     match status {
-        JobStatus::Running { progress_percent } => {
-            println!("Progress: {}%", progress_percent);
-            println!("Estimated completion: {} seconds", (100 - progress_percent) / 10);
+        JobStatus::Running => {
+            println!("Progress: 45%"); // Simplified since JobStatus::Running doesn't have progress_percent
+            println!("Estimated completion: 5 seconds");
         },
-        JobStatus::Completed { result_cid } => {
-            if let Some(cid) = result_cid {
-                println!("Result CID: {}", cid);
-                println!("Use 'icn-cli mesh get-result --result-cid {}' to retrieve the result", cid);
-            } else {
-                println!("No result CID available");
-            }
+        JobStatus::Completed => {
+            // In a real implementation, look up the result CID from a separate mapping
+            let result_cid = "bafybeihykld7uyxzogax6vgyvag42y7464eywpf55hnrwvgzxwvjmnx7fy";
+            println!("Result CID: {}", result_cid);
+            println!("Use 'icn-cli mesh get-result --result-cid {}' to retrieve the result", result_cid);
         },
-        JobStatus::Failed { ref error_message } => {
-            println!("Error: {}", error_message);
+        JobStatus::Failed => {
+            println!("Error: Job execution failed");
         },
         _ => {}
     }
@@ -838,7 +890,7 @@ async fn handle_select_bid(
     let acceptance = BidAcceptance {
         job_id: args.job_id.clone(),
         bid_index,
-        bidder_did: selected_bid.bidder_node_id.to_string(),
+        bidder_did: selected_bid.node_id.to_string(),
         price: selected_bid.price,
         timestamp: Utc::now(),
     };
@@ -849,7 +901,7 @@ async fn handle_select_bid(
     
     let key_pair = ed25519_dalek::SigningKey::from_bytes(
         private_key_bytes.as_slice().try_into()
-            .map_err(|_| CliError::Other("Invalid private key length".into()))?
+            .map_err(|e| CliError::Other(Box::new(e) as Box<dyn std::error::Error + Send + Sync>))?
     );
     
     let signature = key_pair.sign(acceptance_json.as_bytes());
@@ -887,7 +939,7 @@ async fn handle_select_bid(
     
     // Create an execution receipt to simulate job completion
     println!("Bid #{} for job {} accepted successfully!", bid_index, args.job_id);
-    println!("Provider: {}", selected_bid.bidder_node_id);
+    println!("Provider: {}", selected_bid.node_id);
     println!("Price: {} tokens", selected_bid.price);
     println!("Acceptance credential saved to: {}", output_path);
     
@@ -1025,31 +1077,40 @@ async fn handle_advertise_capability(
         }
         
         if let Some(cpu_cores) = args.cpu_cores {
-            available_resources.push(ResourceType::CpuCores(cpu_cores));
+            available_resources.push(ResourceType::CpuCores(cpu_cores.into()));
         }
         
         // Detect system capabilities if not specified
         if available_resources.is_empty() {
             // Get CPU cores
             let cpu_count = num_cpus::get() as u32;
-            available_resources.push(ResourceType::CpuCores(cpu_count));
+            available_resources.push(ResourceType::CpuCores(cpu_count.into()));
             
             // Estimate memory (in MB)
             let mem_info = sys_info::mem_info()
-                .map_err(|e| CliError::Other(format!("Failed to get system memory info: {}", e)))?;
+                .map_err(|e| CliError::Other(Box::new(e) as Box<dyn std::error::Error + Send + Sync>))?;
             
-            let mem_mb = (mem_info.total / 1024) as u64;
-            available_resources.push(ResourceType::RamMb(mem_mb));
+            let total_memory_mb = mem_info.total / 1024;
             
-            println!("Auto-detected system capabilities:");
-            println!("  CPU cores: {}", cpu_count);
-            println!("  Memory: {} MB", mem_mb);
+            // Create a NodeCapabilityInfo struct instead, as NodeCapability doesn't have these fields
+            let capabilities = NodeCapabilityInfo {
+                node_id: node_did,
+                available_resources,
+                supported_features: vec!["wasm".to_string()],
+            };
+            
+            // Display info about the capabilities
+            println!("Capability advertisement created successfully!");
+            println!("Node DID: {}", capabilities.node_id);
+            println!("Resources: {:?}", capabilities.available_resources);
+            println!("Features: {:?}", capabilities.supported_features);
         }
         
         NodeCapability {
             node_id: node_did.clone(),
             available_resources,
             supported_features: vec!["wasm".to_string()],
+            available: true,
         }
     };
     
@@ -1114,7 +1175,7 @@ async fn handle_submit_bid(
     
     let key_pair = ed25519_dalek::SigningKey::from_bytes(
         private_key_bytes.as_slice().try_into()
-            .map_err(|_| CliError::Other("Invalid private key length".into()))?
+            .map_err(|e| CliError::Other(Box::new(e) as Box<dyn std::error::Error + Send + Sync>))?
     );
     
     let signature = key_pair.sign(bid_json.as_bytes());

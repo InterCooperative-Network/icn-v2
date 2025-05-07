@@ -1,5 +1,5 @@
 use clap::{Args, Subcommand, ValueHint};
-use crate::context::CliContext;
+use crate::context::{CliContext, get_cid};
 use crate::error::{CliError, CliResult};
 use std::path::PathBuf;
 use std::fs;
@@ -137,7 +137,7 @@ pub enum CoopCommands {
 pub async fn handle_coop_command(command: &CoopCommands, ctx: &mut CliContext) -> CliResult<()> {
     match command {
         CoopCommands::Create { coop_id, federation_id, key, description, dag_dir } => {
-            let dag_store = ctx.get_dag_store(dag_dir.as_deref())?;
+            let mut dag_store = ctx.get_dag_store(dag_dir.as_deref())?;
             let did_key = ctx.load_did_key(key)?;
             let did = Did::from_string(&did_key.to_did_string())?;
             
@@ -171,7 +171,7 @@ pub async fn handle_coop_command(command: &CoopCommands, ctx: &mut CliContext) -
         },
         
         CoopCommands::Propose { coop_id, federation_id, title, content, key, dag_dir } => {
-            let dag_store = ctx.get_dag_store(dag_dir.as_deref())?;
+            let mut dag_store = ctx.get_dag_store(dag_dir.as_deref())?;
             let did_key = ctx.load_did_key(key)?;
             let did = Did::from_string(&did_key.to_did_string())?;
             
@@ -193,10 +193,10 @@ pub async fn handle_coop_command(command: &CoopCommands, ctx: &mut CliContext) -
             let coop_nodes = dag_store.get_nodes_by_payload_type("Cooperative").await?;
             let mut parent_cids = Vec::new();
             
-            for node in coop_nodes {
+            for mut node in coop_nodes {
                 if let Some(scope) = node.node.metadata.scope_id.as_ref() {
                     if scope == coop_id {
-                        let cid = node.ensure_cid()?;
+                        let cid = get_cid(&node)?;
                         parent_cids.push(cid);
                     }
                 }
@@ -226,7 +226,7 @@ pub async fn handle_coop_command(command: &CoopCommands, ctx: &mut CliContext) -
         },
         
         CoopCommands::Vote { coop_id, federation_id, proposal_cid, vote, comment, key, dag_dir } => {
-            let dag_store = ctx.get_dag_store(dag_dir.as_deref())?;
+            let mut dag_store = ctx.get_dag_store(dag_dir.as_deref())?;
             let did_key = ctx.load_did_key(key)?;
             let did = Did::from_string(&did_key.to_did_string())?;
             
@@ -266,7 +266,7 @@ pub async fn handle_coop_command(command: &CoopCommands, ctx: &mut CliContext) -
         },
         
         CoopCommands::ExportThread { coop_id, federation_id, output, dag_dir } => {
-            let dag_store = ctx.get_dag_store(dag_dir.as_deref())?;
+            let mut dag_store = ctx.get_dag_store(dag_dir.as_deref())?;
             
             // Get all nodes for this cooperative
             let all_nodes = dag_store.get_ordered_nodes().await?;
@@ -294,19 +294,19 @@ pub async fn handle_coop_command(command: &CoopCommands, ctx: &mut CliContext) -
         },
         
         CoopCommands::JoinFederation { coop_id, federation_id, key, dag_dir } => {
-            let dag_store = ctx.get_dag_store(dag_dir.as_deref())?;
+            let mut dag_store = ctx.get_dag_store(dag_dir.as_deref())?;
             let did_key = ctx.load_did_key(key)?;
             let did = Did::from_string(&did_key.to_did_string())?;
             
             // Get the federation genesis node
-            let federation_nodes = dag_store.get_nodes_by_payload_type("FederationGenesis").await?;
+            let mut federation_nodes = dag_store.get_nodes_by_payload_type("FederationGenesis").await?;
             if federation_nodes.is_empty() {
-                return Err(CliError::ValidationError(
+                return Err(CliError::SerializationError(
                     format!("Federation '{}' not found", federation_id)));
             }
             
-            let federation_genesis = &federation_nodes[0];
-            let federation_genesis_cid = federation_genesis.ensure_cid()?;
+            let federation_genesis = &mut federation_nodes[0];
+            let federation_genesis_cid = get_cid(federation_genesis)?;
             
             // Get the cooperative genesis node
             let coop_nodes = dag_store.get_nodes_by_payload_type("CooperativeGenesis").await?;
@@ -321,13 +321,15 @@ pub async fn handle_coop_command(command: &CoopCommands, ctx: &mut CliContext) -
                 }
             }
             
-            let coop_genesis = match coop_genesis {
+            let mut coop_genesis = match coop_genesis {
                 Some(node) => node,
-                None => return Err(CliError::ValidationError(
-                    format!("Cooperative '{}' not found", coop_id))),
+                None => {
+                    return Err(CliError::SerializationError(
+                        format!("Cooperative '{}' not found", coop_id)));
+                },
             };
             
-            let coop_genesis_cid = coop_genesis.ensure_cid()?;
+            let coop_genesis_cid = get_cid(&coop_genesis)?;
             
             // Create a join request node
             let payload = DagPayload::Json(json!({
@@ -364,5 +366,5 @@ pub async fn handle_coop_command(command: &CoopCommands, ctx: &mut CliContext) -
 // Helper function to parse a CID from a string
 fn cid_from_string(cid_str: &str) -> CliResult<icn_types::Cid> {
     icn_types::Cid::from_bytes(cid_str.as_bytes())
-        .map_err(|e| CliError::ValidationError(format!("Invalid CID: {}", e)))
+        .map_err(|e| CliError::SerializationError(format!("Invalid CID: {}", e)))
 } 

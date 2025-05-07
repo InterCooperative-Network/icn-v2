@@ -546,6 +546,7 @@ dependencies = [
  "multibase",
  "multihash 0.18.1",
  "serde",
+ "serde_bytes",
  "unsigned-varint 0.7.2",
 ]
 
@@ -1503,7 +1504,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
- "base64 0.22.1",
+ "async-trait",
+ "base64 0.21.7",
  "chrono",
  "cid 0.10.1",
  "clap",
@@ -1514,19 +1516,20 @@ dependencies = [
  "hyper",
  "icn-core-types",
  "icn-identity-core",
+ "icn-runtime",
  "icn-types",
- "icn-wallet",
- "lazy_static",
  "metrics",
  "metrics-exporter-prometheus",
  "multibase",
  "multihash 0.18.1",
+ "num_cpus",
  "planetary-mesh",
  "predicates",
- "prometheus",
  "rand",
  "serde",
+ "serde_ipld_dagcbor 0.4.2",
  "serde_json",
+ "sys-info",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -1591,7 +1594,7 @@ dependencies = [
  "rand",
  "rocksdb",
  "serde",
- "serde_ipld_dagcbor",
+ "serde_ipld_dagcbor 0.5.0",
  "serde_json",
  "sha2",
  "sys-info",
@@ -1682,7 +1685,7 @@ dependencies = [
  "rocksdb",
  "serde",
  "serde_bytes",
- "serde_ipld_dagcbor",
+ "serde_ipld_dagcbor 0.5.0",
  "serde_json",
  "sha2",
  "thiserror 1.0.69",
@@ -1705,7 +1708,7 @@ dependencies = [
  "log",
  "multibase",
  "serde",
- "serde_ipld_dagcbor",
+ "serde_ipld_dagcbor 0.5.0",
  "serde_json",
  "thiserror 1.0.69",
  "uniffi",
@@ -2487,6 +2490,8 @@ dependencies = [
  "core2",
  "digest",
  "multihash-derive",
+ "serde",
+ "serde-big-array",
  "sha2",
  "sha3",
  "unsigned-varint 0.7.2",
@@ -3200,6 +3205,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde-big-array"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd31f59f6fe2b0c055371bb2f16d7f0aa7d8881676c04a55b1596d1a17cd10a4"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "serde_bytes"
 version = "0.11.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3227,6 +3241,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.101",
+]
+
+[[package]]
+name = "serde_ipld_dagcbor"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e880e0b1f9c7a8db874642c1217f7e19b29e325f24ab9f0fcb11818adec7f01"
+dependencies = [
+ "cbor4ii",
+ "cid 0.10.1",
+ "scopeguard",
+ "serde",
 ]
 
 [[package]]

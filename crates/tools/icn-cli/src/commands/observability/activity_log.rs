@@ -5,6 +5,7 @@ use icn_types::Cid;
 use serde_json::{json, Value};
 use std::path::Path;
 use chrono::{DateTime, Utc};
+use crate::context::MutableDagStore;
 
 /// Activity type enum
 #[derive(Debug, Clone, PartialEq)]
@@ -47,13 +48,13 @@ pub struct ActivityEvent {
 
 /// Activity log utility
 pub struct ActivityLog {
-    dag_store: std::sync::Arc<dyn icn_types::dag::DagStore + Send + Sync>,
+    dag_store: MutableDagStore,
 }
 
 impl ActivityLog {
     /// Create a new activity log
-    pub fn new(dag_store: std::sync::Arc<dyn icn_types::dag::DagStore + Send + Sync>) -> Self {
-        ActivityLog { dag_store }
+    pub fn new(dag_store: MutableDagStore) -> Self {
+        Self { dag_store }
     }
     
     /// Get activity events for a scope

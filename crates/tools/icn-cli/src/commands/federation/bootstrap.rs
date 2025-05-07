@@ -342,11 +342,14 @@ pub async fn run_init(
     println!("Created genesis event with ID: {:?}", event_id);
     
     // Step 6: Create TrustBundle (Genesis)
-    let mut bundle = TrustBundle::new(
-        name.to_string(),
-        vec![event_id],
-        quorum_config,
-    );
+    let participant_dids: Vec<Did> = participants.iter().map(|p| p.clone().into()).collect();
+    
+    let mut bundle = TrustBundle::new_federation(
+        fed_did.clone(),
+        participant_dids,
+        quorum_config.required_signatures(),
+        quorum_config.quorum_type,
+    )?;
     
     // Add metadata to bundle
     bundle = bundle.with_metadata("genesis", "true");
@@ -365,7 +368,7 @@ pub async fn run_init(
         };
         
         // Sign the bundle
-        bundle.sign(participant.did.clone(), signing_function);
+        bundle.sign(participant.did.clone().into(), signing_function);
         println!("  Signed with DID: {}", participant.did);
     }
     

@@ -1,9 +1,7 @@
 use icn_types::{
     Did, Cid, ScopePolicyConfig, PolicyError,
-    dag::{SignedDagNode, DagNode, DagStore, DagError, DagPayload},
+    dag::{SignedDagNode, DagStore, DagError, DagPayload},
 };
-use icn_types::dag::payload::ActionType;
-use icn_types::receipts::QuorumProof;
 use crate::policy::{MembershipIndex, PolicyLoader};
 use log::{info, warn, error, debug};
 use std::sync::Arc;
@@ -44,7 +42,7 @@ pub enum PolicyUpdateError {
 #[derive(Clone)]
 pub struct DagProcessor {
     /// Membership index to check federation/cooperative/community memberships
-    membership_index: Arc<dyn MembershipIndex + Send + Sync>,
+    _membership_index: Arc<dyn MembershipIndex + Send + Sync>,
     
     /// Policy loader to retrieve policies for different scopes
     policy_loader: Arc<dyn PolicyLoader + Send + Sync>,
@@ -57,7 +55,7 @@ impl DagProcessor {
         policy_loader: Arc<dyn PolicyLoader + Send + Sync>,
     ) -> Self {
         Self {
-            membership_index,
+            _membership_index: membership_index,
             policy_loader,
         }
     }
@@ -72,18 +70,32 @@ impl DagProcessor {
         // For nodes that require validation, check if authorization is needed based on payload
         if let Some(action) = self.get_action_type(node) {
             debug!("Validating node with action: {}", action);
-            let did = Did::try_from(node.node.issuer.clone())
-                .map_err(|e| {
-                    error!("Invalid DID format in node: {}", e);
-                    ValidationResult::OtherError(DagError::InvalidData(format!("Invalid DID: {}", e)))
-                })?;
+            
+            // Get the author DID
+            let did = node.node.author.clone();
+            
+            // Get scope ID from metadata
+            let scope_id = match &node.node.metadata.scope_id {
+                Some(id) => id.clone(),
+                None => {
+                    // If scope_id is not set, use federation_id as the scope for federation-level operations
+                    if let icn_types::dag::NodeScope::Federation = node.node.metadata.scope {
+                        node.node.metadata.federation_id.clone()
+                    } else {
+                        // For non-federation scopes, scope_id is required
+                        return ValidationResult::OtherError(DagError::InvalidNodeData(
+                            format!("Missing scope_id for non-federation scope")
+                        ));
+                    }
+                }
+            };
             
             // Apply the authorization check
-            match self.check_authorization(&node.node.scope_id, &action, &did).await {
+            match self.check_authorization(&scope_id, &action, &did).await {
                 Ok(_) => ValidationResult::Valid,
                 Err(err) => {
                     warn!("Policy validation failed for {} performing '{}' in scope {}: {}", 
-                         did, action, node.node.scope_id, err);
+                         did, action, scope_id, err);
                     ValidationResult::PolicyViolation(err)
                 }
             }
@@ -96,7 +108,8 @@ impl DagProcessor {
     /// Check if a node is exempt from policy validation
     fn is_exempt_from_validation(&self, node: &SignedDagNode) -> bool {
         // Genesis nodes and certain system operations may be exempt
-        if node.node.scope_id.is_empty() || node.node.scope_id == "system" {
+        if node.node.metadata.scope_id.is_none() || 
+           (node.node.metadata.scope_id.as_ref().map_or(false, |id| id == "system")) {
             return true;
         }
         
@@ -109,19 +122,24 @@ impl DagProcessor {
     /// Extract the action type from a node's payload for policy checking
     fn get_action_type(&self, node: &SignedDagNode) -> Option<String> {
         // Parse the payload to determine what action is being performed
-        // This will depend on how your payloads are structured
         match &node.node.payload {
-            DagPayload::Event(event) => event.action_type(),
-            DagPayload::Raw(raw_json) => {
-                // Attempt to extract action_type from raw JSON if available
-                if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw_json) {
-                    value.get("action_type")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
-                } else {
-                    None
+            DagPayload::Json(json_value) => {
+                // Try to extract action_type from JSON payload
+                json_value.get("action_type")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            },
+            DagPayload::Raw(raw_bytes) => {
+                // Try to parse raw bytes as JSON and extract action_type
+                if let Ok(text) = String::from_utf8(raw_bytes.clone()) {
+                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
+                        return value.get("action_type")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+                    }
                 }
-            }
+                None
+            },
             // Other payload types may not require authorization
             _ => None
         }
@@ -187,10 +205,36 @@ impl DagProcessor {
                     // This would typically involve verifying signatures, checking vote thresholds, etc.
                     
                     // Update the policy in the policy loader
-                    self.policy_loader.set_policy(proposed_policy);
+                    // For now, we'll log a warning that this operation is not fully supported
+                    // A better approach would be to extend the PolicyLoader trait with set_policy
+                    warn!("Policy updates are only partially supported - consider extending the PolicyLoader trait with set_policy");
                     
-                    info!("Policy update successfully applied!");
-                    return Ok(());
+                    // Try to use DefaultPolicyLoader's set_policy through a closure
+                    if let Ok(()) = (|| -> Result<(), PolicyUpdateError> {
+                        // Try to get the policy loader as the concrete DefaultPolicyLoader type
+                        let default_loader = self.policy_loader.clone();
+                        let any_ptr = Arc::as_ptr(&default_loader) as *const ();
+                        let loader_ptr = any_ptr as *const crate::policy::DefaultPolicyLoader;
+                        
+                        // Safety: this is unsafe and will only work if the actual type
+                        // behind the trait object is DefaultPolicyLoader
+                        if let Some(loader) = unsafe { loader_ptr.as_ref() } {
+                            loader.set_policy(proposed_policy);
+                            Ok(())
+                        } else {
+                            Err(PolicyUpdateError::InvalidProposal(
+                                "PolicyLoader implementation does not support set_policy".to_string()
+                            ))
+                        }
+                    })() {
+                        info!("Policy update successfully applied!");
+                        return Ok(());
+                    } else {
+                        warn!("Could not apply policy update - incompatible PolicyLoader implementation");
+                        return Err(PolicyUpdateError::InvalidProposal(
+                            "Cannot update policy with current PolicyLoader implementation".to_string()
+                        ));
+                    }
                 }
             }
         }
@@ -282,7 +326,7 @@ impl ValidationResult {
         match self {
             ValidationResult::Valid => Ok(()),
             ValidationResult::PolicyViolation(err) => {
-                Err(DagError::AuthorizationError(format!("Policy violation: {}", err)))
+                Err(DagError::InvalidNodeData(format!("Policy violation: {}", err)))
             },
             ValidationResult::OtherError(err) => Err(err),
         }

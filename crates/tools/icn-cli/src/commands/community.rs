@@ -1,5 +1,5 @@
 use clap::{Args, Subcommand, ValueHint};
-use crate::context::CliContext;
+use crate::context::{CliContext, get_cid};
 use crate::error::{CliError, CliResult};
 use std::path::PathBuf;
 use std::fs;
@@ -165,7 +165,7 @@ pub enum CommunityCommands {
 pub async fn handle_community_command(command: &CommunityCommands, ctx: &mut CliContext) -> CliResult<()> {
     match command {
         CommunityCommands::Create { community_id, federation_id, key, description, dag_dir } => {
-            let dag_store = ctx.get_dag_store(dag_dir.as_deref())?;
+            let mut dag_store = ctx.get_dag_store(dag_dir.as_deref())?;
             let did_key = ctx.load_did_key(key)?;
             let did = Did::from_string(&did_key.to_did_string())?;
             
@@ -199,7 +199,7 @@ pub async fn handle_community_command(command: &CommunityCommands, ctx: &mut Cli
         },
         
         CommunityCommands::Propose { community_id, federation_id, title, content, key, dag_dir } => {
-            let dag_store = ctx.get_dag_store(dag_dir.as_deref())?;
+            let mut dag_store = ctx.get_dag_store(dag_dir.as_deref())?;
             let did_key = ctx.load_did_key(key)?;
             let did = Did::from_string(&did_key.to_did_string())?;
             
@@ -221,10 +221,10 @@ pub async fn handle_community_command(command: &CommunityCommands, ctx: &mut Cli
             let community_nodes = dag_store.get_nodes_by_payload_type("Community").await?;
             let mut parent_cids = Vec::new();
             
-            for node in community_nodes {
+            for mut node in community_nodes {
                 if let Some(scope) = node.node.metadata.scope_id.as_ref() {
                     if scope == community_id {
-                        let cid = node.ensure_cid()?;
+                        let cid = get_cid(&node)?;
                         parent_cids.push(cid);
                     }
                 }
@@ -254,7 +254,7 @@ pub async fn handle_community_command(command: &CommunityCommands, ctx: &mut Cli
         },
         
         CommunityCommands::Vote { community_id, federation_id, proposal_cid, vote, comment, key, dag_dir } => {
-            let dag_store = ctx.get_dag_store(dag_dir.as_deref())?;
+            let mut dag_store = ctx.get_dag_store(dag_dir.as_deref())?;
             let did_key = ctx.load_did_key(key)?;
             let did = Did::from_string(&did_key.to_did_string())?;
             
@@ -294,7 +294,7 @@ pub async fn handle_community_command(command: &CommunityCommands, ctx: &mut Cli
         },
         
         CommunityCommands::CreateCharter { community_id, federation_id, title, content, key, dag_dir } => {
-            let dag_store = ctx.get_dag_store(dag_dir.as_deref())?;
+            let mut dag_store = ctx.get_dag_store(dag_dir.as_deref())?;
             let did_key = ctx.load_did_key(key)?;
             let did = Did::from_string(&did_key.to_did_string())?;
             
@@ -316,10 +316,10 @@ pub async fn handle_community_command(command: &CommunityCommands, ctx: &mut Cli
             let community_nodes = dag_store.get_nodes_by_payload_type("CommunityGenesis").await?;
             let mut parent_cid = None;
             
-            for node in community_nodes {
+            for mut node in community_nodes {
                 if let Some(scope) = node.node.metadata.scope_id.as_ref() {
                     if scope == community_id {
-                        let cid = node.ensure_cid()?;
+                        let cid = get_cid(&node)?;
                         parent_cid = Some(cid);
                         break;
                     }
@@ -350,7 +350,7 @@ pub async fn handle_community_command(command: &CommunityCommands, ctx: &mut Cli
         },
         
         CommunityCommands::ExportThread { community_id, federation_id, output, dag_dir } => {
-            let dag_store = ctx.get_dag_store(dag_dir.as_deref())?;
+            let mut dag_store = ctx.get_dag_store(dag_dir.as_deref())?;
             
             // Get all nodes for this community
             let all_nodes = dag_store.get_ordered_nodes().await?;
@@ -378,40 +378,42 @@ pub async fn handle_community_command(command: &CommunityCommands, ctx: &mut Cli
         },
         
         CommunityCommands::JoinFederation { community_id, federation_id, key, dag_dir } => {
-            let dag_store = ctx.get_dag_store(dag_dir.as_deref())?;
+            let mut dag_store = ctx.get_dag_store(dag_dir.as_deref())?;
             let did_key = ctx.load_did_key(key)?;
             let did = Did::from_string(&did_key.to_did_string())?;
             
-            // Get the federation genesis node
-            let federation_nodes = dag_store.get_nodes_by_payload_type("FederationGenesis").await?;
+            // Make federation_nodes mutable when getting it
+            let mut federation_nodes = dag_store.get_nodes_by_payload_type("FederationGenesis").await?;
             if federation_nodes.is_empty() {
-                return Err(CliError::ValidationError(
+                return Err(CliError::SerializationError(
                     format!("Federation '{}' not found", federation_id)));
             }
             
-            let federation_genesis = &federation_nodes[0];
-            let federation_genesis_cid = federation_genesis.ensure_cid()?;
+            let federation_genesis = &mut federation_nodes[0];
+            let federation_genesis_cid = get_cid(federation_genesis)?;
             
             // Get the community genesis node
             let community_nodes = dag_store.get_nodes_by_payload_type("CommunityGenesis").await?;
             let mut community_genesis = None;
             
             for node in community_nodes {
-                if let Some(scope_id) = &node.node.metadata.scope_id {
-                    if scope_id == community_id {
+                if let Some(scope) = node.node.metadata.scope_id.as_ref() {
+                    if scope == community_id {
                         community_genesis = Some(node);
                         break;
                     }
                 }
             }
             
-            let community_genesis = match community_genesis {
+            let mut community_genesis = match community_genesis {
                 Some(node) => node,
-                None => return Err(CliError::ValidationError(
-                    format!("Community '{}' not found", community_id))),
+                None => {
+                    return Err(CliError::SerializationError(
+                        format!("Community '{}' not found", community_id)));
+                },
             };
             
-            let community_genesis_cid = community_genesis.ensure_cid()?;
+            let community_genesis_cid = get_cid(&community_genesis)?;
             
             // Create a join request node
             let payload = DagPayload::Json(json!({
@@ -448,5 +450,5 @@ pub async fn handle_community_command(command: &CommunityCommands, ctx: &mut Cli
 // Helper function to parse a CID from a string
 fn cid_from_string(cid_str: &str) -> CliResult<icn_types::Cid> {
     icn_types::Cid::from_bytes(cid_str.as_bytes())
-        .map_err(|e| CliError::ValidationError(format!("Invalid CID: {}", e)))
+        .map_err(|e| CliError::SerializationError(format!("Invalid CID: {}", e)))
 } 

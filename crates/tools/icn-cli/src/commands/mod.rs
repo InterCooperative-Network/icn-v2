@@ -26,7 +26,7 @@ pub use receipt::handle_receipt_command;
 pub use sync_p2p::handle_dag_sync_command;
 pub use policy::handle_policy_command;
 pub use keygen::handle_key_gen;
-pub use observability::handle_observability_command;
+pub use observability::handle_dag_view;
 
 // Export coop module components
 pub use coop::CoopCommands;
@@ -41,4 +41,4 @@ pub use scope::ScopeCommands;
 pub use scope::handle_scope_command;
 
 // Export observability module components
-pub use observability::ObservabilityCommands; 
+pub use observability::{handle_inspect_policy, handle_validate_quorum, handle_activity_log, handle_federation_overview}; 

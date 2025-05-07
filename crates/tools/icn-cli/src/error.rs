@@ -3,6 +3,7 @@ use icn_types::dag::DagError;
 // TODO: Add imports for other error types used (DidKeyError, CborError, NetworkError etc.)
 // use icn_identity_core::did::DidKeyError; 
 use std::io;
+use icn_core_types::did::DidParseError;
 
 #[derive(Error, Debug)]
 pub enum CliError {
@@ -83,4 +84,11 @@ pub enum CliError {
 }
 
 // Define the standard Result type alias
-pub type CliResult<T = ()> = Result<T, CliError>; 
+pub type CliResult<T = ()> = Result<T, CliError>;
+
+// Implementation of From trait for DidParseError
+impl From<DidParseError> for CliError {
+    fn from(err: DidParseError) -> Self {
+        CliError::IdentityError(format!("DID Parse Error: {}", err))
+    }
+} 
