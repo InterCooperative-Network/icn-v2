@@ -9,7 +9,7 @@ serde_json = "1.0"
 serde_bytes = "0.11"
 thiserror = "1.0"
 base64 = { version = "0.22", optional = true }
-multihash = { version = "0.19.3", features = ["serde-codec", "sha2-256"], optional = true }
+multihash = { version = "0.19.3", features = ["serde-codec"], optional = true }
 cid = { version = "0.11.1", optional = true }
 chrono = { version = "0.4", features = ["serde"] }
 ed25519-dalek = { version = "2.0", features = ["serde", "rand_core"], optional = true }
@@ -55,4 +55,4 @@ persistence = ["dep:rocksdb", "dep:lazy_static", "async"] # Persistence implies 
 identity = ["dep:ed25519-dalek", "dep:rand", "dep:base64", "ed25519-dalek/rand_core"]
 metrics = ["dep:prometheus", "dep:lazy_static"]
 networking = ["dep:libp2p", "dep:libp2p-identity", "dep:libp2p-swarm", "dep:tokio", "dep:futures", "dep:async-trait"]
-ipld = ["dep:cid", "dep:multihash", "multihash/sha2-256", "multihash/serde-codec"]
+ipld = ["dep:cid", "dep:multihash", "multihash/serde-codec"]
