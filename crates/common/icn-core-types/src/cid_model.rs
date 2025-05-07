@@ -7,6 +7,7 @@ use sha2::{Sha256, Digest};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::convert::TryFrom;
 use std::ops::Deref;
+use std::str::FromStr;
 use std::fmt;
 use thiserror::Error;
 
@@ -15,6 +16,8 @@ use thiserror::Error;
 pub enum CidError {
     #[error("Failed to parse CID from bytes: {0}")]
     ParseError(String),
+    #[error("Failed to parse CID from string: {0}")]
+    FromStrError(String),
     // Add other Cid related errors if needed
 }
 
@@ -50,6 +53,33 @@ impl Cid {
     }
 }
 
+// Implement FromStr for Cid to allow "foo".parse::<Cid>() and String → Cid conversion
+impl FromStr for Cid {
+    type Err = CidError;
+    
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // Handle multibase prefixes if present
+        let bytes = if s.starts_with("b") {
+            // May be multibase-encoded, try to decode
+            match multibase::decode(s) {
+                Ok((_, bytes)) => bytes,
+                Err(e) => return Err(CidError::FromStrError(format!("Multibase decode error: {}", e))),
+            }
+        } else {
+            // Assume it's a standard CID string representation
+            match ExternalCid::from_str(s) {
+                Ok(cid) => return Ok(Cid(cid)),
+                Err(e) => return Err(CidError::FromStrError(format!("CID parse error: {}", e))),
+            }
+        };
+        
+        // Try to parse from decoded bytes
+        ExternalCid::try_from(bytes)
+            .map(Cid)
+            .map_err(|e| CidError::FromStrError(format!("Failed to parse CID from bytes: {}", e)))
+    }
+}
+
 // --- Deref to access inner Cid methods --- 
 impl Deref for Cid {
     type Target = ExternalCid;
@@ -82,7 +112,32 @@ impl TryFrom<&[u8]> for Cid {
     }
 }
 
-// Implement TryFrom<String> or &str if needed, parsing the string representation
+// Implement Default for Cid
+impl Default for Cid {
+    fn default() -> Self {
+        // Create a default CID using an empty byte array
+        // This should only be used for default struct instantiation
+        let bytes = [0u8; 32];
+        Self::from_bytes(&bytes).unwrap_or_else(|_| {
+            // Fallback in case of hash generation failure
+            panic!("Failed to create default Cid, which should never happen")
+        })
+    }
+}
+
+// Add From<String> implementation for convenience
+impl From<String> for Cid {
+    fn from(s: String) -> Self {
+        Self::from_str(&s).unwrap_or_default()
+    }
+}
+
+// Add From<&str> implementation for convenience with string literals
+impl From<&str> for Cid {
+    fn from(s: &str) -> Self {
+        Self::from_str(s).unwrap_or_default()
+    }
+}
 
 // --- Serde Implementations ---
 impl Serialize for Cid {

@@ -412,8 +412,10 @@ fn verify_credential_signature(credential: &DispatchCredential) -> Result<bool> 
     let signature_bytes = Vec::from_hex(&proof.proofValue)
         .context("Failed to decode hex signature")?;
     
-    let signature = Signature::from_slice(&signature_bytes)
-        .context("Failed to parse signature")?;
+    // Convert the bytes to a Signature
+    // This is the proper way to create a Signature in ed25519-dalek 2.x
+    let signature = Signature::try_from(signature_bytes.as_slice())
+        .map_err(|e| anyhow!("Failed to parse signature: {:?}", e))?;
     
     // Get the public key from the DID
     let did = Did::from_string(&credential.issuer)

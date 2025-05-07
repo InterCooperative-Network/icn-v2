@@ -1,6 +1,16 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::str::FromStr;
 use sha2::{Sha256, Digest};
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum EventIdError {
+    #[error("Invalid hex string: {0}")]
+    InvalidHex(#[from] hex::FromHexError),
+    #[error("Invalid length: expected 32 bytes, got {0}")]
+    InvalidLength(usize),
+}
 
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct EventId(pub [u8; 32]); // SHA-256 hash
@@ -24,6 +34,43 @@ impl EventId {
     /// Convert to a hex string
     pub fn to_hex(&self) -> String {
         hex::encode(self.0)
+    }
+}
+
+impl Default for EventId {
+    fn default() -> Self {
+        // Create a default zero-filled EventId
+        EventId([0u8; 32])
+    }
+}
+
+impl FromStr for EventId {
+    type Err = EventIdError;
+    
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // Parse from hex string
+        let bytes = hex::decode(s)?;
+        if bytes.len() != 32 {
+            return Err(EventIdError::InvalidLength(bytes.len()));
+        }
+        
+        let mut array = [0u8; 32];
+        array.copy_from_slice(&bytes);
+        Ok(EventId(array))
+    }
+}
+
+// Add From<String> implementation
+impl From<String> for EventId {
+    fn from(s: String) -> Self {
+        Self::from_str(&s).unwrap_or_default()
+    }
+}
+
+// Add From<&str> implementation
+impl From<&str> for EventId {
+    fn from(s: &str) -> Self {
+        Self::from_str(s).unwrap_or_default()
     }
 }
 

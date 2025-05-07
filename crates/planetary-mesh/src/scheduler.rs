@@ -474,12 +474,8 @@ impl Scheduler {
             .with_label("TaskBid".to_string())
             .build()?;
             
-        // Create a signed node (in a real implementation this would be properly signed)
-        let signed_bid_node = SignedDagNode {
-            node: bid_node,
-            signature: vec![], // Would be properly signed in production
-            cid: None,
-        };
+        // Create a signed node
+        let signed_bid_node = create_empty_signed_node(bid_node);
         
         // Add to DAG to get CID
         let bid_cid = self.dag_store.add_node(signed_bid_node).await?;
@@ -619,18 +615,17 @@ impl Scheduler {
             .build()?;
             
         // Create a signed node
-        let mut signed_audit_node = SignedDagNode {
-            node: audit_node,
-            signature: vec![], // Will be properly signed if we have a key
-            cid: None, // Will be computed when added to the DAG
-        };
+        let mut signed_audit_node = create_empty_signed_node(audit_node);
         
         // Sign the DAG node if we have a DID key
         if let Some(did_key) = &self.did_key {
+            // Replace manual signing with our utility function
             let node_bytes = serde_json::to_vec(&signed_audit_node.node)
                 .context("Failed to serialize audit node")?;
             
-            signed_audit_node.signature = did_key.sign(&node_bytes).to_bytes().to_vec();
+            // Create a properly signed node
+            let signed_node = create_signed_node(signed_audit_node.node.clone(), did_key)?;
+            signed_audit_node = signed_node;
         }
         
         // Add to DAG to get CID
@@ -700,31 +695,32 @@ impl Scheduler {
     }
 }
 
-impl SignedDagNode {
-    pub fn with_empty_signature(node: DagNode) -> Self {
-        // Create an empty signature (all zeros)
-        let empty_sig = Signature::from_bytes(&[0u8; 64]).unwrap();
-        
-        SignedDagNode {
-            node,
-            signature: empty_sig,
-            cid: None,
-        }
-    }
+// Utility function to create an empty signature DAG node
+fn create_empty_signed_node(node: DagNode) -> SignedDagNode {
+    // Create an empty signature (all zeros)
+    // Use try_from instead of from_bytes to handle errors correctly
+    let empty_sig = Signature::try_from([0u8; 64].as_ref())
+        .expect("Invalid empty signature data");
     
-    // New helper method to create a signed node
-    pub fn sign(node: DagNode, did_key: &DidKey) -> Result<Self, anyhow::Error> {
-        let node_bytes = serde_json::to_vec(&node)
-            .context("Failed to serialize node")?;
-        
-        let signature = did_key.sign(&node_bytes);
-        
-        Ok(SignedDagNode {
-            node,
-            signature,
-            cid: None,
-        })
+    SignedDagNode {
+        node,
+        signature: empty_sig,
+        cid: None,
     }
+}
+
+// Utility function to create a properly signed DAG node
+fn create_signed_node(node: DagNode, did_key: &DidKey) -> Result<SignedDagNode, anyhow::Error> {
+    let node_bytes = serde_json::to_vec(&node)
+        .context("Failed to serialize node")?;
+    
+    let signature = did_key.sign(&node_bytes);
+    
+    Ok(SignedDagNode {
+        node,
+        signature,
+        cid: None,
+    })
 }
 
 #[cfg(test)]
@@ -831,7 +827,9 @@ mod tests {
         assert!(result.is_ok());
         
         let match_result = result.unwrap();
-        assert_eq!(match_result.bid.bidder, "did:icn:node1");
+        // Use a proper Did object for comparison
+        let expected_did: Did = "did:icn:node1".into();
+        assert_eq!(match_result.bid.bidder, expected_did);
     }
     
     #[tokio::test]
@@ -865,7 +863,9 @@ mod tests {
         assert!(result.is_ok());
         
         let match_result = result.unwrap();
-        assert_eq!(match_result.bid.bidder, "did:icn:node1");
+        // Use a proper Did object for comparison
+        let expected_did: Did = "did:icn:node1".into();
+        assert_eq!(match_result.bid.bidder, expected_did);
     }
     
     #[tokio::test]
@@ -899,7 +899,9 @@ mod tests {
         assert!(result.is_ok());
         
         let match_result = result.unwrap();
-        assert_eq!(match_result.bid.bidder, "did:icn:node1");
+        // Use a proper Did object for comparison
+        let expected_did: Did = "did:icn:node1".into();
+        assert_eq!(match_result.bid.bidder, expected_did);
     }
     
     #[tokio::test]

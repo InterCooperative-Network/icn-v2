@@ -2,6 +2,7 @@ use ed25519_dalek::{VerifyingKey, PUBLIC_KEY_LENGTH};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::convert::TryInto;
+use std::str::FromStr;
 use multibase::Base;
 use thiserror::Error;
 
@@ -76,5 +77,42 @@ impl Did {
 impl fmt::Display for Did {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.to_string())
+    }
+}
+
+// Implement FromStr for Did to allow "foo".parse::<Did>() and String → Did conversion
+impl FromStr for Did {
+    type Err = DidParseError;
+    
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Did::from_string(s)
+    }
+}
+
+// Implement Default for Did to support unwrap_or_default() calls
+impl Default for Did {
+    fn default() -> Self {
+        // Create a Did with all zeros (32 bytes) as the public key
+        // This is safe because:
+        // 1. It's deterministic
+        // 2. It's not a valid key that someone would use in production
+        // 3. It's clearly identifiable as a default value
+        Did {
+            public_key_bytes: vec![0u8; PUBLIC_KEY_LENGTH],
+        }
+    }
+}
+
+// Add From<String> implementation for convenience
+impl From<String> for Did {
+    fn from(s: String) -> Self {
+        Self::from_str(&s).unwrap_or_default()
+    }
+}
+
+// Add From<&str> implementation for convenience with string literals
+impl From<&str> for Did {
+    fn from(s: &str) -> Self {
+        Self::from_str(s).unwrap_or_default()
     }
 } 

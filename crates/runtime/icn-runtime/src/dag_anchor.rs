@@ -1,10 +1,8 @@
 use icn_identity_core::vc::execution_receipt::{ExecutionReceipt, ExecutionReceiptError};
-use icn_types::dag::{DagEvent, DagNode, EventPayload, EventType, EventId, DagStore, DagError, SignedDagNode};
-use icn_types::{DagPayload, Did, DagNodeBuilder};
+use icn_types::dag::{DagEvent, EventPayload, EventType, EventId, DagStore, DagError, SignedDagNode};
+use icn_types::{DagPayload, DagNodeBuilder};
 use ed25519_dalek::Signature;
 use thiserror::Error;
-use sha2::{Sha256, Digest};
-use chrono::Utc;
 
 #[derive(Error, Debug)]
 pub enum AnchorError {
@@ -57,16 +55,6 @@ pub async fn anchor_execution_receipt(
             Err(_) => vec![], // Fallback if tips can't be fetched
         }
     };
-
-    let event_payload = EventPayload::Receipt { receipt_cid: receipt_cid.clone() };
-
-    // Create the DagEvent using its constructor
-    let dag_event = DagEvent::new(
-        EventType::Receipt, // Receipt event type
-        author_did.to_string(),
-        parent_events,
-        event_payload,
-    );
 
     // Create a DagNode using the DagNodeBuilder
     let dag_node = DagNodeBuilder::new()
