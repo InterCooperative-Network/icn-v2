@@ -1,21 +1,19 @@
-# icn-cli
+# icn-runtime
 
-[![crates.io](https://img.shields.io/crates/v/icn-cli)](https://crates.io/crates/icn-cli)
-[![docs.rs](https://docs.rs/icn-cli/badge.svg)](https://docs.rs/icn-cli)
+[![crates.io](https://img.shields.io/crates/v/icn-runtime)](https://crates.io/crates/icn-runtime)
+[![docs.rs](https://docs.rs/icn-runtime/badge.svg)](https://docs.rs/icn-runtime)
 
 ## ✨ Overview
 No description provided.
 
 ## 🚀 Quick-Start
 ```bash
-cargo add icn-cli
+cargo add icn-runtime
 ```
 
 ## 📦 Features
+- `async`
 - `default`
-- `mesh`
-- `persistence`
-- `planetary-mesh`
 
 ## 📚 Examples
 <!-- Add code snippets in each crate later if desired -->

@@ -1,21 +1,19 @@
-# icn-cli
+# planetary-mesh
 
-[![crates.io](https://img.shields.io/crates/v/icn-cli)](https://crates.io/crates/icn-cli)
-[![docs.rs](https://docs.rs/icn-cli/badge.svg)](https://docs.rs/icn-cli)
+[![crates.io](https://img.shields.io/crates/v/planetary-mesh)](https://crates.io/crates/planetary-mesh)
+[![docs.rs](https://docs.rs/planetary-mesh/badge.svg)](https://docs.rs/planetary-mesh)
 
 ## ✨ Overview
 No description provided.
 
 ## 🚀 Quick-Start
 ```bash
-cargo add icn-cli
+cargo add planetary-mesh
 ```
 
 ## 📦 Features
-- `default`
-- `mesh`
-- `persistence`
-- `planetary-mesh`
+- `http-api`
+- `metrics`
 
 ## 📚 Examples
 <!-- Add code snippets in each crate later if desired -->
