@@ -1,0 +1,16 @@
+site_name: "InterCooperative Network Docs"
+repo_url:  https://github.com/InterCooperative-Network/icn-v2
+theme:     material
+docs_dir:  docs
+nav:
+    - Home: index.md
+    - Architecture:
+        - Overview: architecture/ARCHITECTURE.md
+        - DAG & Trust: architecture/dag_trust.md
+    - Guides:
+        - Developer Journey: guides/DEVELOPER_JOURNEY.md
+        - Mesh Compute: guides/mesh_compute.md
+        - Observability: guides/OBSERVABILITY_GUIDE.md
+    - Specs:
+        - CCL: specs/ccl_spec.md
+    - Crate Map: generated/crate_map.md 

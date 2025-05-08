@@ -49,6 +49,11 @@ To get started with ICN v2 development:
     ```bash
     cargo test --workspace
     ```
+5.  **Try the Developer Journey:**
+    ```bash
+    ./scripts/dev_walkthrough.sh
+    ```
+    This will walk you through a complete end-to-end workflow. See the [Developer Journey Guide](docs/guides/DEVELOPER_JOURNEY.md) for details.
 
 ## Federation Genesis Example
 

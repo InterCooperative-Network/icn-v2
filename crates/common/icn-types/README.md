@@ -1,21 +1,25 @@
-# icn-cli
+# icn-types
 
-[![crates.io](https://img.shields.io/crates/v/icn-cli)](https://crates.io/crates/icn-cli)
-[![docs.rs](https://docs.rs/icn-cli/badge.svg)](https://docs.rs/icn-cli)
+[![crates.io](https://img.shields.io/crates/v/icn-types)](https://crates.io/crates/icn-types)
+[![docs.rs](https://docs.rs/icn-types/badge.svg)](https://docs.rs/icn-types)
 
 ## ✨ Overview
 No description provided.
 
 ## 🚀 Quick-Start
 ```bash
-cargo add icn-cli
+cargo add icn-types
 ```
 
 ## 📦 Features
+- `async`
+- `dag-cbor`
 - `default`
-- `mesh`
+- `identity`
+- `ipld`
+- `metrics`
+- `networking`
 - `persistence`
-- `planetary-mesh`
 
 ## 📚 Examples
 <!-- Add code snippets in each crate later if desired -->

@@ -12,7 +12,7 @@ members = [
     "crates/tools/icn-cli",
     "crates/wallet/icn-wallet",
     "tests",
-    "tools/gen-crate-map",
+    "tools/gen-crate-map", "tools/gen-crate-readmes",
 ]
 resolver = "2"
 

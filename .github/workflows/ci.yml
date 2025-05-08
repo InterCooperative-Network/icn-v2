@@ -57,12 +57,22 @@ jobs:
         run: cargo install cargo-tarpaulin
       
       - name: Run tarpaulin
-        run: cargo tarpaulin --workspace --out Xml --exclude-files "target/*" --verbose
+        # Output an XML report (cobertura.xml by default in workspace root or target/tarpaulin/)
+        # Fail if coverage is below 70% (adjust as needed)
+        run: cargo tarpaulin --workspace --out Xml --exclude-files "target/*" --verbose --fail-under 70
       
       - name: Upload to codecov.io
         uses: codecov/codecov-action@v3
         with:
-          fail_ci_if_error: false
+          fail_ci_if_error: false # Keep this false if --fail-under is the primary gate
+          # Codecov action will automatically find cobertura.xml or other common report names
+
+      - name: Upload Tarpaulin XML Report as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tarpaulin-cobertura-report
+          path: cobertura.xml # Default name, adjust if tarpaulin outputs differently or to a different dir
+          if-no-files-found: error # Fail the step if the report is not found
 
   security:
     runs-on: ubuntu-latest

@@ -1,0 +1,16 @@
+name = "Sample Job"
+description = "A simple test job for the ICN mesh"
+owner_did = "DID_PLACEHOLDER"
+federation_id = "demo-federation"
+
+# Resource requirements
+[[resource_requirements]]
+type = "RamMb"
+value = 256
+
+[[resource_requirements]]
+type = "CpuCores"
+value = 1
+
+[parameters]
+timeout_seconds = 60 

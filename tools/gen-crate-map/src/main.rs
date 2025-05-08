@@ -1,56 +1,79 @@
-use std::{fs, path::PathBuf};
+use std::fs;
 use toml::Value;
+use cargo_metadata::MetadataCommand;
 
-fn main() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf();
-    let cargo_toml = fs::read_to_string(root.join("Cargo.toml")).expect("read Cargo.toml");
-    let parsed: Value = cargo_toml.parse().expect("parse toml");
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let metadata = MetadataCommand::new().exec()?;
+    let workspace_root = metadata.workspace_root.as_std_path();
 
-    let members = parsed["workspace"]["members"]
+    let cargo_toml_path = workspace_root.join("Cargo.toml");
+    let cargo_toml_content = fs::read_to_string(&cargo_toml_path)
+        .map_err(|e| format!("Failed to read workspace Cargo.toml at {}: {}", cargo_toml_path.display(), e))?;
+    
+    let parsed_workspace_toml: Value = cargo_toml_content.parse()
+        .map_err(|e| format!("Failed to parse workspace Cargo.toml: {}", e))?;
+
+    let members = parsed_workspace_toml["workspace"]["members"]
         .as_array()
-        .expect("workspace.members")
+        .ok_or("Failed to find workspace.members in workspace Cargo.toml")?
         .iter()
-        .map(|v| v.as_str().unwrap())
-        .collect::<Vec<_>>();
+        .map(|v| v.as_str().ok_or("Found non-string member in workspace.members"))
+        .collect::<Result<Vec<_>, _>>()?;
 
     let mut rows = vec![
+        "# Crate Map".to_string(),
         "| Crate | Path | Type | Description |".to_string(),
         "|-------|------|------|-------------|".to_string(),
     ];
 
-    for member in members {
-        let path = root.join(member);
-        let toml_path = path.join("Cargo.toml");
-        let cargo = match fs::read_to_string(&toml_path) {
+    for member_path_str in members {
+        let crate_manifest_path = workspace_root.join(member_path_str).join("Cargo.toml");
+        
+        let cargo_content = match fs::read_to_string(&crate_manifest_path) {
             Ok(c) => c,
-            Err(_) => continue, // skip if no Cargo.toml
+            Err(_) => {
+                // eprintln!("Skipping member {}: Cargo.toml not found at {}", member_path_str, crate_manifest_path.display());
+                continue; // Skip if no Cargo.toml for the member (e.g. could be a glob for non-existent paths)
+            }
         };
 
-        let parsed: Value = match cargo.parse() {
+        let parsed_crate_toml: Value = match cargo_content.parse() {
             Ok(v) => v,
-            Err(_) => continue,
+            Err(e) => {
+                eprintln!("Skipping member {}: Failed to parse Cargo.toml at {}: {}", member_path_str, crate_manifest_path.display(), e);
+                continue;
+            }
         };
 
-        let package = &parsed["package"];
-        let name = package["name"].as_str().unwrap_or("???");
-        let desc = package["description"].as_str().unwrap_or("—");
+        let package = parsed_crate_toml.get("package").ok_or_else(|| format!("Missing [package] table in {}", crate_manifest_path.display()))?;
+        let name = package.get("name").and_then(|n| n.as_str()).unwrap_or("???");
+        let desc = package.get("description").and_then(|d| d.as_str()).unwrap_or("—");
 
-        let typ = if parsed.get("lib").is_some() {
+        let crate_src_path = workspace_root.join(member_path_str).join("src");
+        let typ = if parsed_crate_toml.get("lib").is_some() || crate_src_path.join("lib.rs").exists() {
             "lib"
-        } else if parsed.get("bin").is_some() || path.join("src/main.rs").exists() {
+        } else if parsed_crate_toml.get("bin").is_some() || crate_src_path.join("main.rs").exists() {
             "bin"
         } else {
             "?"
         };
+        
+        let relative_member_path = member_path_str; // Path from workspace members array
 
-        rows.push(format!("| `{}` | `{}` | `{}` | {} |", name, member, typ, desc));
+        rows.push(format!("| `{}` | `{}` | `{}` | {} |", name, relative_member_path, typ, desc));
     }
 
     let output = rows.join("\n");
-    // Ensure docs/generated directory exists
-    let out_dir = root.join("docs/generated");
-    fs::create_dir_all(&out_dir).expect("create docs/generated directory");
+    
+    let out_dir = workspace_root.join("docs").join("generated");
+    fs::create_dir_all(&out_dir)
+        .map_err(|e| format!("Failed to create docs/generated directory at {}: {}", out_dir.display(), e))?;
+    
     let out_path = out_dir.join("crate_map.md");
-    fs::write(&out_path, output).expect("write crate_map.md");
-    println!("✅ Wrote crate map to {}", out_path.display());
+    fs::write(&out_path, output)
+        .map_err(|e| format!("Failed to write crate_map.md to {}: {}", out_path.display(), e))?;
+    
+    // Output to stdout is handled by the script redirect now
+    // println!("✅ Wrote crate map to {}", out_path.display());
+    Ok(())
 } 

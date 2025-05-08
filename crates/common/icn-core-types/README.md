@@ -1,14 +1,14 @@
-# agoranet-core
+# icn-core-types
 
-[![crates.io](https://img.shields.io/crates/v/agoranet-core)](https://crates.io/crates/agoranet-core)
-[![docs.rs](https://docs.rs/agoranet-core/badge.svg)](https://docs.rs/agoranet-core)
+[![crates.io](https://img.shields.io/crates/v/icn-core-types)](https://crates.io/crates/icn-core-types)
+[![docs.rs](https://docs.rs/icn-core-types/badge.svg)](https://docs.rs/icn-core-types)
 
 ## ✨ Overview
 No description provided.
 
 ## 🚀 Quick-Start
 ```bash
-cargo add agoranet-core
+cargo add icn-core-types
 ```
 
 ## 📦 Features
