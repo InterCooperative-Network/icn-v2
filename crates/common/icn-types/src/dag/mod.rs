@@ -461,4 +461,9 @@ impl SharedDagStore {
         let store = self.inner.lock().await;
         store.verify_branch(tip, resolver).await
     }
-} 
+}
+
+pub mod signed;
+
+// Re-export key types for easier access if desired, e.g.:
+// pub use signed::{DagNode, SignedDagNode, DagPayload, DagError, KeyResolver}; 

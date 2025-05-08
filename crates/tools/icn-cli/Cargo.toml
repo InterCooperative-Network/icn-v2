@@ -19,7 +19,7 @@ metrics-exporter-prometheus = "0.11"
 # tokio-metrics = "0.2" # Removed due to feature conflict with tokio >= 1.26
 hyper = { version = "0.14", features = ["server", "http1"] }
 
-icn-types = { path = "../../common/icn-types", features = ["persistence", "async"] }
+icn-types = { path = "../../../common/icn-types" }
 icn-identity-core = { path = "../../common/icn-identity-core", features = [] }
 icn-core-types = { path = "../../common/icn-core-types", optional = true }
 icn-runtime = { path = "../../runtime/icn-runtime" }
@@ -28,13 +28,13 @@ planetary-mesh = { path = "../../planetary-mesh", optional = true }
 clap = { version = "4.5", features = ["derive"] }
 clap_complete = "4.5"
 clap-markdown = "0.1"
-chrono = { version = "0.4.26", features = ["serde"] }
+chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1.28", features = ["full"], optional = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 toml = "0.8"
 hex = "0.4.3"
-ed25519-dalek = "2.0.0"
+ed25519-dalek = { version = "2", features = ["rand"] }
 uuid = { version = "1.4", features = ["v4", "serde"] }
 rand = "0.8"
 multibase = "0.9"

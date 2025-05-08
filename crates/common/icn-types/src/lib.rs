@@ -12,6 +12,13 @@ pub mod receipts;
 pub mod resources;
 pub mod governance;
 pub mod policy;
+pub mod error;
+pub use error::Error;
+
+pub mod types; // Assuming your Cid, Did might be in here or core_types
+pub use types::*;
+
+pub mod codec;
 
 // Re-export core types for easier access
 pub use anchor::AnchorRef;
@@ -49,3 +56,8 @@ pub use governance::QuorumConfig;
 pub use receipts::{QuorumProof, ReceiptError}; // Removed ReceiptProof, VoteReceipt, SignedVoteReceipt
 pub use resources::{ResourceOffer, ResourceType as EconomicResourceType}; // Removed MeteringProof
 pub use policy::{ScopePolicyConfig, PolicyRule, PolicyError};
+
+// You might also want to re-export the key types directly from the crate root:
+// pub use dag::signed::{DagNode, SignedDagNode, DagPayload, DagError, KeyResolver};
+// pub use crate::your_cid_module::Cid; // If Cid is defined in another module
+// pub use crate::your_did_module::Did; // If Did is defined in another module
