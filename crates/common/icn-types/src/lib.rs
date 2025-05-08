@@ -33,8 +33,7 @@ pub use receipts::ExecutionReceipt; // Uncommented
 pub use dag::sync::{DAGSyncBundle, DAGSyncService, FederationPeer, SyncError, VerificationResult};
 
 // Re-export core types from icn-core-types for convenience
-pub use icn_core_types::{Cid, CidError, Did}; // Removed QuorumProof from here
-pub use icn_core_types::did::DidParseError;
+pub use icn_core_types::{Cid, CidError, Did, DidParseError};
 
 // Re-export types from modules
 pub use bundle::{TrustBundle, TrustBundleError};
@@ -61,3 +60,7 @@ pub use policy::{ScopePolicyConfig, PolicyRule, PolicyError};
 // pub use dag::signed::{DagNode, SignedDagNode, DagPayload, DagError, KeyResolver};
 // pub use crate::your_cid_module::Cid; // If Cid is defined in another module
 // pub use crate::your_did_module::Did; // If Did is defined in another module
+
+// Example of how SignedDagNode and KeyResolver from the new dag::signed module could be re-exported:
+pub use crate::dag::signed::{SignedDagNode, KeyResolver as DagKeyResolver}; // Renamed to avoid conflict if other KeyResolvers exist
+pub use crate::dag::{DagNode, DagPayload, DagError, DagStore, DagNodeBuilder}; // Assuming these are the primary DAG types

@@ -52,16 +52,6 @@ fn now_ts_millis() -> i64 {
     Utc::now().timestamp_millis()
 }
 
-/// Placeholder for constructing a DID from a public key.
-/// This should ideally come from icn-identity or icn-core-types.
-fn did_from_verifying_key(key: &ed25519_dalek::VerifyingKey) -> Did {
-    // Example: "did:key:z" + multibase_encoded_public_key
-    // This is a simplified placeholder.
-    let pk_bytes = key.as_bytes();
-    let did_string = format!("did:key:z{}", multibase::Base::Base58Btc.encode(pk_bytes));
-    Did::parse(&did_string).expect("Failed to parse placeholder DID from key") // Assumes Did::parse exists
-}
-
 pub async fn handle_dag_submit(args: DagSubmitArgs) -> Result<()> {
     println!(
         "Submitting node from file: {:?} to URL: {}",
@@ -89,11 +79,10 @@ pub async fn handle_dag_submit(args: DagSubmitArgs) -> Result<()> {
     let vk = sk.verifying_key();
 
     // 3. Determine Signer DID
-    // Use author_did_override if provided, otherwise derive from the signing key.
     let signer_did: Did = match raw_input.author_did_override {
         Some(did_str) => Did::parse(&did_str)
-            .map_err(|e| anyhow!("Invalid author_did_override '{}': {}", did_str, e))?,
-        None => did_from_verifying_key(&vk), // Use our placeholder helper
+            .map_err(|e| anyhow!("Invalid author_did_override '{}': {:?}", did_str, e))?,
+        None => Did::from_verifying_key(&vk),
     };
     println!("Node will be signed by DID: {}", signer_did);
 

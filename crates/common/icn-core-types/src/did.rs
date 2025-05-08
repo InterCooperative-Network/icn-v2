@@ -5,6 +5,7 @@ use std::convert::TryInto;
 use std::str::FromStr;
 use multibase::Base;
 use thiserror::Error;
+use multibase::encode;
 
 // Define a specific error for parsing
 #[derive(Error, Debug)]
@@ -41,9 +42,16 @@ impl Did {
     pub fn public_key_bytes(&self) -> &[u8] {
         &self.public_key_bytes
     }
-    pub fn to_verifying_key(&self) -> Result<VerifyingKey, ed25519_dalek::SignatureError> {
-        let key_bytes: &[u8; 32] = self.public_key_bytes[..].try_into().map_err(|_| ed25519_dalek::SignatureError::new())?;
-        VerifyingKey::from_bytes(key_bytes)
+    pub fn to_verifying_key(&self) -> Option<VerifyingKey> {
+        let s = self.to_string();
+        if !s.starts_with("did:key:") { return None; }
+        let (_prefix, b58) = s.split_at(8);
+        let decoded_multibase = multibase::decode(b58).ok()?;
+        let (_base, data_bytes) = decoded_multibase;
+        
+        if data_bytes.len() != 34 || data_bytes[0] != 0xED || data_bytes[1] != 0x01 { return None; }
+        
+        VerifyingKey::from_bytes(data_bytes[2..].try_into().ok()?).ok()
     }
 
     /// Parse a DID string (e.g., did:key:z...) into a Did object
@@ -71,6 +79,14 @@ impl Did {
         }
 
         Ok(Did { public_key_bytes: key_bytes.to_vec() })
+    }
+
+    /// Construct `did:key:z...` from a raw 32-byte Ed25519 public key
+    pub fn from_verifying_key(vk: &VerifyingKey) -> Self {
+        let mut data = vec![0xED, 0x01];
+        data.extend_from_slice(vk.as_bytes());
+        let mb = encode(Base::Base58Btc, data);
+        format!("did:key:{}", mb).parse().expect("valid DID from verifying key construction")
     }
 }
 

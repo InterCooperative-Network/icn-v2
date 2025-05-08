@@ -1,5 +1,6 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::collections::HashMap;
 
 // Updated FederationConfig structure
 #[derive(Deserialize, Debug, Clone)]
@@ -10,6 +11,17 @@ pub struct FederationConfig {
     pub node: NodeConfig,
     pub network: NetworkConfig,
     pub dag_store: DagStoreConfig,
+    pub api: ApiConfig,
+    pub runtime: Option<RuntimeConfig>,
+    pub validation: ValidationConfig,
+    pub wallet: WalletConfig,
+    pub ccl: CclConfig,
+    pub mesh: Option<MeshConfig>,
+    pub agoranet: Option<AgoraNetConfig>,
+    /// Optional map of federation member DIDs to their base64-encoded public keys.
+    /// Key: DID string (e.g., "did:key:z...")
+    /// Value: Base64 encoded public key string.
+    pub members: Option<HashMap<String, String>>,
     // Add other sections like runtime, api, etc.
 }
 
@@ -29,6 +41,8 @@ pub struct NodeConfig {
 pub struct NetworkConfig {
     pub listen_address: String, // e.g., /ip4/0.0.0.0/tcp/0
     pub bootstrap_peers: Vec<String>,
+    pub enable_mdns: Option<bool>,
+    pub static_peers: Option<Vec<String>>,
     // Other network settings like pubsub topics, Kademlia config
 }
 
@@ -38,6 +52,41 @@ pub struct DagStoreConfig {
     // Other store-specific settings
 }
 
+#[derive(Deserialize, Debug, Clone)]
+pub struct ApiConfig {
+    pub listen_address: String,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct RuntimeConfig {
+    pub covm_path: Option<PathBuf>,
+    pub host_abi_path: Option<PathBuf>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct ValidationConfig {
+    // Add any necessary fields for validation
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct WalletConfig {
+    // Add any necessary fields for wallet
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct CclConfig {
+    // Add any necessary fields for CCL
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct MeshConfig {
+    // Add any necessary fields for Mesh
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct AgoraNetConfig {
+    // Add any necessary fields for AgoraNet
+}
 
 // Minimal CliArgs for icn-node main.rs, expand as needed
 // If icn-node uses clap directly, this might be more complex.
