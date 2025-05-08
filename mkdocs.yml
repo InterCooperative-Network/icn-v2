@@ -6,11 +6,11 @@ nav:
     - Home: index.md
     - Architecture:
         - Overview: architecture/ARCHITECTURE.md
-        - DAG & Trust: architecture/dag_trust.md
+        # - DAG & Trust: architecture/dag_trust.md # TODO: Create this file
     - Guides:
         - Developer Journey: guides/DEVELOPER_JOURNEY.md
         - Mesh Compute: guides/mesh_compute.md
-        - Observability: guides/OBSERVABILITY_GUIDE.md
+        # - Observability: guides/OBSERVABILITY_GUIDE.md # TODO: Create this file or fix path if it exists elsewhere
     - Specs:
-        - CCL: specs/ccl_spec.md
+        # - CCL: specs/ccl_spec.md # TODO: Create this file
     - Crate Map: generated/crate_map.md 
