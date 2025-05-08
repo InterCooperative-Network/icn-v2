@@ -108,6 +108,12 @@ pub enum CliError {
 
     #[error("Invalid input: {0}")]
     InvalidInput(String),
+
+    #[error("Federation start error: {0}")]
+    FederationStart(anyhow::Error),
+
+    #[error("Bundle Error: {0}")]
+    Bundle(String), // Consider making this more specific if Bundle crate has its own error type
 }
 
 // Define the standard Result type alias

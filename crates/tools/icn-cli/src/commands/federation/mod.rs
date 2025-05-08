@@ -9,6 +9,7 @@ pub mod verify;
 pub mod export;
 pub mod import;
 pub mod proposal;
+pub mod start;
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum FederationCommands {
@@ -172,6 +173,9 @@ pub enum FederationCommands {
         #[clap(long, value_hint = ValueHint::FilePath)]
         output: Option<PathBuf>,
     },
+
+    /// Start a federation node
+    Start(start::StartCommand),
 }
 
 pub async fn handle_federation_command(
@@ -286,6 +290,9 @@ pub async fn handle_federation_command(
                 to.as_deref(),
                 output.as_deref(),
             ).await?;
+        }
+        FederationCommands::Start(start_cmd) => {
+            start::handle(start_cmd.clone()).await.map_err(CliError::FederationStart)?;
         }
     }
     

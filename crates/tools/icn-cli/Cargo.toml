@@ -53,6 +53,8 @@ sysinfo = "0.29.10"
 wasmtime = "14.0.4"
 icn-ccl-compiler = { path = "../../ccl/icn-ccl-compiler" }
 icn-ccl-parser = { path = "../../ccl/icn-ccl-parser" }
+icn-config = { path = "../../common/icn-config" }
+icn-node = { path = "../../services/icn-node", optional = true }
 
 # Optional Persistence Deps (for Agora RocksDB storage)
 rocksdb = { version = "0.21", optional = true }

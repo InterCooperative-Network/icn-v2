@@ -1,0 +1,50 @@
+# Example federation_icn.toml for testing
+
+# Federation metadata
+[metadata]
+name = "demo-net" # Name of the federation
+# The DID of the federation itself. This might be a did:web or a generated did:key
+# depending on the federation's governance model.
+did = "did:key:z6MksExampleFederationDIDplaceholder"
+
+# Configuration for the node itself
+[node]
+# Path to the keypair used by this node for libp2p identity and potentially signing node-level actions.
+# If not present, a new key might be generated and saved.
+keys_path = "./icn-node-data/node_keys.json"
+
+# Network configuration for libp2p
+[network]
+# Address for the node to listen on for incoming libp2p connections.
+# /ip4/0.0.0.0/tcp/0 means listen on all IPv4 interfaces on a random available TCP port.
+listen_address = "/ip4/0.0.0.0/tcp/0"
+# List of multiaddresses for initial bootstrap peers to connect to.
+bootstrap_peers = [
+    # e.g., "/ip4/192.168.1.100/tcp/4001/p2p/QmPeerID1...",
+]
+# Other potential network settings:
+# pubsub_topics = ["icn/demo-net/dag", "icn/demo-net/mesh"]
+# kademlia_protocol_name = "/icn/kad/1.0.0"
+
+# Configuration for the primary DAG storage
+[dag_store]
+# Path where the DAG data (using RocksDB in the default implementation) will be stored.
+path = "./icn-node-data/dag_store"
+
+# Configuration for the runtime environment
+[runtime]
+# Path to the runtime's own persistent storage (e.g., for compiled modules, execution state via sled)
+data_path = "./icn-node-data/runtime_data"
+# Fuel limits, policy settings etc could go here
+
+# Configuration for the API server
+[api]
+# Address for the HTTP API server to bind to.
+listen_address = "127.0.0.1:5001"
+
+# Configuration for mesh participation
+[mesh]
+enabled = true
+# scheduler = true # Whether this node acts as a scheduler
+# provider = true # Whether this node acts as a compute provider
+# capabilities = ["cpu:4", "ram_mb:8192"] 

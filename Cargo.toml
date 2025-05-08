@@ -13,6 +13,9 @@ members = [
     "crates/wallet/icn-wallet",
     "tests",
     "tools/gen-crate-map", "tools/gen-crate-readmes",
+    "crates/common/icn-config",
+    "crates/services/icn-node",
+    "crates/runtime/icn-runtime-node"
 ]
 resolver = "2"
 
