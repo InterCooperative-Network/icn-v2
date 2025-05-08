@@ -6,8 +6,10 @@ use std::fs;
 use icn_types::dag::{DagNodeBuilder, DagPayload, NodeScope};
 use icn_types::Did;
 use serde_json::json;
+use anyhow::{anyhow, Result};
 
-#[derive(Debug, Subcommand)]
+/// Commands for managing community structures and proposals
+#[derive(Subcommand, Debug, Clone)]
 pub enum CommunityCommands {
     /// Create a new community in the federation
     #[command(name = "create")]

@@ -17,7 +17,7 @@ pub use activity_log::get_activity_log;
 pub use federation_overview::get_federation_overview;
 
 /// Observability options
-#[derive(Debug, Args)]
+#[derive(Debug, Args, Clone)]
 pub struct ScopeObservabilityOptions {
     /// Scope type (cooperative, community, or federation)
     #[arg(long)]
@@ -41,7 +41,7 @@ pub struct ScopeObservabilityOptions {
 }
 
 /// Observability commands
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Subcommand, Clone)]
 pub enum ObservabilityCommands {
     /// View DAG thread for a specific scope
     #[command(name = "dag-view")]

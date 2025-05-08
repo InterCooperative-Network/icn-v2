@@ -7,6 +7,7 @@ use icn_types::dag::{DagNodeBuilder, DagPayload, NodeScope};
 use icn_types::Did;
 use serde_json::json;
 use crate::commands::observability::{ObservabilityCommands, ScopeObservabilityOptions, handle_dag_view, handle_inspect_policy, handle_activity_log};
+use anyhow::{anyhow, Result};
 
 /// Enumeration of supported scope types
 #[derive(Debug, Clone, PartialEq)]
@@ -32,7 +33,8 @@ impl ScopeType {
     }
 }
 
-#[derive(Debug, Args)]
+/// Common options for scope-related commands
+#[derive(Args, Debug, Clone)]
 pub struct ScopeOptions {
     /// The scope type (cooperative or community)
     #[arg(long)]
@@ -55,7 +57,8 @@ pub struct ScopeOptions {
     pub dag_dir: Option<PathBuf>,
 }
 
-#[derive(Debug, Subcommand)]
+/// Commands for managing scope structures (Coops, Communities) and their governance.
+#[derive(Subcommand, Debug, Clone)]
 pub enum ScopeCommands {
     /// Create a new scope (cooperative or community) in the federation
     #[command(name = "create")]

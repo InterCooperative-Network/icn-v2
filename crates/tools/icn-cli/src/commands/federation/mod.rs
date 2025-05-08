@@ -2,6 +2,7 @@ use crate::context::CliContext;
 use crate::error::CliError;
 use std::path::PathBuf;
 use clap::ValueHint;
+use clap::{Args, Subcommand};
 
 pub mod bootstrap;
 pub mod verify;
@@ -9,7 +10,7 @@ pub mod export;
 pub mod import;
 pub mod proposal;
 
-#[derive(clap::Subcommand, Debug)]
+#[derive(Subcommand, Debug, Clone)]
 pub enum FederationCommands {
     /// Bootstrap a new federation with a genesis TrustBundle
     Init {

@@ -48,15 +48,3 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     Ok(())
 }
-
-fn generate_cli_docs<T: clap::CommandFactory>(cmd: &GenCliDocsCmd) -> anyhow::Result<()> {
-    use clap_markdown::help_markdown_command_custom;
-    use std::{fs::File, io::Write};
-    
-    let markdown = help_markdown_command_custom::<T>("icn", "--", false);
-    let path = PathBuf::from(&cmd.output_dir).join("icn.md");
-    let mut file = File::create(&path)?;
-    write!(file, "{}", markdown)?;
-    println!("Generated CLI docs at: {}", path.display());
-    Ok(())
-}

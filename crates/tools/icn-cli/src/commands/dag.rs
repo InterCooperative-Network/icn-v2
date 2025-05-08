@@ -15,7 +15,7 @@ use chrono::Utc;
 use serde_json::json;
 
 // Define the DagCommands enum here (or move it from main.rs)
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Clone)]
 pub enum DagCommands {
     /// Replay and verify a DAG branch.
     #[command(name = "replay")]

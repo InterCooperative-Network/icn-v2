@@ -19,8 +19,10 @@ use uuid::Uuid;
 use serde_json::json;
 use hex;
 use colored::Colorize;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD_NO_PAD as BASE64_ENGINE;
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Clone)]
 pub enum ReceiptCommands {
     /// Issue a new execution receipt credential.
     Issue(IssueReceiptArgs),

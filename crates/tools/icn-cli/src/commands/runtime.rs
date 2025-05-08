@@ -22,7 +22,7 @@ use anyhow::Result;
 // use wasmtime;
 // use wasmtime::AsContextMut;
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Clone)]
 pub enum RuntimeCommands {
     /// Execute a WASM module in the ICN runtime.
     Run(RunModuleArgs),

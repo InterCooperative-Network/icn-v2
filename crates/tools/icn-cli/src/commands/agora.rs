@@ -8,6 +8,7 @@ use std::{
     str::FromStr,
     sync::{Arc, Mutex},
 };
+use icn_core_types::Did;
 
 // Use conditional compilation based on the 'agora' feature
 #[cfg(feature = "agora")]
@@ -23,14 +24,14 @@ use {
 };
 
 /// Commands for interacting with AgoraNet threads.
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[cfg(feature = "agora")]
 pub struct AgoraCmd {
     #[clap(subcommand)]
     pub command: AgoraSubcommand,
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Clone)]
 #[cfg(feature = "agora")]
 pub enum AgoraSubcommand {
     /// Manage AgoraNet threads.
@@ -38,7 +39,7 @@ pub enum AgoraSubcommand {
 }
 
 /// Thread management actions.
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Clone)]
 #[cfg(feature = "agora")]
 pub enum ThreadCmd {
     /// Create a new discussion thread.
@@ -142,7 +143,7 @@ async fn handle_thread_cmd(action: ThreadCmd) -> Result<()> {
                 // TODO: Use actual identity/key from CLI config/wallet
                 author: Did::default(), 
                 parent: None, // TODO: Get actual last message CID to form thread
-                body_cid,
+                body_cid: body_cid.clone(),
                 signature: vec![], // TODO: Sign canonical bytes
                 timestamp: chrono::Utc::now().timestamp(),
             };
