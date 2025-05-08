@@ -1,84 +1,165 @@
-# ICN Command Line Interface (CLI)
+# ICN Command Line Interface
 
-The ICN CLI provides a comprehensive set of commands for interacting with the InterCooperative Network, including federation governance, identity management, and distributed mesh computing.
+The ICN CLI tool provides a command-line interface for interacting with the Interoperable Compute Network.
 
-## Installation
+## Building
+
+From the repository root:
 
 ```bash
-# Build and install from source
-cargo install --path .
+# Build with release optimizations
+cargo build --release -p icn-cli
+
+# The binary will be located at target/release/icn-cli
 ```
 
-## Key Features
-
-- 🔑 **Identity Management**: Generate and manage DIDs and keypairs
-- 🏛️ **Federation Governance**: Create and participate in federations, submit and vote on proposals
-- 🌐 **Mesh Computing**: Submit jobs, view node capabilities, and manage job execution
-- 📜 **Credential Verification**: Verify execution receipts and other credentials
-
-## Mesh Computing Workflow
-
-The ICN mesh provides distributed compute capabilities across federated nodes. The complete workflow is:
-
-1. **Job Creation**: Define a job manifest with resource requirements
-2. **Job Submission**: Submit the job to the network with identity verification
-3. **Node Discovery**: Find capable nodes that can execute the job
-4. **Bidding**: Receive bids from nodes willing to execute the job
-5. **Bid Selection**: Select the most suitable bid based on price, capability, and reputation
-6. **Execution**: The selected node executes the job and generates results
-7. **Verification**: Verify the execution receipt and token compensation
-
-## Commands
-
-### Identity Management
+## Usage
 
 ```bash
-# Generate a new identity key
-icn-cli keygen generate --output my-key.json
+# View available commands
+cargo run --release -p icn-cli -- --help
 
-# Show information about an identity
-icn-cli keygen info --key-path my-key.json
+# Run with verbose output
+cargo run --release -p icn-cli -- -v <command>
 ```
 
-### Mesh Computing
+## Key Commands
+
+### Key Management
 
 ```bash
-# Submit a job using a TOML manifest
-icn-cli mesh submit-job --manifest-path job.toml --key-path my-key.json
+# Generate a new key
+cargo run --release -p icn-cli -- key-gen --output my-key.json
 
-# Submit a job with inline parameters
-icn-cli mesh submit-job --wasm-module-cid bafybeihykld7uyxzogax6vgyvag42y7464eywpf55hnrwvgzxwvjmnx7fy \
-  --memory-mb 2048 --cpu-cores 4 --key-path my-key.json
+# Import an existing key
+cargo run --release -p icn-cli -- key-gen import --file existing-key.json --output my-key.json
 
-# List available nodes with filtering
-icn-cli mesh list-nodes --min-memory 1024 --min-cores 2
+# View key information
+cargo run --release -p icn-cli -- key-gen info --file my-key.json
+```
+
+### Federation Commands
+
+```bash
+# Initialize a new federation
+cargo run --release -p icn-cli -- federation init \
+  --name "My Federation" \
+  --output-dir ./federation-data \
+  --participant node1-key.json \
+  --participant node2-key.json \
+  --quorum "threshold:67"
+
+# Submit a proposal to a federation
+cargo run --release -p icn-cli -- federation submit-proposal \
+  --file proposal.toml \
+  --to http://localhost:5001 \
+  --key my-key.json
+
+# Vote on a proposal
+cargo run --release -p icn-cli -- federation vote \
+  --proposal-id <proposal-id> \
+  --key my-key.json \
+  --to http://localhost:5001 \
+  --decision approve
+
+# Execute an approved proposal
+cargo run --release -p icn-cli -- federation execute \
+  --proposal-id <proposal-id> \
+  --key my-key.json \
+  --to http://localhost:5001
+
+# Export a federation to a CAR archive
+cargo run --release -p icn-cli -- federation export \
+  --federation-dir ./federation-data \
+  --output federation.car
+
+# Import a federation from a CAR archive
+cargo run --release -p icn-cli -- federation import \
+  --archive-path federation.car \
+  --output-dir ./new-federation
+```
+
+### Mesh Network Commands
+
+```bash
+# Submit a job to the mesh network
+cargo run --release -p icn-cli -- mesh submit-job \
+  --manifest job.toml \
+  --to http://localhost:5001 \
+  --key my-key.json
 
 # Get bids for a job
-icn-cli mesh get-bids --job-id job-12345 --sort-by price
+cargo run --release -p icn-cli -- mesh get-bids \
+  --job-id <job-id> \
+  --limit 10 \
+  --sort-by price
 
-# Select and accept a bid
-icn-cli mesh select-bid --job-id job-12345 --bid-id 1 --key-path my-key.json
+# Select a bid for execution
+cargo run --release -p icn-cli -- mesh select-bid \
+  --job-id <job-id> \
+  --bid-id <bid-id> \
+  --key my-key.json
 
 # Check job status
-icn-cli mesh job-status --job-id job-12345
+cargo run --release -p icn-cli -- mesh job-status \
+  --job-id <job-id> \
+  --to http://localhost:5001
 
-# Advertise node capabilities
-icn-cli mesh advertise-capability --cpu-cores 8 --memory-mb 4096 --key-path node-key.json
-
-# Submit a bid for a job
-icn-cli mesh submit-bid --job-id job-12345 --price 50 --confidence 0.95 --key-path node-key.json
+# Verify execution receipt
+cargo run --release -p icn-cli -- mesh verify-receipt \
+  --receipt-id <receipt-id>
 ```
 
-## Job Manifest Format
+### DAG Commands
 
-The job manifest can be defined in TOML or JSON format. Here's an example:
+```bash
+# Sync with the federation DAG
+cargo run --release -p icn-cli -- dag sync-p2p \
+  --federation "my-federation" \
+  --key my-key.json \
+  --listen-addr "/ip4/0.0.0.0/tcp/9000"
+
+# View DAG events
+cargo run --release -p icn-cli -- observe dag-view \
+  --dag-dir ./data
+```
+
+## Example Files
+
+### Federation Proposal
 
 ```toml
-# ICN Mesh Job Manifest
-id = "job-12345"
+# Federation Proposal (proposal.toml)
+federation_id = "my-federation"
+name = "My ICN Federation"
+description = "A demonstration federation for ICN testing"
+
+# Nodes in the federation
+[[nodes]]
+did = "did:icn:node1"
+role = "Validator"
+
+[[nodes]]
+did = "did:icn:node2"
+role = "Validator"
+
+# Federation policies
+[policies]
+voting_threshold = 0.67
+min_validators = 2
+max_validators = 10
+```
+
+### Job Manifest
+
+```toml
+# Job Manifest (job.toml)
+id = "sample-job-001"
 wasm_module_cid = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
 owner_did = "did:icn:requester"
+federation_id = "my-federation"
 
+# Resource requirements
 [[resource_requirements]]
 type = "RamMb"
 value = 1024
@@ -88,58 +169,7 @@ type = "CpuCores"
 value = 2
 
 [parameters]
-input_data = "Sample input data"
+input_data = "Sample input data for the job"
 iterations = 100
-```
-
-## Verifiable Credentials
-
-All operations in the ICN use W3C Verifiable Credentials for secure, auditable interactions. Each job submission, bid, and execution result includes a cryptographic proof that can be verified by any participant.
-
-## Demo Script
-
-A comprehensive demo script is provided to showcase the complete workflow:
-
-```bash
-# Run the demo script
-./run_mesh_demo.sh
-```
-
-## Federation Governance
-
-In addition to mesh computing, the ICN CLI provides commands for participating in federation governance:
-
-```bash
-# Create a new federation
-icn-cli federation create --name "Solar Farm Cooperative" --key-path admin-key.json
-
-# Join a federation
-icn-cli federation join --id solar-farm-coop --key-path my-key.json
-
-# Submit a governance proposal
-icn-cli federation propose --federation-id solar-farm-coop --type "ConfigChange" \
-  --params '{"key": "min_bid_timeout", "value": "12h"}' --key-path my-key.json
-
-# Vote on a proposal
-icn-cli federation vote --proposal-id prop-12345 --vote "approve" --key-path my-key.json
-```
-
-## Development
-
-Contributions are welcome! To set up the development environment:
-
-```bash
-# Clone the repository
-git clone https://github.com/InterCooperative/icn-v2.git
-cd icn-v2
-
-# Build the CLI
-cargo build -p icn-cli
-
-# Run tests
-cargo test -p icn-cli
-```
-
-## License
-
-This software is licensed under the terms of the Apache License 2.0. 
+verbose = true
+``` 

@@ -3,6 +3,21 @@ use crate::{CliContext, error::{CliError, CliResult}};
 use std::path::{Path, PathBuf};
 use std::fs;
 use std::io::{self, Write};
+use ed25519_dalek::{SigningKey, VerifyingKey, Signature};
+use rand::rngs::OsRng;
+use chrono::Utc;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use serde::{Serialize, Deserialize};
+
+/// Key file format that matches the expected format in the rest of the system
+#[derive(Serialize, Deserialize)]
+struct KeyFile {
+    did: String,
+    #[serde(rename = "privateKey")]
+    private_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    created: Option<String>,
+}
 
 /// Key generation and management for Decentralized Identifiers (DIDs)
 #[derive(Subcommand, Debug, Clone)]
@@ -94,15 +109,33 @@ async fn handle_generate_key(context: &mut CliContext, args: &GenerateKeyArgs) -
         println!("Generating key: {}", output_path.display());
     }
     
-    // TODO: Generate the actual key based on key_type
-    // For now, create a placeholder JSON structure
-    let did_key_json = format!(r#"{{
-  "id": "did:icn:example",
-  "type": "{}",
-  "created": "{}",
-  "privateKeyBase64": "PLACEHOLDER_FOR_PRIVATE_KEY",
-  "publicKeyBase64": "PLACEHOLDER_FOR_PUBLIC_KEY"
-}}"#, args.key_type, chrono::Utc::now().to_rfc3339());
+    // Support only ed25519 for now
+    if args.key_type != "ed25519" {
+        return Err(CliError::Config(format!("Unsupported key type: {}. Only ed25519 is supported.", args.key_type)));
+    }
+    
+    // Generate actual key
+    let mut csprng = OsRng;
+    let signing_key = SigningKey::generate(&mut csprng);
+    let verifying_key = signing_key.verifying_key();
+    
+    // Create a DID from the public key (similar to what's done in the icn-identity-core)
+    let pubkey_bytes = verifying_key.as_bytes();
+    let mut did_string = String::from("did:icn:");
+    did_string.push_str(&hex::encode(&pubkey_bytes[0..8]));
+    
+    // Format the private key consistently
+    let private_key_string = format!("ed25519-priv:{}", BASE64_STANDARD.encode(signing_key.as_bytes()));
+    
+    // Create the JSON key file
+    let key_file = KeyFile {
+        did: did_string.clone(),
+        private_key: private_key_string,
+        created: Some(Utc::now().to_rfc3339()),
+    };
+    
+    let key_json = serde_json::to_string_pretty(&key_file)
+        .map_err(|e| CliError::IoError(format!("Failed to serialize key: {}", e)))?;
     
     // Ensure parent directory exists
     if let Some(parent) = output_path.parent() {
@@ -110,12 +143,12 @@ async fn handle_generate_key(context: &mut CliContext, args: &GenerateKeyArgs) -
     }
     
     // Write to file
-    fs::write(&output_path, did_key_json)?;
+    fs::write(&output_path, key_json)?;
     
     println!("DID key successfully generated and written to: {}", output_path.display());
-    println!("DID: did:icn:example");
+    println!("DID: {}", did_string);
     
-    Err(CliError::Unimplemented("Actual key generation not implemented yet".to_string()))
+    Ok(())
 }
 
 async fn handle_import_key(context: &mut CliContext, args: &ImportKeyArgs) -> CliResult {
@@ -134,10 +167,19 @@ async fn handle_import_key(context: &mut CliContext, args: &ImportKeyArgs) -> Cl
     
     println!("Importing key from {} to {}", args.file.display(), output_path.display());
     
-    // TODO: Validate the key file format and import properly
-    // For now, just copy the file
-    if context.verbose {
-        println!("Copying key file content");
+    // Read and validate the key file format
+    let key_content = fs::read_to_string(&args.file)?;
+    let key_file: KeyFile = serde_json::from_str(&key_content)
+        .map_err(|e| CliError::IoError(format!("Invalid key file format: {}", e)))?;
+    
+    // Ensure DID is valid
+    if !key_file.did.starts_with("did:icn:") {
+        return Err(CliError::IoError("Invalid DID format in key file".to_string()));
+    }
+    
+    // Ensure private key is valid
+    if !key_file.private_key.starts_with("ed25519-priv:") {
+        return Err(CliError::IoError("Invalid private key format in key file".to_string()));
     }
     
     // Ensure parent directory exists
@@ -146,11 +188,12 @@ async fn handle_import_key(context: &mut CliContext, args: &ImportKeyArgs) -> Cl
     }
     
     // Copy the file
-    fs::copy(&args.file, &output_path)?;
+    fs::write(&output_path, key_content)?;
     
     println!("Key imported successfully");
+    println!("DID: {}", key_file.did);
     
-    Err(CliError::Unimplemented("Complete key import validation not implemented".to_string()))
+    Ok(())
 }
 
 async fn handle_key_info(context: &mut CliContext, args: &KeyInfoArgs) -> CliResult {
@@ -165,15 +208,19 @@ async fn handle_key_info(context: &mut CliContext, args: &KeyInfoArgs) -> CliRes
     
     println!("Reading key from: {}", key_path.display());
     
-    // Read the key file
+    // Read and parse the key file
     let key_content = fs::read_to_string(&key_path)?;
+    let key_file: KeyFile = serde_json::from_str(&key_content)
+        .map_err(|e| CliError::IoError(format!("Invalid key file format: {}", e)))?;
     
-    // TODO: Parse the JSON and display relevant information
-    // For now, just print the raw content
-    println!("Key content (raw):");
-    println!("{}", key_content);
+    // Display key information
+    println!("DID: {}", key_file.did);
+    if let Some(created) = key_file.created {
+        println!("Created: {}", created);
+    }
+    println!("Key type: ed25519");
     
-    Err(CliError::Unimplemented("Proper key info display not implemented".to_string()))
+    Ok(())
 }
 
 // Helper to get default key path

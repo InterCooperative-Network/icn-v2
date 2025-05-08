@@ -1,10 +1,13 @@
 use crate::context::CliContext;
 use crate::error::CliError;
+use std::path::PathBuf;
+use clap::ValueHint;
 
 pub mod bootstrap;
 pub mod verify;
 pub mod export;
 pub mod import;
+pub mod proposal;
 
 #[derive(clap::Subcommand, Debug)]
 pub enum FederationCommands {
@@ -104,6 +107,70 @@ pub enum FederationCommands {
         #[clap(long, default_value = "false")]
         no_keys: bool,
     },
+    
+    /// Submit a new proposal to a federation
+    #[clap(name = "submit-proposal")]
+    SubmitProposal {
+        /// File containing the proposal in TOML format
+        #[clap(long, value_hint = ValueHint::FilePath)]
+        file: PathBuf,
+        
+        /// Federation node URL to submit the proposal to
+        #[clap(long)]
+        to: String,
+        
+        /// Path to the key file for signing the proposal
+        #[clap(long, value_hint = ValueHint::FilePath)]
+        key: Option<PathBuf>,
+        
+        /// Output file to save the proposal details
+        #[clap(long, value_hint = ValueHint::FilePath)]
+        output: Option<PathBuf>,
+    },
+    
+    /// Vote on an existing federation proposal
+    #[clap(name = "vote")]
+    Vote {
+        /// ID of the proposal to vote on
+        #[clap(long)]
+        proposal_id: String,
+        
+        /// Vote decision (approve/reject)
+        #[clap(long, default_value = "approve")]
+        decision: String,
+        
+        /// Reason for the vote
+        #[clap(long)]
+        reason: Option<String>,
+        
+        /// Path to the key file for signing the vote
+        #[clap(long, value_hint = ValueHint::FilePath)]
+        key: Option<PathBuf>,
+        
+        /// Federation node URL to submit the vote to
+        #[clap(long)]
+        to: Option<String>,
+    },
+    
+    /// Execute an approved proposal
+    #[clap(name = "execute")]
+    Execute {
+        /// ID of the proposal to execute
+        #[clap(long)]
+        proposal_id: String,
+        
+        /// Path to the key file for signing the execution
+        #[clap(long, value_hint = ValueHint::FilePath)]
+        key: Option<PathBuf>,
+        
+        /// Federation node URL to execute the proposal on
+        #[clap(long)]
+        to: Option<String>,
+        
+        /// Output file to save the execution receipt
+        #[clap(long, value_hint = ValueHint::FilePath)]
+        output: Option<PathBuf>,
+    },
 }
 
 pub async fn handle_federation_command(
@@ -173,6 +240,50 @@ pub async fn handle_federation_command(
                 *verify_only,
                 *override_existing,
                 *no_keys,
+            ).await?;
+        }
+        FederationCommands::SubmitProposal {
+            file,
+            to,
+            key,
+            output,
+        } => {
+            proposal::submit_proposal(
+                context,
+                file,
+                to,
+                key.as_deref(),
+                output.as_deref(),
+            ).await?;
+        }
+        FederationCommands::Vote {
+            proposal_id,
+            decision,
+            reason,
+            key,
+            to,
+        } => {
+            proposal::vote_on_proposal(
+                context,
+                proposal_id,
+                decision,
+                reason.as_deref(),
+                key.as_deref(),
+                to.as_deref(),
+            ).await?;
+        }
+        FederationCommands::Execute {
+            proposal_id,
+            key,
+            to,
+            output,
+        } => {
+            proposal::execute_proposal(
+                context,
+                proposal_id,
+                key.as_deref(),
+                to.as_deref(),
+                output.as_deref(),
             ).await?;
         }
     }
