@@ -1,0 +1,13 @@
+[package]
+name         = "icn-ccl-compiler"
+version      = "0.1.0"
+edition      = "2021"
+description  = "Compile CCL AST into deterministic WASM targeting the ICN runtime ABI"
+license      = "MIT"
+
+[dependencies]
+icn-ccl-parser = { path = "../icn-ccl-parser" }
+wasm-encoder   = "0.37"          # Tiny, no heavy runtime dep
+sha2           = "0.10"
+thiserror      = "1.0"
+log            = "0.4" # Added for optional logging 

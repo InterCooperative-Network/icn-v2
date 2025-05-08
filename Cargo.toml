@@ -1,16 +1,18 @@
 [workspace]
 members = [
+    "crates/agoranet/agoranet-core",
+    "crates/ccl/icn-ccl-compiler",
+    "crates/ccl/icn-ccl-parser",
     "crates/common/icn-core-types",
-    "crates/common/icn-types",
-    "crates/common/icn-identity-core",
     "crates/common/icn-economics",
-    "crates/runtime/icn-runtime",
+    "crates/common/icn-identity-core",
+    "crates/common/icn-types",
     "crates/planetary-mesh",
-    "crates/wallet/icn-wallet",
+    "crates/runtime/icn-runtime",
     "crates/tools/icn-cli",
-    "tools/gen-crate-map",
+    "crates/wallet/icn-wallet",
     "tests",
-    "tests/integration"
+    "tools/gen-crate-map",
 ]
 resolver = "2"
 
@@ -19,14 +21,3 @@ resolver = "2"
 # # opt-level = 'z' # Optimize for size
 # # lto = true
 # # codegen-units = 1
-
-[dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
-rand = "0.8"
-tempfile = "3"
-multihash = "0.18" # For mock_cid
-
-[[bench]]
-name = "dag_benchmarks" # Benchmark binary name
-harness = false           # Required for criterion
-path = "benches/dag.rs"   # Path to the benchmark file

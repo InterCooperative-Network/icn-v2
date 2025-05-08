@@ -25,7 +25,7 @@ pub mod commands {
     pub use crate::commands::community;
     pub use crate::commands::dag;
     pub use crate::commands::federation;
-    pub use crate::commands::key_gen; // Assuming key_gen might have its own struct/enum
+    pub use crate::commands::keygen; // Assuming key_gen might have its own struct/enum
     pub use crate::commands::mesh;
     pub use crate::commands::observability;
     pub use crate::commands::policy;

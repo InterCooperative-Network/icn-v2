@@ -1,6 +1,7 @@
 use icn_types::{Did, ScopePolicyConfig, PolicyError};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+use std::any::Any;
 
 /// Interface for tracking memberships of DIDs in federations, cooperatives, and communities
 pub trait MembershipIndex: Send + Sync {
@@ -18,12 +19,18 @@ pub trait MembershipIndex: Send + Sync {
 }
 
 /// Interface for loading policy configurations
-pub trait PolicyLoader: Send + Sync {
+pub trait PolicyLoader: Send + Sync + Any {
     /// Load policy configuration for a specific scope
     fn load_for_scope(&self, scope_type: &str, scope_id: &str) -> Result<ScopePolicyConfig, PolicyError>;
     
     /// Check if a DID is authorized to perform an action in a scope
     fn check_authorization(&self, scope_type: &str, scope_id: &str, action: &str, did: &Did) -> Result<(), PolicyError>;
+
+    /// Get this object as a `dyn Any` reference.
+    fn as_any(&self) -> &dyn Any;
+
+    /// Get this object as a mutable `dyn Any` reference.
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
 /// Default implementation of the MembershipIndex trait
@@ -143,6 +150,14 @@ impl PolicyLoader for DefaultPolicyLoader {
             },
             Err(err) => Err(err),
         }
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
     }
 }
 

@@ -826,7 +826,7 @@ impl TrustPolicyCredential {
         signed_node.ensure_cid()?;
         
         // Add to the DAG store
-        let shared_store = SharedDagStore::from_arc(dag_store.clone());
+        let shared_store = SharedDagStore::from_arc(dag_store.clone())?;
         let cid = shared_store.add_node(signed_node).await?;
             
         Ok(cid)
@@ -1072,7 +1072,7 @@ impl CloneDagStore {
 impl DagStore for CloneDagStore {
     async fn add_node(&mut self, node: SignedDagNode) -> Result<Cid, icn_types::dag::DagError> {
         // Use SharedDagStore::from_arc which is specifically designed for this case
-        let shared_store = SharedDagStore::from_arc(self.store.clone());
+        let shared_store = SharedDagStore::from_arc(self.store.clone())?;
         shared_store.add_node(node).await
     }
 

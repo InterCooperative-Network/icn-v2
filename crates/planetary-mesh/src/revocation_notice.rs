@@ -322,10 +322,9 @@ impl RevocationNoticeCredential {
         signed_node.ensure_cid()?;
         
         // Add to the DAG store to get its CID
-        let shared_store = SharedDagStore::from_arc(dag_store.clone());
+        let shared_store = SharedDagStore::from_arc(dag_store.clone())?;
         let cid = shared_store.add_node(signed_node)
-            .await
-            .map_err(|e| anyhow!("Failed to add revocation notice to DAG: {}", e))?;
+            .await?;
             
         Ok(cid)
     }

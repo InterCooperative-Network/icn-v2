@@ -1,28 +1,20 @@
 use sled::{Db, IVec};
 use icn_types::dag::{DagNode, NodeScope};
-use icn_identity_core::Did;
+use icn_types::Did;
 use icn_core_types::Cid;
 use serde::{Serialize, Deserialize};
 use bincode;
 use std::collections::HashMap; // This import seems unused in the provided scaffold, will keep for now.
+use thiserror::Error;
 
-#[derive(Debug)]
+#[derive(Error, Debug)]
 pub enum IndexError {
-    SledError(sled::Error),
-    SerializeError(bincode::Error),
-    NotFound, // Should this be used in current methods or is it for future use?
-}
-
-impl From<sled::Error> for IndexError {
-    fn from(e: sled::Error) -> Self {
-        IndexError::SledError(e)
-    }
-}
-
-impl From<bincode::Error> for IndexError {
-    fn from(e: bincode::Error) -> Self {
-        IndexError::SerializeError(e)
-    }
+    #[error("Sled DB error: {0}")]
+    SledError(#[from] sled::Error),
+    #[error("Serialization error: {0}")]
+    SerializeError(#[from] bincode::Error),
+    #[error("Index entry not found")]
+    NotFound,
 }
 
 pub trait DagIndex {
@@ -105,11 +97,10 @@ impl DagIndex for SledDagIndex {
 mod tests {
     use super::*;
     use icn_types::dag::{DagNode, DagNodeMetadata, NodeScope, DagPayload}; // Use actual types
-    use icn_identity_core::Did;
+    use icn_types::Did;
     use icn_core_types::Cid;
     use tempfile::tempdir;
     use std::str::FromStr;
-    use multihash::{Code, MultihashDigest};
 
     // --- Test Helpers (similar to integration test) ---
     fn mock_did(name: &str) -> Did {
@@ -118,7 +109,7 @@ mod tests {
 
     fn mock_cid(id: u8) -> Cid {
         let data = format!("node-content-{}", id).into_bytes();
-        Cid::new_v1(0x55, Code::Sha2_256.digest(&data))
+        Cid::from_bytes(&data).expect("Failed to create mock CID")
     }
 
     // Creates a DagNode (not SignedDagNode as indexer uses DagNode)

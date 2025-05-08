@@ -6,6 +6,7 @@ pub mod cli;
 pub mod commands; // Assuming this is the main commands module directory
 pub mod context;
 pub mod error;
+pub mod config;
 // pub mod metrics; // If needed
 
 // Optional: Re-export key types if desired for convenience
