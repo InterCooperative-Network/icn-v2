@@ -237,7 +237,7 @@ The observability system can be integrated with:
 
 ### Getting Help
 
-- **Documentation**: Refer to the [ICN Documentation](../README.md)
+- **Documentation**: Refer to the [ICN Documentation](../index.md)
 - **CLI Help**: Run `icn observe --help` for command details
 - **Issue Tracker**: Report issues on the project's issue tracker
 - **Community Forum**: Ask questions in the ICN community forum
