@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 //! icn-types placeholder
 //! Defines common data structures used across the ICN v2 workspace.
 

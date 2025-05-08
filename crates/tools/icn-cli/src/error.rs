@@ -4,6 +4,12 @@ use icn_types::dag::DagError;
 // use icn_identity_core::did::DidKeyError; 
 use std::io;
 use icn_core_types::did::DidParseError;
+use std::path::PathBuf;
+use icn_identity_core::did::DidKeyError;
+use icn_identity_core::vc::execution_receipt::ExecutionReceiptError;
+use icn_identity_core::trustbundle::TrustError;
+use icn_core_types::CidError;
+use icn_runtime::dag_indexing::IndexError;
 
 #[derive(Error, Debug)]
 pub enum CliError {
@@ -81,6 +87,27 @@ pub enum CliError {
     
     #[error("DAG Error: {0}")]
     DagError(String),
+
+    #[error("Invalid DID format: {0}")]
+    InvalidDidFormat(String),
+
+    #[error("Invalid key format: {0}")]
+    InvalidKeyFormat(String),
+
+    #[error("Invalid file path: {0}")]
+    InvalidPath(PathBuf),
+    
+    #[error("Serialization/Deserialization error: {0}")]
+    Serialization(String),
+
+    #[error("Index error: {0}")]
+    IndexError(#[from] IndexError),
+
+    #[error("WASM execution failed: {0}")]
+    WasmExecError(String),
+
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
 }
 
 // Define the standard Result type alias
@@ -91,4 +118,11 @@ impl From<DidParseError> for CliError {
     fn from(err: DidParseError) -> Self {
         CliError::IdentityError(format!("DID Parse Error: {}", err))
     }
-} 
+}
+
+// Implement From<toml::de::Error> and From<toml::ser::Error>
+// impl From<toml::de::Error> for CliError { ... }
+// impl From<toml::ser::Error> for CliError { ... }
+
+// Implement From<serde_json::Error>
+// impl From<serde_json::Error> for CliError { ... } 

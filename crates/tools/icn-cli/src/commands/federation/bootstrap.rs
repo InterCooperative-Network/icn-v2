@@ -6,7 +6,9 @@ use icn_core_types::Did;
 use icn_identity_core::trustbundle::{
     TrustBundle, QuorumConfig, QuorumType,
 };
-use icn_identity_core::{TrustBundleStore, MemoryTrustBundleStore, StorageError};
+use icn_identity_core::trustbundle::storage::{
+    TrustBundleStore, MemoryTrustBundleStore, StorageError,
+};
 use icn_identity_core::trustbundle::storage::StoredTrustBundle;
 #[cfg(feature = "persistence")]
 use icn_identity_core::trustbundle::RocksDbTrustBundleStore;

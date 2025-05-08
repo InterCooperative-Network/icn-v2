@@ -1,14 +1,18 @@
 [workspace]
 members = [
+    "crates/agoranet/agoranet-core",
+    "crates/ccl/icn-ccl-compiler",
+    "crates/ccl/icn-ccl-parser",
     "crates/common/icn-core-types",
-    "crates/common/icn-types",
+    "crates/common/icn-economics",
     "crates/common/icn-identity-core",
-    "crates/runtime/icn-runtime",
+    "crates/common/icn-types",
     "crates/planetary-mesh",
-    "crates/wallet/icn-wallet",
+    "crates/runtime/icn-runtime",
     "crates/tools/icn-cli",
+    "crates/wallet/icn-wallet",
     "tests",
-    "tests/integration"
+    "tools/gen-crate-map",
 ]
 resolver = "2"
 

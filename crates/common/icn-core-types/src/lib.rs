@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 // src/lib.rs for icn-core-types
 
 pub mod cid_model;

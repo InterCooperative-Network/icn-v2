@@ -74,6 +74,8 @@ pub enum DagError {
     CidMismatch(Cid),
     #[error("Missing parent node in DAG: {0}")]
     MissingParent(Cid),
+    #[error("Policy error: {0}")]
+    PolicyError(#[from] crate::PolicyError),
 }
 
 /// Trait for resolving DIDs to public verifying keys
@@ -113,6 +115,18 @@ pub struct DagNodeMetadata {
     pub scope: NodeScope,
     /// ID of the scope (coop_id or community_id), null for Federation scope
     pub scope_id: Option<String>,
+}
+
+impl Default for DagNodeMetadata {
+    fn default() -> Self {
+        Self {
+            federation_id: "default_federation".to_string(), // Or some other sensible default
+            timestamp: Utc::now(), // Default to current time
+            label: None,
+            scope: NodeScope::default(), // Uses NodeScope's default (Federation)
+            scope_id: None,
+        }
+    }
 }
 
 /// Defines the content types that can be stored in a DAG node
@@ -362,11 +376,6 @@ impl DagNodeBuilder {
 }
 
 /// A wrapper for DagStore that provides shared mutable access
-/// 
-/// This is a convenience wrapper around Arc<tokio::sync::Mutex<Box<dyn DagStore>>>
-/// to handle the mutability requirements of the DagStore trait while allowing
-/// shared access across threads. Ideal for use in services that need to
-/// share a DagStore across multiple components.
 #[derive(Clone)]
 pub struct SharedDagStore {
     inner: Arc<tokio::sync::Mutex<Box<dyn DagStore + Send + Sync>>>,
@@ -380,22 +389,22 @@ impl SharedDagStore {
         }
     }
     
-    /// Create a new SharedDagStore from an existing Arc<Box<dyn DagStore>>
-    pub fn from_arc(store: Arc<Box<dyn DagStore + Send + Sync>>) -> Self {
-        // Convert the immutable Arc<Box<dyn DagStore>> to a mutable version
-        // This is safe because the Mutex provides exclusive access
-        let inner_box: Box<dyn DagStore + Send + Sync> = match Arc::try_unwrap(store) {
-            Ok(boxed) => boxed,
-            Err(arc) => {
-                // If we can't get exclusive ownership, we need to clone the inner store
-                // This should be avoided in production code but works for a transition
-                let cloned = Box::new(ClonedDagStore::new(arc)) as Box<dyn DagStore + Send + Sync>;
-                cloned
+    /// Deprecated: Attempt to create a SharedDagStore from an existing Arc<Box<dyn DagStore>>.
+    /// This is generally unsafe if the Arc is shared, as it requires exclusive ownership
+    /// to place the Box inside the Mutex for the SharedDagStore.
+    /// Use `SharedDagStore::new` instead.
+    #[deprecated = "Use SharedDagStore::new instead. Creating from a potentially shared Arc is problematic."]
+    pub fn from_arc(store: Arc<Box<dyn DagStore + Send + Sync>>) -> Result<Self, DagError> {
+        match Arc::try_unwrap(store) {
+            Ok(boxed) => Ok(Self {
+                inner: Arc::new(tokio::sync::Mutex::new(boxed)),
+            }),
+            Err(_) => {
+                // We cannot safely create a SharedDagStore (with internal Mutex for mutation)
+                // from an Arc that is already shared elsewhere, as we don't have exclusive ownership.
+                // Returning an error is safer than the previous ClonedDagStore hack.
+                Err(DagError::StorageError("Cannot create SharedDagStore from a shared Arc<Box<dyn DagStore>>. Use ::new().".to_string()))
             }
-        };
-        
-        Self {
-            inner: Arc::new(tokio::sync::Mutex::new(inner_box)),
         }
     }
     
@@ -451,66 +460,5 @@ impl SharedDagStore {
     pub async fn verify_branch(&self, tip: &Cid, resolver: &(dyn PublicKeyResolver + Send + Sync)) -> Result<(), DagError> {
         let store = self.inner.lock().await;
         store.verify_branch(tip, resolver).await
-    }
-}
-
-// A helper struct to facilitate cloning Arc<Box<dyn DagStore>> safely
-#[derive(Clone)]
-struct ClonedDagStore {
-    store: Arc<Box<dyn DagStore + Send + Sync>>,
-}
-
-impl ClonedDagStore {
-    fn new(store: Arc<Box<dyn DagStore + Send + Sync>>) -> Self {
-        Self { store }
-    }
-}
-
-#[cfg(feature = "async")]
-#[async_trait::async_trait]
-impl DagStore for ClonedDagStore {
-    async fn add_node(&mut self, node: SignedDagNode) -> Result<Cid, DagError> {
-        // This is unsafe but necessary for the transition
-        // In a real implementation, the source DagStore would need to be thread-safe internally
-        let store_ptr = Arc::as_ptr(&self.store);
-        
-        // SAFETY: This is unsafe and should be replaced with a proper solution
-        // The real fix is to redesign the DagStore trait to not require &mut self
-        unsafe {
-            let store_mut = &mut **(store_ptr as *mut Box<dyn DagStore + Send + Sync>);
-            store_mut.add_node(node).await
-        }
-    }
-    
-    async fn get_node(&self, cid: &Cid) -> Result<SignedDagNode, DagError> {
-        self.store.get_node(cid).await
-    }
-    
-    async fn get_data(&self, cid: &Cid) -> Result<Option<Vec<u8>>, DagError> {
-        self.store.get_data(cid).await
-    }
-    
-    async fn get_tips(&self) -> Result<Vec<Cid>, DagError> {
-        self.store.get_tips().await
-    }
-    
-    async fn get_ordered_nodes(&self) -> Result<Vec<SignedDagNode>, DagError> {
-        self.store.get_ordered_nodes().await
-    }
-    
-    async fn get_nodes_by_author(&self, author: &Did) -> Result<Vec<SignedDagNode>, DagError> {
-        self.store.get_nodes_by_author(author).await
-    }
-    
-    async fn get_nodes_by_payload_type(&self, payload_type: &str) -> Result<Vec<SignedDagNode>, DagError> {
-        self.store.get_nodes_by_payload_type(payload_type).await
-    }
-    
-    async fn find_path(&self, from: &Cid, to: &Cid) -> Result<Vec<SignedDagNode>, DagError> {
-        self.store.find_path(from, to).await
-    }
-    
-    async fn verify_branch(&self, tip: &Cid, resolver: &(dyn PublicKeyResolver + Send + Sync)) -> Result<(), DagError> {
-        self.store.verify_branch(tip, resolver).await
     }
 } 

@@ -24,11 +24,12 @@ icn-core-types = { path = "../../common/icn-core-types" }
 icn-runtime = { path = "../../runtime/icn-runtime" }
 planetary-mesh = { path = "../../planetary-mesh", optional = true }
 
-clap = { version = "4.2", features = ["derive"] }
+clap = { version = "4.5", features = ["derive"] }
+clap_complete = "4.5"
 chrono = { version = "0.4.26", features = ["serde"] }
 tokio = { version = "1.28", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde_json = { version = "1.0", features = ["preserve_order"] }
 toml = "0.8"
 hex = "0.4.3"
 ed25519-dalek = "2.0.0"
@@ -45,9 +46,10 @@ num_cpus = "1.16.0"
 sys-info = "0.9.1"
 colored = "2.0"
 async-trait = "0.1"
-dirs = "5.0.1"
+dirs = "5"
 sysinfo = "0.29.10"
 wasmtime = "14.0.4"
+icn-ccl-compiler = { path = "../../ccl/icn-ccl-compiler" }
 
 [build-dependencies]
 # Add any build-time dependencies here if needed

@@ -29,8 +29,7 @@ ICN utilizes a monorepo structure to manage its various components and facilitat
         *   `crates/icn-ccl/`: The Contract Chain Language parser, compiler, and associated tooling.
         *   `crates/icn-ffi/`: Foreign Function Interface bindings (e.g., UniFFI for mobile) for the wallet and other components.
     *   `tools/`: Contains CLI utilities and developer tools.
-        *   `tools/icn-cli/`: The main command-line interface for interacting with ICN federations, managing identities, and submitting jobs.
-        *   `tools/meshctl/`: CLI tool for managing and interacting with the compute mesh.
+        *   `tools/icn-cli/`: The main command-line interface for interacting with ICN federations, managing identities, submitting jobs, and managing the compute mesh (e.g. via `icn-cli mesh ...` subcommands).
     *   `docs/`: Contains all project documentation.
         *   `docs/architecture/`: Detailed architectural documents, specifications, and design rationale.
         *   `docs/rfc/`: Requests for Comments for proposing significant changes or new features.
@@ -121,10 +120,9 @@ Ensure the following tools are installed on your system:
     *   Refer to `crates/icn-ccl/README.md` for specific instructions.
 
 *   **Using the CLI tools**:
-    *   Build CLI tools (e.g., `icn-cli`, `meshctl`):
+    *   Build CLI tools (e.g., `icn-cli`):
         ```bash
         cargo build --release -p icn-cli
-        cargo build --release -p meshctl # Assuming meshctl is a package
         ```
     *   Run them from `target/release/` or install them using `cargo install --path tools/icn-cli`.
     *   Example: `icn-cli mesh list-nodes`

@@ -1,0 +1,82 @@
+/////////////////////////////
+//  CCL Pest Grammar v0.1  //
+/////////////////////////////
+
+WHITESPACE       = _{ " " | "\t" | NEWLINE }
+COMMENT          = _{ "#" ~ (!NEWLINE ~ ANY)* }
+
+file             =  { SOI ~ stmt* ~ EOI }
+
+/////////////////////////////
+//    Top-level rules      //
+/////////////////////////////
+
+stmt = {
+      perform_metered_action
+    | mint_token
+    | transfer_resource
+    | anchor_data
+}
+
+/////////////////////////////
+//   perform_metered_action //
+/////////////////////////////
+
+perform_metered_action = { 
+    "perform_metered_action" ~ "{" ~
+        kv_resource_type     ~
+        kv_amount            ~
+    "}" 
+}
+
+kv_resource_type = { "resource_type" ~ "=" ~ string_lit }
+// kv_amount is already defined from previous step
+
+/////////////////////////////
+//         mint_token      //
+/////////////////////////////
+
+mint_token = {
+    "mint_token" ~ "{" ~
+        kv_token  ~
+        kv_amount ~
+    "}"
+}
+
+/////////////////////////////
+//     transfer_resource   //
+/////////////////////////////
+
+transfer_resource = {
+    "transfer_resource" ~ "{" ~
+        kv_token  ~
+        kv_to     ~
+        kv_amount ~
+    "}"
+}
+
+/////////////////////////////
+//        anchor_data      //
+/////////////////////////////
+
+anchor_data = {
+    "anchor_data" ~ "{" ~
+        kv_cid   ~
+        kv_bytes ~
+    "}"
+}
+
+kv_cid   = { "cid"   ~ "=" ~ string_lit }
+kv_bytes = { "bytes" ~ "=" ~ int_lit }
+
+// Common key-value pairs (already defined above where first used, ensure no duplication)
+kv_token  = { "token" ~ "=" ~ string_lit }
+kv_to     = { "to"    ~ "=" ~ string_lit }
+kv_amount = { "amount" ~ "=" ~ int_lit }
+
+/////////////////////////////
+//   Lexical helpers       //
+/////////////////////////////
+
+string_lit       = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+int_lit          = @{ ASCII_DIGIT+ } 

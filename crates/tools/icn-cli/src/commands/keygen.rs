@@ -1,5 +1,6 @@
 use clap::{Args, Subcommand};
-use crate::{CliContext, error::{CliError, CliResult}};
+use crate::context::CliContext;
+use crate::{error::{CliError, CliResult}};
 use std::path::{Path, PathBuf};
 use std::fs;
 use std::io::{self, Write};

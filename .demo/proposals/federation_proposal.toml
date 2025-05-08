@@ -1,0 +1,23 @@
+# Federation Proposal
+federation_id = "demo-federation"
+name = "ICN Demo Federation"
+description = "A demonstration federation for ICN testing"
+
+# Nodes in the federation
+[[nodes]]
+did = "did:icn:aff5b0184d2f13a9"
+role = "Validator"
+
+[[nodes]]
+did = "did:icn:874469104d9f7a9c"
+role = "Validator"
+
+[[nodes]]
+did = "did:icn:6fc22f6901b73b85"
+role = "Validator"
+
+# Federation policies
+[policies]
+voting_threshold = 0.67
+min_validators = 2
+max_validators = 10

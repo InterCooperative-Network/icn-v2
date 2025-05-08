@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 // ! ICN-Runtime: WASM execution environment for the InterCooperative Network
 
 pub mod abi;
@@ -7,6 +8,7 @@ pub mod dag_anchor;
 pub mod config;
 pub mod policy;
 pub mod dag_processor;
+pub mod dag_indexing;
 
 // Re-export the main executor types directly
 pub use engine::ModernWasmExecutor;
