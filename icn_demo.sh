@@ -51,9 +51,9 @@ cargo build --release --workspace
 
 # Step 2: Generate keys for demo participants
 echo -e "\n${BLUE}[2/7] Generating keys for participants...${NC}"
-cargo run --release --manifest-path crates/tools/icn-cli/Cargo.toml -- key-gen --output .demo/keys/node1.json
-cargo run --release --manifest-path crates/tools/icn-cli/Cargo.toml -- key-gen --output .demo/keys/node2.json
-cargo run --release --manifest-path crates/tools/icn-cli/Cargo.toml -- key-gen --output .demo/keys/node3.json
+cargo run --release --bin icn-cli --manifest-path crates/tools/icn-cli/Cargo.toml -- key-gen --output .demo/keys/node1.json
+cargo run --release --bin icn-cli --manifest-path crates/tools/icn-cli/Cargo.toml -- key-gen --output .demo/keys/node2.json
+cargo run --release --bin icn-cli --manifest-path crates/tools/icn-cli/Cargo.toml -- key-gen --output .demo/keys/node3.json
 
 # Extract DID information for later use
 NODE1_DID=$(grep -o '"did": "[^"]*' .demo/keys/node1.json | cut -d'"' -f4)
@@ -117,7 +117,7 @@ done
 
 # Step 6: Submit and vote on proposal
 echo -e "\n${BLUE}[6/7] Submitting proposal to federation...${NC}"
-PROPOSAL_RESULT=$(cargo run --release --manifest-path crates/tools/icn-cli/Cargo.toml -- \
+PROPOSAL_RESULT=$(cargo run --release --bin icn-cli --manifest-path crates/tools/icn-cli/Cargo.toml -- \
   federation submit-proposal \
   --to http://localhost:5001 \
   --file .demo/proposals/federation_proposal.toml \
@@ -129,13 +129,13 @@ echo -e "${GREEN}Proposal submitted with ID: $PROPOSAL_ID${NC}"
 
 # Vote on the proposal
 echo -e "\n${YELLOW}Voting on the proposal...${NC}"
-cargo run --release --manifest-path crates/tools/icn-cli/Cargo.toml -- \
+cargo run --release --bin icn-cli --manifest-path crates/tools/icn-cli/Cargo.toml -- \
   federation vote \
   --key .demo/keys/node2.json \
   --proposal-id $PROPOSAL_ID \
   --to http://localhost:5002
 
-cargo run --release --manifest-path crates/tools/icn-cli/Cargo.toml -- \
+cargo run --release --bin icn-cli --manifest-path crates/tools/icn-cli/Cargo.toml -- \
   federation vote \
   --key .demo/keys/node3.json \
   --proposal-id $PROPOSAL_ID \
@@ -145,7 +145,7 @@ echo -e "${GREEN}Votes submitted successfully${NC}"
 
 # Step 7: Execute the proposal
 echo -e "\n${BLUE}[7/7] Executing the proposal...${NC}"
-EXEC_RESULT=$(cargo run --release --manifest-path crates/tools/icn-cli/Cargo.toml -- \
+EXEC_RESULT=$(cargo run --release --bin icn-cli --manifest-path crates/tools/icn-cli/Cargo.toml -- \
   federation execute \
   --key .demo/keys/node1.json \
   --proposal-id $PROPOSAL_ID \
@@ -164,5 +164,5 @@ echo -e "  - Run 'cd demo/federation && docker-compose down' to stop the nodes"
 echo -e "  - Run 'rm -rf .demo' to remove the generated files"
 echo
 echo -e "${BLUE}To interact with the federation, use the icn-cli tool:${NC}"
-echo -e "  cargo run --release --manifest-path crates/tools/icn-cli/Cargo.toml -- federation -h"
+echo -e "  cargo run --release --bin icn-cli --manifest-path crates/tools/icn-cli/Cargo.toml -- federation -h"
 echo 
