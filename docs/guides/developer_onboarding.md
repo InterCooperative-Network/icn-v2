@@ -1,6 +1,6 @@
 # 🚀 ICN Developer Onboarding: Compile & Run Test Federation
 
-> See also: [DEVELOPER_GUIDE.md](../architecture/DEVELOPER_GUIDE.md) | [Project README](../../README.md)
+> See also: [DEVELOPER_GUIDE.md](../architecture/DEVELOPER_GUIDE.md) | [Project README](https://github.com/InterCooperative-Network/icn-v2/blob/main/README.md)
 
 This guide walks you through **compiling the ICN v2 codebase**, **running a 3-node federation**, and **verifying task execution and DAG anchoring**.
 
@@ -155,4 +155,4 @@ graph TD
 
 ---
 
-For more, see [DEVELOPER_GUIDE.md](../architecture/DEVELOPER_GUIDE.md) and the main [README](../../README.md). 
+For more, see [DEVELOPER_GUIDE.md](../architecture/DEVELOPER_GUIDE.md) and the main [README](https://github.com/InterCooperative-Network/icn-v2/blob/main/README.md). 
