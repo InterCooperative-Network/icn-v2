@@ -4,8 +4,10 @@ use crate::error::CliError;
 use chrono::{DateTime, Utc};
 use icn_core_types::Did;
 use icn_identity_core::trustbundle::{
-    TrustBundle, QuorumConfig, QuorumType, TrustBundleStore, MemoryTrustBundleStore, StorageError,
+    TrustBundle, QuorumConfig, QuorumType,
 };
+use icn_identity_core::{TrustBundleStore, MemoryTrustBundleStore, StorageError};
+use icn_identity_core::trustbundle::storage::StoredTrustBundle;
 #[cfg(feature = "persistence")]
 use icn_identity_core::trustbundle::RocksDbTrustBundleStore;
 use icn_types::dag::{DagEvent, EventType, EventPayload, merkle::calculate_event_hash};
@@ -321,12 +323,12 @@ pub async fn run_init(
     };
     
     // Step 4: Set up quorum config for TrustBundle
-    let participants: Vec<String> = participant_keys.iter()
-        .map(|p| p.did.clone())
+    let participants: Vec<Did> = participant_keys.iter()
+        .map(|p| Did::from(p.did.clone()))
         .collect();
     
     let quorum_config = QuorumConfig {
-        quorum_type,
+        quorum_type: quorum_type.clone(),
         participants,
     };
     
@@ -342,14 +344,19 @@ pub async fn run_init(
     println!("Created genesis event with ID: {:?}", event_id);
     
     // Step 6: Create TrustBundle (Genesis)
-    let participant_dids: Vec<Did> = participants.iter().map(|p| p.clone().into()).collect();
+    let participant_dids: Vec<Did> = participant_keys.iter().map(|p| Did::from(p.did.clone())).collect();
     
-    let mut bundle = TrustBundle::new_federation(
+    // Create quorum config struct correctly
+    let quorum_config_for_bundle = QuorumConfig {
+        quorum_type: quorum_type.clone(),
+        participants: participant_dids,
+    };
+    
+    let mut bundle = TrustBundle::new(
         fed_did.clone(),
-        participant_dids,
-        quorum_config.required_signatures(),
-        quorum_config.quorum_type,
-    )?;
+        vec![event_id], // Reference the genesis event
+        quorum_config_for_bundle,
+    );
     
     // Add metadata to bundle
     bundle = bundle.with_metadata("genesis", "true");
@@ -396,8 +403,20 @@ pub async fn run_init(
     
     #[cfg(not(feature = "persistence"))]
     let bundle_id = {
+        // Create stored bundle
+        let stored_bundle = StoredTrustBundle {
+            id: bundle.bundle_cid.clone().unwrap_or_else(|| "genesis".to_string()),
+            federation_id: Some(fed_did.clone()),
+            bundle_type: "genesis".to_string(),
+            bundle_content: bundle.clone(),
+            created_at: Utc::now().to_rfc3339(),
+            anchored_cid: None,
+        };
+        
         let store = MemoryTrustBundleStore::new();
-        store.store(bundle.clone()).await?
+        let result = store.save_bundle(&stored_bundle).await?;
+        // Return the bundle ID
+        stored_bundle.id
     };
     
     println!("Persisted TrustBundle with ID: {}", bundle_id);
@@ -487,7 +506,7 @@ fn write_outputs(
         }
         
         let keys_json = serde_json::to_string_pretty(&key_map)?;
-        let mut keys_file = File::create(keys_file_path)?;
+        let mut keys_file = File::create(&keys_file_path)?;
         keys_file.write_all(keys_json.as_bytes())?;
         
         println!("Exported {} federation keys to {}", participant_keys.len(), keys_file_path.display());

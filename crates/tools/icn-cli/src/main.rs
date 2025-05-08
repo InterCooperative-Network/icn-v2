@@ -188,14 +188,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ObservabilityCommands::InspectPolicy(options) => {
                     handle_inspect_policy(&mut ctx, &options).await?
                 },
-                ObservabilityCommands::ValidateQuorum(options) => {
-                    handle_validate_quorum(&mut ctx, &options).await?
+                ObservabilityCommands::ValidateQuorum { cid, show_signers, dag_dir, output } => {
+                    handle_validate_quorum(&mut ctx, cid, *show_signers, dag_dir.as_deref(), output).await?
                 },
                 ObservabilityCommands::ActivityLog(options) => {
                     handle_activity_log(&mut ctx, &options).await?
                 },
-                ObservabilityCommands::FederationOverview(options) => {
-                    handle_federation_overview(&mut ctx, &options).await?
+                ObservabilityCommands::FederationOverview { federation_id, dag_dir, output } => {
+                    handle_federation_overview(&mut ctx, federation_id, dag_dir.as_deref(), output).await?
                 },
             }
         }

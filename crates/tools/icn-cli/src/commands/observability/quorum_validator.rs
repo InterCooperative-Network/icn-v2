@@ -187,16 +187,17 @@ impl QuorumValidator {
     
     /// Render quorum validation as JSON
     pub fn render_json(&self, quorum_info: &QuorumInfo, show_signers: bool) -> String {
-        let signers = if show_signers {
-            quorum_info.actual_signers.iter().map(|signer| {
+        let signers: Value = if show_signers {
+            let signer_values: Vec<Value> = quorum_info.actual_signers.iter().map(|signer| {
                 json!({
                     "did": signer.did,
                     "role": signer.role,
                     "scope": signer.scope
                 })
-            }).collect()
+            }).collect();
+            Value::Array(signer_values)
         } else {
-            Vec::new()
+            json!([])
         };
         
         let response = json!({
@@ -211,7 +212,7 @@ impl QuorumValidator {
                 "required_signers_count": quorum_info.required_signers.len(),
                 "actual_signers_count": quorum_info.actual_signers.len(),
                 "required_signers": quorum_info.required_signers,
-                "actual_signers": if show_signers { signers } else { json!([]) }
+                "actual_signers": signers
             }
         });
         

@@ -269,7 +269,7 @@ fn create_car_archive(
     let mut blocks = Vec::new();
     
     // Add core components to blocks
-    blocks.push((metadata_cid.to_string(), metadata_json));
+    blocks.push((metadata_cid.to_string(), metadata_json.clone()));
     
     file_entries.push(FileEntry {
         path: "federation.toml".to_string(),
@@ -278,7 +278,7 @@ fn create_car_archive(
         content_type: "application/toml".to_string(),
     });
     
-    blocks.push((bundle_cid.to_string(), bundle_json));
+    blocks.push((bundle_cid.to_string(), bundle_json.clone()));
     
     file_entries.push(FileEntry {
         path: "genesis_bundle.json".to_string(),
@@ -287,7 +287,7 @@ fn create_car_archive(
         content_type: "application/json".to_string(),
     });
     
-    blocks.push((event_cid.to_string(), event_json));
+    blocks.push((event_cid.to_string(), event_json.clone()));
     
     file_entries.push(FileEntry {
         path: "genesis_event.json".to_string(),

@@ -19,10 +19,9 @@ use icn_identity_core::{
     QuorumEngine,
     QuorumOutcome,
 };
-use icn_types::dag::{Cid, DagStore, EventId, EventType, EventPayload, DagEvent};
-use icn_types::receipts::{ExecutionData, EventExecutionReceiptBuilder};
-use icn_types::receipts::ExecutionStatus;
-use icn_core_types::Cid as IcnCid;
+use icn_types::dag::{DagStore, EventId, EventType, EventPayload, DagEvent};
+use icn_core_types::{Cid, Did};
+use icn_identity_core::ExecutionStatus;
 use std::path::PathBuf;
 use std::fs;
 use std::io::{self, Read};
@@ -117,7 +116,7 @@ pub enum ProposalCommands {
 }
 
 /// Arguments for submitting a new proposal
-#[derive(Args, Debug)]
+#[derive(Args, Debug, Clone)]
 pub struct SubmitProposalArgs {
     /// Path to the key file for signing the proposal (JWK format)
     #[clap(long, value_parser, value_hint = ValueHint::FilePath)]

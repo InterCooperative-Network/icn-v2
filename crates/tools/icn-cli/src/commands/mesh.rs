@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 use sysinfo::{System, SystemExt};
 use std::collections::HashMap;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Result, Context};
 
 use crate::context::CliContext;
 use crate::error::{CliError, CliResult};
@@ -37,6 +37,17 @@ use tokio;
 use ed25519_dalek::Signer;
 use ed25519_dalek::Verifier;
 use sys_info;
+
+/// Convert a byte slice to a 32-byte array for ed25519 keys
+fn to_32_bytes(slice: &[u8]) -> Result<[u8; 32], anyhow::Error> {
+    if slice.len() != 32 {
+        return Err(anyhow::anyhow!("Expected 32 bytes for ed25519 key, got {}", slice.len()));
+    }
+    
+    let mut bytes = [0u8; 32];
+    bytes.copy_from_slice(slice);
+    Ok(bytes)
+}
 
 /// Commands for interacting with the ICN Mesh
 #[derive(Subcommand, Debug, Clone)]
@@ -197,8 +208,8 @@ pub struct AdvertiseCapabilityArgs {
     key_path: PathBuf,
 }
 
-/// Arguments for verify-receipt command.
-#[derive(Args, Debug, Clone)]
+/// Struct for verify-receipt command arguments
+#[derive(Debug, Args, Clone)]
 pub struct VerifyReceiptArgs {
     /// The receipt CID to verify
     #[clap(long)]
@@ -283,10 +294,8 @@ impl SignedJobManifest {
             .map_err(|e| anyhow!("Failed to serialize job manifest: {}", e))?;
         
         // Create a signature using the private key
-        let key_pair = ed25519_dalek::SigningKey::from_bytes(
-            private_key.try_into()
-                .map_err(|_| anyhow!("Invalid private key length"))?
-        );
+        let key_bytes = to_32_bytes(private_key)?;
+        let key_pair = ed25519_dalek::SigningKey::from_bytes(&key_bytes);
         
         let signature = key_pair.sign(&manifest_bytes);
         let signature_b64 = BASE64_ENGINE.encode(signature.to_bytes());
@@ -341,6 +350,41 @@ impl SignedJobManifest {
     }
 }
 
+/// Convert a resource name and value to the appropriate ResourceType enum variant
+fn parse_resource_type(name: String, value: serde_json::Value) -> Option<ResourceType> {
+    match name.as_str() {
+        "ram_mb" | "memory" => {
+            if let Some(value) = value.as_u64() {
+                Some(ResourceType::RamMb(value))
+            } else {
+                None
+            }
+        },
+        "cpu_cores" | "cpu" => {
+            if let Some(value) = value.as_u64() {
+                Some(ResourceType::CpuCores(value))
+            } else {
+                None
+            }
+        },
+        "gpu_cores" | "gpu" => {
+            if let Some(value) = value.as_u64() {
+                Some(ResourceType::GpuCores(value))
+            } else {
+                None
+            }
+        },
+        "storage_mb" | "storage" => {
+            if let Some(value) = value.as_u64() {
+                Some(ResourceType::StorageMb(value))
+            } else {
+                None
+            }
+        },
+        _ => None
+    }
+}
+
 /// Handle the submit-job command.
 async fn handle_submit_job(
     args: SubmitJobArgs, 
@@ -386,17 +430,17 @@ async fn handle_submit_job(
         
         // Parse resource requirements
         let mut resource_requirements = HashMap::new();
-        if let Some(memory_mb) = args.memory_mb {
-            resource_requirements.insert("memory_mb".to_string(), memory_mb.to_string());
-        }
-        if let Some(cpu_cores) = args.cpu_cores {
-            resource_requirements.insert("cpu_cores".to_string(), cpu_cores.to_string());
+        if let Some(memory) = args.memory_mb {
+            resource_requirements.insert("memory".to_string(), serde_json::json!(memory));
         }
         
-        // Parse parameters if provided
-        let params = if let Some(param_str) = &args.params {
-            serde_json::from_str(param_str)
-                .map_err(|e| anyhow!("Failed to parse parameters as JSON: {}", e))?
+        if let Some(cores) = args.cpu_cores {
+            resource_requirements.insert("cpu".to_string(), serde_json::json!(cores));
+        }
+        
+        let params = if let Some(params_str) = &args.params {
+            serde_json::from_str(params_str)
+                .map_err(|e| anyhow!("Failed to parse parameters JSON: {}", e))?
         } else {
             serde_json::Value::Null
         };
@@ -405,7 +449,7 @@ async fn handle_submit_job(
             id: format!("job-{}", Uuid::new_v4()),
             wasm_module_cid,
             resource_requirements: resource_requirements.into_iter()
-                .map(|(k, v)| ResourceType { name: k, value: v })
+                .filter_map(|(k, v)| parse_resource_type(k, v))
                 .collect(),
             parameters: params,
             owner: owner_did.to_string(),
@@ -890,7 +934,8 @@ async fn handle_select_bid(
     let acceptance_json = serde_json::to_string(&acceptance)
         .map_err(|e| anyhow!("Failed to serialize bid acceptance: {}", e))?;
     
-    let key_pair = ed25519_dalek::SigningKey::from_bytes(private_key_bytes.as_slice());
+    let key_bytes = to_32_bytes(private_key_bytes.as_slice())?;
+    let key_pair = ed25519_dalek::SigningKey::from_bytes(&key_bytes);
     let signature = key_pair.sign(acceptance_json.as_bytes());
     let signature_b64 = BASE64_ENGINE.encode(signature.to_bytes());
     
@@ -1106,7 +1151,8 @@ async fn handle_submit_bid(args: SubmitBidArgs, ctx: &CliContext) -> Result<()> 
     let bid_json = serde_json::to_string(&bid)
         .map_err(|e| anyhow!("Failed to serialize bid: {}", e))?;
 
-    let key_pair = ed25519_dalek::SigningKey::from_bytes(private_key_bytes.as_slice());
+    let key_bytes = to_32_bytes(private_key_bytes.as_slice())?;
+    let key_pair = ed25519_dalek::SigningKey::from_bytes(&key_bytes);
     let signature = key_pair.sign(bid_json.as_bytes());
     let signature_b64 = BASE64_ENGINE.encode(signature.to_bytes());
 
@@ -1118,7 +1164,7 @@ async fn handle_submit_bid(args: SubmitBidArgs, ctx: &CliContext) -> Result<()> 
         ],
         id: Some(format!("urn:uuid:{}", Uuid::new_v4())),
         type_: vec!["VerifiableCredential".to_string(), "BidSubmission".to_string()],
-        issuer: bidder_did,
+        issuer: bidder_did.clone(),
         issuance_date: Utc::now(),
         credential_subject: serde_json::to_value(&bid)
             .map_err(|e| anyhow!("Failed to convert bid to JSON value: {}", e))?,
@@ -1198,38 +1244,13 @@ struct TokenCompensation {
 /// Handle the verify-receipt command.
 async fn handle_verify_receipt(args: VerifyReceiptArgs, ctx: &CliContext) -> Result<()> {
     // Read the receipt CID
-    let receipt_cid = args.receipt_cid;
+    let receipt_cid = args.receipt_cid.clone();
     
-    // Fetch the receipt from IPFS
-    let receipt_data = ctx.ipfs.cat(&receipt_cid)
-        .map_err(|e| anyhow!("Failed to fetch receipt from IPFS: {}", e))?;
-    
-    // Parse the receipt
-    let receipt: ExecutionReceipt = serde_json::from_str(&receipt_data)
-        .map_err(|e| anyhow!("Failed to parse receipt: {}", e))?;
-
-    // Read the key file for signing
-    let key_data = fs::read_to_string(&args.key_path)
-        .map_err(|e| anyhow!("Failed to read key file: {}", e))?;
-    
-    let key_json: serde_json::Value = serde_json::from_str(&key_data)
-        .map_err(|e| anyhow!("Invalid key file format, expected JSON: {}", e))?;
-    
-    let did = key_json["did"].as_str()
-        .ok_or_else(|| anyhow!("DID not found in key file"))?;
-    
-    let private_key_hex = key_json["privateKey"].as_str()
-        .ok_or_else(|| anyhow!("Private key not found in key file"))?;
-    
-    let private_key_bytes = hex::decode(private_key_hex)
-        .map_err(|e| anyhow!("Invalid private key hex format: {}", e))?;
-    
-    let verifier_did = Did::from_str(did)
-        .map_err(|e| anyhow!("Invalid DID format: {}", e))?;
+    println!("Verifying execution receipt: {}", receipt_cid);
     
     // In a real implementation, this would retrieve the receipt from the DAG
     // and verify its cryptographic proof.
-    // For demo purposes, we'll use a sample receipt.
+    // For demonstration purposes, we'll use a sample receipt.
     
     // Create a sample receipt
     let receipt = ExecutionReceipt {
@@ -1272,7 +1293,7 @@ async fn handle_verify_receipt(args: VerifyReceiptArgs, ctx: &CliContext) -> Res
     
     // Print the verification result
     println!("ExecutionReceipt verification successful!");
-    println!("Receipt CID: {}", args.receipt_cid);
+    println!("Receipt CID: {}", receipt_cid);
     println!("Task CID: QmTaskZ7xP9F2cj5YhN8YgWz5DrtGE3vTqMW9W");
     println!("Bid CID: QmBidX3pQ2KLmfG8s6NrZE4yT9jK5RwuVmFa");
     

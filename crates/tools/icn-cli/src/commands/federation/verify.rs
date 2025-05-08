@@ -230,7 +230,7 @@ fn load_participant_keys(
     // Check if federation_keys.json exists
     if keys_path.exists() && keys_path.is_file() {
         // Load the keys file
-        let mut file = File::open(keys_path)?;
+        let mut file = File::open(&keys_path)?;
         let mut contents = String::new();
         file.read_to_string(&mut contents)?;
         
@@ -285,7 +285,8 @@ fn load_participant_keys(
     } else {
         // Check if we have keys for all participants
         for did in &bundle.quorum_config.participants {
-            if !key_map.contains_key(did) {
+            let did_str = did.to_string();
+            if !key_map.contains_key(&did_str) {
                 println!("Warning: No key found for participant: {}", did);
             }
         }
@@ -371,6 +372,19 @@ fn load_verifying_key_from_json(value: &Value) -> Result<VerifyingKey, VerifyErr
     }
 }
 
+/// Convert a byte slice to a 64-byte array for ed25519 signatures
+fn to_signature_bytes(slice: &[u8]) -> Result<[u8; 64], VerifyError> {
+    if slice.len() != 64 {
+        return Err(VerifyError::KeyError(format!(
+            "Invalid signature length: expected 64 bytes, got {}", slice.len()
+        )));
+    }
+    
+    let mut bytes = [0u8; 64];
+    bytes.copy_from_slice(slice);
+    Ok(bytes)
+}
+
 /// Verify a bundle against events and keys
 fn verify_bundle(
     bundle: &TrustBundle,
@@ -447,15 +461,19 @@ fn verify_bundle(
         
         // Verify each signature
         for (did, signature_bytes) in &bundle.proof.signatures {
+            let did_str = did.to_string();
             // Check if we have the key for this DID
-            if let Some(verifying_key) = keys.get(did) {
+            if let Some(verifying_key) = keys.get(&did_str) {
                 // Convert the signature bytes to ed25519_dalek::Signature
-                match Signature::from_bytes(signature_bytes.as_slice()) {
-                    Ok(signature) => {
+                match to_signature_bytes(signature_bytes.as_slice()) {
+                    Ok(sig_array) => {
+                        // Create signature from fixed-size array
+                        let signature = Signature::from_bytes(&sig_array);
+                        
                         // Verify the signature
                         match verifying_key.verify(&bundle_hash, &signature) {
                             Ok(_) => {
-                                results.valid_signers.push(did.clone());
+                                results.valid_signers.push(did_str);
                                 results.valid_signatures += 1;
                                 
                                 if verbose {
@@ -463,7 +481,7 @@ fn verify_bundle(
                                 }
                             },
                             Err(_) => {
-                                results.invalid_signers.push(did.clone());
+                                results.invalid_signers.push(did_str);
                                 
                                 if verbose {
                                     println!("Signature from {}: ❌ Invalid", did);
@@ -472,7 +490,7 @@ fn verify_bundle(
                         }
                     },
                     Err(e) => {
-                        results.invalid_signers.push(did.clone());
+                        results.invalid_signers.push(did_str);
                         
                         if verbose {
                             println!("Signature from {}: ❌ Invalid format: {}", did, e);
@@ -499,7 +517,8 @@ fn verify_bundle(
                 
                 for (did, weight) in weights {
                     max_possible_weight += weight;
-                    if results.valid_signers.contains(did) {
+                    let did_str = did.to_string();
+                    if results.valid_signers.contains(&did_str) {
                         total_weight += weight;
                     }
                 }

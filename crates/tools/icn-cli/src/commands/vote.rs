@@ -74,8 +74,8 @@ pub enum VoteCommands {
     },
 }
 
-/// Arguments for casting a vote
-#[derive(Args, Debug)]
+/// Arguments for casting a vote on a proposal
+#[derive(Args, Debug, Clone)]
 pub struct CastVoteArgs {
     /// Path to the key file for signing the vote (JWK format)
     #[clap(long, value_parser, value_hint = ValueHint::FilePath)]
