@@ -2,12 +2,14 @@
 mod tests {
     use super::*;
     use crate::rocksdb_dag_store::{RocksDbDagStore, DagStore, NodeScope, ConnectionConfig};
+    use crate::runtime_integration::DagVerifiedExecutor;
     use icn_common::dag::{DAGNode, DAGNodeID, DAGNodeType};
     use icn_common::identity::{Identity, IdentityType, ScopedIdentity};
     use icn_common::verification::Signature;
     
     use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
+    use std::sync::Arc;
     use ed25519_dalek::{Keypair, PublicKey, SecretKey};
     use tempfile::tempdir;
     use tokio::test;
@@ -468,5 +470,78 @@ mod tests {
         // Get parents of federation node (should be empty)
         let parents = store.get_parents(&fed_node_id).await.unwrap();
         assert_eq!(parents.len(), 0);
+    }
+    
+    // Test runtime execution with lineage verification
+    #[test]
+    async fn test_runtime_execution_with_lineage() {
+        let temp_dir = tempdir().unwrap();
+        let db_path = temp_dir.path().join("test_db");
+        
+        let config = ConnectionConfig {
+            path: db_path,
+            write_buffer_size: Some(8 * 1024 * 1024), // 8MB
+            max_open_files: Some(100),
+            create_if_missing: true,
+        };
+        
+        let store = Arc::new(RocksDbDagStore::new(config));
+        store.init().await.unwrap();
+        
+        // Create a federation scope
+        let federation_scope = "federation:test";
+        let mut fed_scope = NodeScope::new(federation_scope.to_string());
+        
+        // Create a federation identity
+        let (fed_identity, fed_secret) = create_scoped_identity(
+            "Test Federation", 
+            IdentityType::Federation, 
+            federation_scope
+        );
+        
+        // Add the federation identity to its scope
+        fed_scope.add_identity(fed_identity.identity.id.clone());
+        store.register_scope(fed_scope.clone()).await.unwrap();
+        
+        // Create a federation creation node with WASM payload
+        let wasm_node = create_test_node(
+            DAGNodeType::Custom("wasm_module".to_string()),
+            HashSet::new(),
+            federation_scope,
+            &fed_identity,
+            &fed_secret,
+            serde_json::json!({
+                "wasm_module": "AGFzbQEAAAABBwFgAX8BfwMCAQAFAwEAAQcUAhFfX3dhc21fY2FsbF9jdG9ycwAABm1lbW9yeQIACgoBCABBAEEBEAALCw==", // a simple WASM module
+                "function_name": "main"
+            }),
+        );
+        
+        // Append the node
+        let wasm_node_id = store.append_node(wasm_node).await.unwrap();
+        
+        // Create an executor
+        let executor = DagVerifiedExecutor::new(store.clone());
+        
+        // Execute with valid scope - should succeed
+        let result = executor.execute_wasm_module(&wasm_node_id, &fed_scope).await;
+        assert!(result.is_ok(), "Valid execution should succeed");
+        let result = result.unwrap();
+        assert!(result.success, "Execution success flag should be true");
+        
+        // Create an unauthorized scope
+        let mut bad_scope = NodeScope::new("unauthorized:scope".to_string());
+        bad_scope.add_identity("unauthorized_id".to_string());
+        
+        // Execute with invalid scope - should fail
+        let result = executor.execute_wasm_module(&wasm_node_id, &bad_scope).await;
+        assert!(result.is_err(), "Invalid execution should fail");
+        
+        // Check error type
+        match result {
+            Err(crate::runtime_integration::RuntimeExecutionError::Unauthorized(_)) => {
+                // Expected error
+            },
+            _ => panic!("Wrong error type returned, expected Unauthorized"),
+        }
     }
 } 

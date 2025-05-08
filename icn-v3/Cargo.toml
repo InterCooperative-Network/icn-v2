@@ -5,6 +5,7 @@ members = [
     "crates/p2p",
     "crates/runtime",
     "crates/services",
+    "crates/services/storage",
     "crates/wallet",
     "crates/tools",
 ]
