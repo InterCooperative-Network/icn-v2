@@ -5,9 +5,14 @@ use cid::Cid;
 use serde::{Serialize, de::DeserializeOwned};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use anyhow::{anyhow, Result};
+use std::collections::HashMap;
+use std::path::Path;
 
 use crate::error::AgoraError;
 use icn_core_types::Cid as AgCid;
+#[cfg(feature = "persistence")]
+use crate::storage::rocks::RocksDbStorage;
 
 /// Trait for asynchronous storage of IPLD blocks (message bodies, anchors, etc.).
 #[async_trait]
@@ -77,7 +82,7 @@ pub trait AsyncStorage: Send + Sync {
 /// An in-memory implementation of `AsyncStorage` for testing and prototyping.
 #[derive(Debug, Default, Clone)]
 pub struct InMemoryStorage {
-    store: Arc<RwLock<std::collections::HashMap<AgCid, Arc<Vec<u8>>>>,>
+    store: Arc<RwLock<HashMap<AgCid, Arc<Vec<u8>>>>>,
 }
 
 impl InMemoryStorage {
@@ -98,4 +103,36 @@ impl AsyncStorage for InMemoryStorage {
         let store_guard = self.store.read().await;
         Ok(store_guard.get(cid).cloned())
     }
-} 
+}
+
+/// Enum to represent different storage backend implementations.
+pub enum StorageBackend {
+    InMemory(InMemoryStorage),
+    #[cfg(feature = "persistence")]
+    Rocks(RocksDbStorage),
+}
+
+#[async_trait]
+impl AsyncStorage for StorageBackend {
+    async fn put_raw(&self, cid: &AgCid, bytes: Arc<Vec<u8>>) -> Result<(), AgoraError> {
+        match self {
+            StorageBackend::InMemory(s) => s.put_raw(cid, bytes).await,
+            #[cfg(feature = "persistence")]
+            StorageBackend::Rocks(s) => s.put_raw(cid, bytes).await,
+        }
+    }
+
+    async fn get_raw(&self, cid: &AgCid) -> Result<Option<Arc<Vec<u8>>>, AgoraError> {
+        match self {
+            StorageBackend::InMemory(s) => s.get_raw(cid).await,
+            #[cfg(feature = "persistence")]
+            StorageBackend::Rocks(s) => s.get_raw(cid).await,
+        }
+    }
+
+    // Default implementations for put_ipld/get_ipld will delegate to put_raw/get_raw
+}
+
+// Re-introduce the module structure if needed
+#[cfg(feature = "persistence")]
+pub mod rocks; // Contains RocksDbStorage 

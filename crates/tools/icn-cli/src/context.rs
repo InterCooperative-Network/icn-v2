@@ -12,6 +12,7 @@ use icn_types::dag::memory::MemoryDagStore;
 use thiserror::Error;
 use std::collections::HashMap;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use dirs;
 
 // A simple in-memory resolver for keys loaded via context
 #[derive(Debug, Error)]
@@ -132,6 +133,11 @@ impl CliContext {
         })
     }
 
+    /// Returns the configuration directory path.
+    pub fn config_dir(&self) -> &PathBuf {
+        &self._config_dir
+    }
+
     // Method to get the default path for the DAG index database
     // This path should align with the default defined in RuntimeConfig
     pub fn get_default_dag_index_path(&self) -> PathBuf {
@@ -165,7 +171,7 @@ impl CliContext {
             {
                 // Need to import RocksDbDagStore when used
                 use icn_types::dag::rocksdb::RocksDbDagStore;
-                let store = RocksDbDagStore::new(store_path).map_err(CliError::Dag)?;
+                let store = RocksDbDagStore::open(store_path).map_err(CliError::Dag)?;
                 self.dag_store = Some(Arc::new(store));
             }
             #[cfg(not(feature = "persistence"))]

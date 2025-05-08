@@ -7,7 +7,7 @@ edition = "2021"
 [features]
 default = ["mesh", "agora"]
 mesh = ["planetary-mesh"]
-persistence = ["icn-identity-core/persistence"] # Enable persistence in dependencies
+persistence = ["agoranet-core/persistence", "dep:rocksdb", "dep:once_cell", "icn-identity-core/rocksdb"]
 agora = ["dep:agoranet-core", "dep:icn-core-types", "dep:tokio", "dep:lazy_static"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -20,7 +20,7 @@ metrics-exporter-prometheus = "0.11"
 hyper = { version = "0.14", features = ["server", "http1"] }
 
 icn-types = { path = "../../common/icn-types", features = ["persistence", "async"] }
-icn-identity-core = { path = "../../common/icn-identity-core" }
+icn-identity-core = { path = "../../common/icn-identity-core", features = [] }
 icn-core-types = { path = "../../common/icn-core-types", optional = true }
 icn-runtime = { path = "../../runtime/icn-runtime" }
 planetary-mesh = { path = "../../planetary-mesh", optional = true }
@@ -48,11 +48,18 @@ num_cpus = "1.16.0"
 sys-info = "0.9.1"
 colored = "2.0"
 async-trait = "0.1"
-dirs = "5"
+dirs = { version = "5" }
 sysinfo = "0.29.10"
 wasmtime = "14.0.4"
 icn-ccl-compiler = { path = "../../ccl/icn-ccl-compiler" }
 icn-ccl-parser = { path = "../../ccl/icn-ccl-parser" }
+
+# Optional Persistence Deps (for Agora RocksDB storage)
+rocksdb = { version = "0.21", optional = true }
+once_cell = { version = "1", optional = true }
+
+# Logging
+env_logger = "0.11"
 
 # Workspace dependencies (conditionally enabled by features)
 # planetary-mesh = { path = "../../planetary-mesh", optional = true } # Removed duplicate

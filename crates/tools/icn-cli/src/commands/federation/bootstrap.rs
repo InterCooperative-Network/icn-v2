@@ -11,7 +11,7 @@ use icn_identity_core::trustbundle::storage::{
 };
 use icn_identity_core::trustbundle::storage::StoredTrustBundle;
 #[cfg(feature = "persistence")]
-use icn_identity_core::trustbundle::RocksDbTrustBundleStore;
+use icn_identity_core::trustbundle::storage::RocksDbTrustBundleStore;
 use icn_types::dag::{DagEvent, EventType, EventPayload, merkle::calculate_event_hash};
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
@@ -397,10 +397,19 @@ pub async fn run_init(
     // Step 8: Persist with store
     #[cfg(feature = "persistence")]
     let bundle_id = {
-        let db_path = context.get_db_path().join("trustbundles");
+        let db_path = context.config_dir().join("trustbundles_rocksdb");
         fs::create_dir_all(&db_path)?;
         let store = RocksDbTrustBundleStore::new(db_path)?;
-        store.store(bundle.clone()).await?
+        let stored_bundle = StoredTrustBundle {
+            id: bundle.bundle_cid.clone().unwrap_or_else(|| "genesis".to_string()),
+            federation_id: Some(fed_did.clone()),
+            bundle_type: "genesis".to_string(),
+            bundle_content: bundle.clone(),
+            created_at: Utc::now().to_rfc3339(),
+            anchored_cid: None,
+        };
+        store.save_bundle(&stored_bundle).await?;
+        stored_bundle.id
     };
     
     #[cfg(not(feature = "persistence"))]

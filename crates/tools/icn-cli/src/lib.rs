@@ -21,21 +21,21 @@ pub async fn run(cli: Cli) -> CliResult<()> {
 
     // Match on commands defined in cli.rs and call handlers from commands::*
     match cli.command {
-        Commands::Coop(cmd) => commands::handle_coop_command(&cmd, &mut ctx).await?,
-        Commands::Receipt(cmd) => commands::handle_receipt_command(&mut ctx, &cmd).await?,
-        Commands::Mesh(cmd) => commands::handle_mesh_command(cmd, &ctx).await?,
-        Commands::SyncP2P(cmd) => commands::handle_dag_sync_command(&mut ctx, &cmd).await?,
-        Commands::Community(cmd) => commands::handle_community_command(&cmd, &mut ctx).await?,
-        Commands::Federation(cmd) => commands::handle_federation_command(&mut ctx, &cmd).await?,
-        Commands::Scope(cmd) => commands::handle_scope_command(&cmd, &mut ctx).await?,
-        Commands::Dag(cmd) => commands::handle_dag_command(&mut ctx, &cmd).await?,
+        Commands::Coop { command } => commands::handle_coop_command(&command, &mut ctx).await?,
+        Commands::Receipt { command } => commands::handle_receipt_command(&mut ctx, &command).await?,
+        Commands::Mesh { command } => commands::handle_mesh_command(command, &ctx).await?,
+        Commands::SyncP2P { command } => commands::handle_dag_sync_command(&mut ctx, &command).await?,
+        Commands::Community { command } => commands::handle_community_command(&command, &mut ctx).await?,
+        Commands::Federation { command } => commands::handle_federation_command(&mut ctx, &command).await?,
+        Commands::Scope { command } => commands::handle_scope_command(&command, &mut ctx).await?,
+        Commands::Dag { command } => commands::handle_dag_command(&mut ctx, &command).await?,
         Commands::KeyGen { output } => commands::handle_key_gen(&mut ctx, &output).await?,
-        Commands::Bundle(cmd) => commands::handle_bundle_command(&mut ctx, &cmd).await?,
-        Commands::Runtime(cmd) => commands::handle_runtime_command(&mut ctx, &cmd).await?,
-        Commands::Policy(cmd) => commands::handle_policy_command(&mut ctx, &cmd).await?,
-        Commands::Proposal(cmd) => commands::handle_proposal_commands(cmd, &mut ctx).await?,
-        Commands::Vote(cmd) => commands::handle_vote_commands(cmd, &mut ctx).await?,
-        Commands::Observe(cmd) => match cmd {
+        Commands::Bundle { command } => commands::handle_bundle_command(&mut ctx, &command).await?,
+        Commands::Runtime { command } => commands::handle_runtime_command(&mut ctx, &command).await?,
+        Commands::Policy { command } => commands::handle_policy_command(&mut ctx, &command).await?,
+        Commands::Proposal { command } => commands::handle_proposal_commands(command, &mut ctx).await?,
+        Commands::Vote { command } => commands::handle_vote_commands(command, &mut ctx).await?,
+        Commands::Observe { command } => match command {
             ObservabilityCommands::DagView(options) => 
                 commands::observability::handle_dag_view(&mut ctx, &options).await?,
             ObservabilityCommands::InspectPolicy(options) => 
@@ -51,7 +51,7 @@ pub async fn run(cli: Cli) -> CliResult<()> {
         Commands::GenCliDocs(cmd) => commands::generate_cli_docs::<Cli>(&cmd)?,
 
         #[cfg(feature = "agora")]
-        Commands::Agora(cmd) => commands::handle_agora_cmd(cmd).await?,
+        Commands::Agora { command } => commands::handle_agora_cmd(command).await?,
     }
 
     Ok(())

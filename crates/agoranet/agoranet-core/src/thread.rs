@@ -8,8 +8,9 @@ use icn_core_types::Cid;
 use async_trait::async_trait;
 
 use crate::error::AgoraError;
-use crate::message::{Message, ProposalBody, ThreadAnchor};
+use crate::message::{Message, ProposalBody, ThreadAnchor, CommentBody};
 use crate::storage::AsyncStorage;
+use icn_core_types::Did;
 
 /// Represents an AgoraNet discussion thread or proposal lifecycle.
 /// Internally, it manages an ordered log of message CIDs and handles DAG anchoring.
@@ -98,6 +99,11 @@ pub trait ThreadOperations: Send + Sync {
     /// Optionally returns the CID of a new anchor if one was triggered.
     async fn append(&self, msg: Message) -> Result<(Cid, Option<Cid>), AgoraError>;
 
+    /// Posts a new comment to the thread.
+    /// Internally creates the Message envelope, stores the body, and appends.
+    /// Returns the CID of the Message envelope and an optional anchor CID.
+    async fn post_comment(&self, body: CommentBody) -> Result<(Cid, Option<Cid>), AgoraError>;
+
     // /// Loads a range of messages from the thread.
     // async fn load_range(&self, start_cid: Option<Cid>, limit: usize) -> Result<Vec<Arc<Message>>, AgoraError>;
 
@@ -132,6 +138,33 @@ impl<S: AsyncStorage + Send + Sync + 'static> ThreadOperations for AgoraThread<S
             }
         };
         Ok((cid, anchor_cid_opt))
+    }
+
+    async fn post_comment(&self, body_content: CommentBody) -> Result<(Cid, Option<Cid>), AgoraError> {
+        // 1. Store the CommentBody to get its CID
+        let body_cid = self.storage.put_ipld(&body_content).await
+            .map_err(|e| AgoraError::Storage(format!("Failed to store comment body: {}", e)))?;
+    
+        // 2. Create the Message envelope
+        // TODO: Get actual author DID. For now, using a default.
+        let author_did = Did::default(); // Placeholder for actual author DID
+        
+        // Get the CID of the last message in this thread to set as parent
+        let last_msg_cid_opt = {
+            let cids = self.message_cids.read().await;
+            cids.last().cloned()
+        };
+    
+        let msg = Message {
+            author: author_did,
+            parent: last_msg_cid_opt, // Link to previous message in this thread
+            body_cid,
+            signature: vec![], // TODO: Implement actual signing of canonical message bytes
+            timestamp: chrono::Utc::now().timestamp(),
+        };
+    
+        // 3. Append the full message using the existing append method
+        self.append(msg).await
     }
 
     /// Manually trigger anchoring based on the last message.

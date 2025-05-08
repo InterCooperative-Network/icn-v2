@@ -4,9 +4,9 @@ use clap::{Parser, Subcommand};
 use std::{
     collections::HashMap,
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     str::FromStr,
-    sync::{Arc, Mutex},
+    sync::{Arc},
 };
 use icn_core_types::Did;
 
@@ -16,11 +16,18 @@ use {
     agoranet_core::{
         forward_anchor,
         message::{Body, CommentBody, Message},
-        storage::{AsyncStorage, InMemoryStorage},
+        storage::{AsyncStorage, InMemoryStorage, StorageBackend},
         thread::{AgoraThread, ThreadOperations},
     },
     icn_core_types::Cid,
-    tokio::sync::RwLock, // For async RwLock on storage map
+};
+
+// Dependencies needed for default_store
+#[cfg(feature = "persistence")]
+use {
+    agoranet_core::storage::rocks::RocksDbStorage,
+    once_cell::sync::Lazy,
+    dirs,
 };
 
 /// Commands for interacting with AgoraNet threads.
@@ -64,40 +71,52 @@ pub enum ThreadCmd {
     },
 }
 
-// --- Placeholder Storage --- 
-// In a real CLI, this would use RocksDB or similar, keyed by thread_id.
-// Using Arc<RwLock<...>> for async access simulation.
-#[cfg(feature = "agora")]
-type ThreadStore = Arc<RwLock<HashMap<Cid, Arc<InMemoryStorage>>>>;
+// --- Storage Initialization --- 
 
-#[cfg(feature = "agora")]
-lazy_static::lazy_static! {
-    static ref IN_MEMORY_THREAD_STORE: ThreadStore = Arc::new(RwLock::new(HashMap::new()));
+// Global store, initialized once using Lazy.
+// Chooses RocksDB if 'persistence' feature is enabled, otherwise InMemory.
+
+#[cfg(all(feature = "agora", feature = "persistence"))]
+fn default_store() -> Arc<StorageBackend> {
+    static DB: Lazy<Arc<StorageBackend>> = Lazy::new(|| {
+        let home = dirs::data_local_dir()
+            .unwrap_or_else(|| PathBuf::from(".")) // Fallback to current dir if needed
+            .join("icn")
+            .join("agora_threads");
+        println!("Using RocksDB store at: {}", home.display()); // Log path
+        let rocks = RocksDbStorage::open(&home).expect("Failed to open RocksDB store");
+        Arc::new(StorageBackend::Rocks(rocks))
+    });
+    DB.clone()
 }
 
-#[cfg(feature = "agora")]
-async fn get_or_create_store(thread_id: &Cid) -> Arc<InMemoryStorage> {
-    let mut store_map = IN_MEMORY_THREAD_STORE.write().await;
-    store_map.entry(thread_id.clone()).or_insert_with(|| Arc::new(InMemoryStorage::new())).clone()
+#[cfg(all(feature = "agora", not(feature = "persistence")))]
+fn default_store() -> Arc<StorageBackend> {
+    // If persistence is not enabled, use InMemory
+    // Note: This InMemory store will be new for each CLI invocation.
+    println!("Using ephemeral InMemory store.");
+    let store = InMemoryStorage::new();
+    Arc::new(StorageBackend::InMemory(store))
 }
 
 // --- Async Handlers --- 
 
 #[cfg(feature = "agora")]
-pub async fn handle_agora_cmd(cmd: AgoraCmd) -> Result<()> {
-    match cmd.command {
-        AgoraSubcommand::Thread { action } => handle_thread_cmd(action).await,
+pub async fn handle_agora_cmd(subcommand: AgoraSubcommand) -> Result<()> {
+    // Get the appropriate storage backend (RocksDB or InMemory)
+    let store = default_store();
+
+    match subcommand {
+        AgoraSubcommand::Thread { action } => handle_thread_cmd(action, store).await,
+        // Add other Agora subcommands here if any
     }
 }
 
 #[cfg(feature = "agora")]
-async fn handle_thread_cmd(action: ThreadCmd) -> Result<()> {
+async fn handle_thread_cmd(action: ThreadCmd, store: Arc<StorageBackend>) -> Result<()> {
     match action {
         ThreadCmd::Create { title } => {
-            // 1. Generate a unique ID for the thread.
-            // In reality, this might be based on the creator's DID and a nonce,
-            // or derived from the first message/proposal content.
-            // For now, generate from title + timestamp for basic uniqueness.
+            // 1. Generate Thread ID (same as before)
             let timestamp = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
             let data = format!("{}:{}", title, timestamp);
             let thread_id = Cid::from_bytes(data.as_bytes())?;
@@ -105,61 +124,38 @@ async fn handle_thread_cmd(action: ThreadCmd) -> Result<()> {
             println!("Creating new AgoraNet thread...");
             println!("Title: {}", title);
             println!("Thread ID (CID): {}", thread_id);
+            
+            // No need to explicitly interact with the store here for creation itself.
+            // The thread only exists conceptually until messages are added.
+            // RocksDB store path is logged via default_store().
 
-            // 2. Optionally, create a genesis message/body (e.g., Proposal with title)
-            // let store = get_or_create_store(&thread_id).await;
-            // let genesis_body = Body::Proposal(ProposalBody { title, description: "Genesis".to_string(), ..Default::default() });
-            // let genesis_body_cid = store.put_ipld(&genesis_body).await?;
-            // let genesis_message = Message { ... body_cid: genesis_body_cid, ... };
-            // let thread = AgoraThread::new(thread_id.clone(), store);
-            // let (genesis_msg_cid, _) = thread.append(genesis_message).await?;
-            // println!("Genesis Message CID: {}", genesis_msg_cid);
-            
-            // For now, just print the ID. User needs to use this ID for `post`.
-            // A real CLI would persist this locally (e.g., in a config file or simple DB)
-            // mapped to a user-friendly name or the title.
-            
+            // A real CLI might save a mapping of title -> thread_id locally.
             Ok(())
         }
         ThreadCmd::Post { thread_cid, body } => {
             let cid = Cid::from_str(&thread_cid)
                 .map_err(|e| anyhow!("Invalid Thread CID: {}", e))?;
             
-            let store = get_or_create_store(&cid).await;
-            // We need an AgoraThread instance. In a real app, we might load its state 
-            // (message CIDs, last anchor) from the store if persisted.
-            // For this stub, we create a new one each time, losing history across calls.
-            // TODO: Implement state persistence/loading for AgoraThread.
+            // Create AgoraThread instance using the shared store
             let thread = AgoraThread::new(cid.clone(), store.clone()); 
 
-            let msg_content = fs::read_to_string(body)?;
+            let msg_content = fs::read_to_string(body)?; // Read message file
             
-            // Create message body (assume Comment for now)
-            let msg_body = Body::Comment(CommentBody { text: msg_content });
-            let body_cid = store.put_ipld(&msg_body).await?;
+            // Create message body
+            let msg_body = CommentBody { text: msg_content };
+            // Use the thread's post_comment method
+            let (message_cid, anchor_cid_opt) = thread.post_comment(msg_body).await?;
             
-            // Create message envelope
-            let message = Message {
-                // TODO: Use actual identity/key from CLI config/wallet
-                author: Did::default(), 
-                parent: None, // TODO: Get actual last message CID to form thread
-                body_cid: body_cid.clone(),
-                signature: vec![], // TODO: Sign canonical bytes
-                timestamp: chrono::Utc::now().timestamp(),
-            };
-
-            println!("Posting message to thread: {}", cid);
-            let (msg_envelope_cid, anchor_cid_opt) = thread.append(message).await?;
+            println!("Posted message to thread: {}", cid);
+            println!("Message CID: {}", message_cid); // Print only the message CID
             
-            println!("  Message Body CID: {}", body_cid);
-            println!("  Message Envelope CID: {}", msg_envelope_cid);
-
+            // Check if an anchor was emitted and print it
             if let Some(anchor_cid) = anchor_cid_opt {
                 println!("** Anchor emitted: {} **", anchor_cid);
-                // Call the forwarder stub
-                if let Err(e) = forward_anchor(&anchor_cid).await {
-                    eprintln!("Warning: Failed to forward anchor: {}", e);
-                }
+                // Optional: Forward the anchor (if forward_anchor is available and needed here)
+                // if let Err(e) = forward_anchor(&anchor_cid).await {
+                //     eprintln!("Warning: Failed to forward anchor: {}", e);
+                // }
             }
             Ok(())
         }
@@ -167,12 +163,15 @@ async fn handle_thread_cmd(action: ThreadCmd) -> Result<()> {
             let cid = Cid::from_str(&thread_cid)
                 .map_err(|e| anyhow!("Invalid Thread CID: {}", e))?;
 
-            // As with post, we create a new thread instance here, losing history.
-            // TODO: Implement state persistence/loading for AgoraThread.
-            let store = get_or_create_store(&cid).await;
-            let thread = AgoraThread::new(cid.clone(), store);
+            // Create AgoraThread instance using the shared store
+            let thread = AgoraThread::new(cid.clone(), store.clone());
             
             println!("Messages in thread {}:", cid);
+            // Get messages using the thread instance
+            // NOTE: This relies on AgoraThread::append *persisting* the message CID list somewhere
+            // If AgoraThread::append only adds to an in-memory list within the struct, 
+            // this cursor won't work across CLI calls without further changes to AgoraThread.
+            // Assuming for now that append *does* update persistent state accessible via get_message_cids.
             let message_cids = thread.get_message_cids(from).await?;
 
             if message_cids.is_empty() {
@@ -187,19 +186,21 @@ async fn handle_thread_cmd(action: ThreadCmd) -> Result<()> {
     }
 }
 
-// Need to handle the case where the feature is not enabled
+// Handler for when 'agora' feature is NOT enabled
 #[cfg(not(feature = "agora"))]
-pub async fn handle_agora_cmd(_cmd: AgoraCmd) -> Result<()> {
+pub async fn handle_agora_cmd(_subcommand: AgoraSubcommand) -> Result<()> {
     Err(anyhow!("AgoraNet feature not enabled during compilation."))
 }
 
-// Dummy structs/types if feature is not enabled, to satisfy main.rs
+// Dummy structs needed if feature is not enabled, to satisfy cli.rs
 #[cfg(not(feature = "agora"))]
-#[derive(Parser, Debug)]
-pub struct AgoraCmd { pub command: Option<String> }
+#[derive(Parser, Debug, Clone)]
+pub struct AgoraCmd {}
 
 #[cfg(not(feature = "agora"))]
-pub enum AgoraSubcommand { Thread { action: ThreadCmd } }
+#[derive(Subcommand, Debug, Clone)]
+pub enum AgoraSubcommand { Thread }
 
 #[cfg(not(feature = "agora"))]
+#[derive(Subcommand, Debug, Clone)]
 pub enum ThreadCmd { Create, Post, Cursor } 

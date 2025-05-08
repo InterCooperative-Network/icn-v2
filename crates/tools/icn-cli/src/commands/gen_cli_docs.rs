@@ -1,10 +1,10 @@
-use clap::Parser;
+use clap::{Parser, Args};
 use std::path::PathBuf;
 use anyhow::Result;
 use crate::cli::Cli;
 
 /// Command for generating CLI documentation.
-#[derive(Parser, Debug, Clone)]
+#[derive(Args, Debug, Clone)]
 pub struct GenCliDocsCmd {
     /// Directory to output the generated Markdown files.
     #[clap(short, long, default_value = "./docs/cli")]

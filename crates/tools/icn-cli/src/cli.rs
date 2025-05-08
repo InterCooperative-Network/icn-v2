@@ -1,5 +1,5 @@
 #![allow(missing_docs)] // TODO: Remove this once docs are added
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, Args};
 use std::path::PathBuf;
 
 // Re-export command modules if they are not public or are complex
@@ -11,9 +11,8 @@ use std::path::PathBuf;
 // make their `*Commands` structs public.
 // E.g., in `commands/dag.rs` it should be `pub struct DagCommands { ... }`
 
-// Import command structs from the commands module
-// Use fully qualified paths to potentially help clap resolve traits.
-// use crate::commands::*; // Removed wildcard import
+// Import command structs using fully qualified paths
+// No longer using wildcard import here.
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -25,7 +24,7 @@ pub struct Cli {
     pub command: Commands,
 }
 
-#[derive(clap::Args, Debug)]
+#[derive(Args, Debug)] // GlobalOpts should derive Args
 pub struct GlobalOpts {
      #[clap(short, long, action = clap::ArgAction::Count, global = true)]
      pub verbose: u8,
@@ -33,25 +32,42 @@ pub struct GlobalOpts {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum Commands {
-    Coop(crate::commands::coop::CoopCommands),
-    Receipt(crate::commands::receipt::ReceiptCommands),
-    Mesh(crate::commands::mesh::MeshCommands),
-    SyncP2P(crate::commands::sync_p2p::DagSyncCommands),
-    Community(crate::commands::community::CommunityCommands),
-    Federation(crate::commands::federation::FederationCommands),
-    Scope(crate::commands::scope::ScopeCommands),
-    Dag(crate::commands::dag::DagCommands),
+    /// Manage Cooperatives
+    Coop { #[clap(subcommand)] command: crate::commands::coop::CoopCommands },
+    /// Manage Receipts
+    Receipt { #[clap(subcommand)] command: crate::commands::receipt::ReceiptCommands },
+    /// Manage Planetary Mesh
+    Mesh { #[clap(subcommand)] command: crate::commands::mesh::MeshCommands },
+    /// Manage P2P DAG Sync
+    SyncP2P { #[clap(subcommand)] command: crate::commands::sync_p2p::DagSyncCommands },
+    /// Manage Communities
+    Community { #[clap(subcommand)] command: crate::commands::community::CommunityCommands },
+    /// Manage Federations
+    Federation { #[clap(subcommand)] command: crate::commands::federation::FederationCommands },
+    /// Manage Scopes (Coops/Communities)
+    Scope { #[clap(subcommand)] command: crate::commands::scope::ScopeCommands },
+    /// Manage DAGs
+    Dag { #[clap(subcommand)] command: crate::commands::dag::DagCommands },
+    /// Manage Keys
     KeyGen { output: Option<std::path::PathBuf> },
-    Bundle(crate::commands::bundle::BundleCommands),
-    Runtime(crate::commands::runtime::RuntimeCommands),
-    Policy(crate::commands::policy::PolicyCommands),
-    Proposal(crate::commands::proposal::ProposalCommands),
-    Vote(crate::commands::vote::VoteCommands),
-    Observe(crate::commands::observability::ObservabilityCommands),
+    /// Manage Bundles
+    Bundle { #[clap(subcommand)] command: crate::commands::bundle::BundleCommands },
+    /// Manage Runtimes
+    Runtime { #[clap(subcommand)] command: crate::commands::runtime::RuntimeCommands },
+    /// Manage Policies
+    Policy { #[clap(subcommand)] command: crate::commands::policy::PolicyCommands },
+    /// Manage Proposals
+    Proposal { #[clap(subcommand)] command: crate::commands::proposal::ProposalCommands },
+    /// Manage Votes
+    Vote { #[clap(subcommand)] command: crate::commands::vote::VoteCommands },
+    /// Observe system state
+    Observe { #[clap(subcommand)] command: crate::commands::observability::ObservabilityCommands },
+    /// Run diagnostics
     Doctor,
-    GenCliDocs(crate::commands::gen_cli_docs::GenCliDocsCmd),
+    /// Generate CLI documentation
+    GenCliDocs(crate::commands::gen_cli_docs::GenCliDocsCmd), // This holds an Args struct now
     
     /// Interact with AgoraNet deliberation threads.
     #[cfg(feature = "agora")]
-    Agora(crate::commands::agora::AgoraCmd),
+    Agora { #[clap(subcommand)] command: crate::commands::agora::AgoraSubcommand },
 } 
