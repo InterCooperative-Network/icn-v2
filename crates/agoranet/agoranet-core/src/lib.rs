@@ -1,4 +1,29 @@
 #![deny(unsafe_code)]
-//! agoranet-core placeholder
+#![warn(missing_docs)] // Good practice for a new foundational crate
 
-pub fn placeholder() {}
+//! Core types and logic for AgoraNet, the ICN Deliberation Layer.
+//! 
+//! Provides structures for messages, threads, storage, and error handling.
+
+/// Error types for AgoraNet operations.
+pub mod error;
+/// Defines the core Message structure and body content types.
+pub mod message;
+/// Defines the AsyncStorage trait for pluggable storage backends.
+pub mod storage;
+/// Defines the AgoraThread structure and associated operations.
+pub mod thread;
+
+// Re-exports based on the battle-plan hint
+// These will cause errors until the types are defined in their respective modules.
+pub use message::{Message, Body as MessageBody, ThreadAnchor}; // Renamed Body to avoid conflict if thread::Body exists
+pub use thread::{AgoraThread, Proposal, ThreadOperations}; // Added ThreadOperations trait
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn it_works() {
+        let result = 2 + 2;
+        assert_eq!(result, 4);
+    }
+}
