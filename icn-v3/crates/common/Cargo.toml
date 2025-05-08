@@ -1,0 +1,29 @@
+[package]
+name = "icn-common"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Common types and traits for the Inter-Cooperative Network"
+
+[dependencies]
+# Serialization and error handling
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+# Async utilities
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# Cryptography
+ed25519-dalek = { workspace = true }
+sha2 = { workspace = true }
+hex = "0.4"
+rand = "0.8"
+
+# Utility
+tracing = { workspace = true }
+futures = { workspace = true }
+once_cell = { workspace = true } 

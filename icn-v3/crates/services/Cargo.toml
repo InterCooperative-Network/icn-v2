@@ -1,0 +1,37 @@
+[package]
+name = "icn-services"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Core services for the Inter-Cooperative Network"
+
+[dependencies]
+# Internal crates
+icn-common = { path = "../common" }
+
+# Serialization and error handling
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+# Async utilities
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# Storage
+rocksdb = "0.21"
+
+# Cryptography
+ed25519-dalek = { workspace = true }
+sha2 = { workspace = true }
+
+# Utility
+tracing = { workspace = true }
+futures = { workspace = true }
+once_cell = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.8"
+tokio-test = "0.4" 

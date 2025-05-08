@@ -1,0 +1,36 @@
+[package]
+name = "icn-ccl"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Cooperative Control Logic for the Inter-Cooperative Network"
+
+[dependencies]
+# Internal crates
+icn-common = { path = "../common" }
+icn-services = { path = "../services" }
+
+# Serialization and error handling
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+# Async utilities
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# Cryptography
+ed25519-dalek = { workspace = true }
+sha2 = { workspace = true }
+
+# Utility
+tracing = { workspace = true }
+futures = { workspace = true }
+once_cell = { workspace = true }
+uuid = { version = "1.4", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tempfile = "3.8"
+tokio-test = "0.4" 
