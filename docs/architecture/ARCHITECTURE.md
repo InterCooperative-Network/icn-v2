@@ -2,7 +2,7 @@
 
 ## 1. Introduction
 
-The InterCooperative Network (ICN) is an infrastructure stack for democratic, federated, verifiable governance. This document provides a comprehensive technical overview of the ICN system architecture, focusing on how its components interrelate to support a new paradigm of cooperative coordination. It is intended as a companion to [`OVERVIEW.md`](../OVERVIEW.md), offering deeper insight into the inner mechanics of the system.
+The InterCooperative Network (ICN) is an infrastructure stack for democratic, federated, verifiable governance. This document provides a comprehensive technical overview of the ICN system architecture, focusing on how its components interrelate to support a new paradigm of cooperative coordination. It is intended as a companion to [`OVERVIEW.md`](../index.md), offering deeper insight into the inner mechanics of the system.
 
 At its core, ICN is built on principles of **modularity**, **cryptographic verifiability**, and **trust-first execution**. It fuses identity, deliberation, execution, and economic metering into a unified system governed by decentralized append-only DAGs.
 

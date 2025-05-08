@@ -1,6 +1,6 @@
 # ICN Observability Guide
 
-This guide provides a comprehensive overview of the ICN federation observability system and how to use the observability dashboard to gain insights into your network.
+This guide provides a comprehensive overview of the ICN federation observability system and how to use the observability dashboard to gain insights into your network. For a general project overview, see the main [project README](https://github.com/InterCooperative-Network/icn-v2/blob/main/README.md).
 
 ## 1. Introduction to Observability in ICN
 

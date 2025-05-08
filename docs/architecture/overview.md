@@ -102,10 +102,10 @@ The vision is clear: **a post-capitalist digital infrastructure for real-world c
 
 ## 7. Getting Started
 
-* ✅ [Try the ICN Wallet](../wallet/README.md)
-* 🚀 [Bootstrap a Federation](../runtime/docs/federation-bootstrap.md)
-* 🔍 [Explore a DAG Thread](../runtime/docs/DAG_SYNC.md)
-* 📄 [Issue or Verify a Credential](../identity/README.md)
+* ✅ [Try the ICN Wallet](https://github.com/InterCooperative-Network/icn-v2/tree/main/crates/wallet/icn-wallet/README.md)
+* 🚀 [Bootstrap a Federation](https://github.com/InterCooperative-Network/icn-v2/blob/main/crates/runtime/icn-runtime/docs/federation-bootstrap.md)
+* 🔍 [Explore a DAG Thread](https://github.com/InterCooperative-Network/icn-v2/blob/main/crates/runtime/icn-runtime/docs/DAG_SYNC.md)
+* 📄 [Issue or Verify a Credential](https://github.com/InterCooperative-Network/icn-v2/tree/main/crates/common/icn-identity-core/README.md)
 
 ---
 

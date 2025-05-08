@@ -22,14 +22,14 @@ The walkthrough demonstrates these core ICN capabilities:
 
 The walkthrough exercises these primary crates:
 
-- [`icn-cli`](../../crates/tools/icn-cli) - Command-line interface
-- [`icn-identity-core`](../../crates/common/icn-identity-core) - DID key management
-- [`icn-types`](../../crates/common/icn-types) - Core data structures
-- [`icn-runtime`](../../crates/runtime/icn-runtime) - WASM execution environment
-- [`planetary-mesh`](../../crates/planetary-mesh) - P2P mesh networking
-- [`agoranet-core`](../../crates/agoranet/agoranet-core) - Federation governance
-- [`icn-wallet`](../../crates/wallet/icn-wallet) - Identity and credential management
-- [`icn-ccl-compiler`](../../crates/ccl/icn-ccl-compiler) - Contract Chain Language
+- [`icn-cli`](https://github.com/InterCooperative-Network/icn-v2/tree/main/crates/tools/icn-cli) - Command-line interface
+- [`icn-identity-core`](https://github.com/InterCooperative-Network/icn-v2/tree/main/crates/common/icn-identity-core) - DID key management
+- [`icn-types`](https://github.com/InterCooperative-Network/icn-v2/tree/main/crates/common/icn-types) - Core data structures
+- [`icn-runtime`](https://github.com/InterCooperative-Network/icn-v2/tree/main/crates/runtime/icn-runtime) - WASM execution environment
+- [`planetary-mesh`](https://github.com/InterCooperative-Network/icn-v2/tree/main/crates/planetary-mesh) - P2P mesh networking
+- [`agoranet-core`](https://github.com/InterCooperative-Network/icn-v2/tree/main/crates/agoranet/agoranet-core) - Federation governance
+- [`icn-wallet`](https://github.com/InterCooperative-Network/icn-v2/tree/main/crates/wallet/icn-wallet) - Identity and credential management
+- [`icn-ccl-compiler`](https://github.com/InterCooperative-Network/icn-v2/tree/main/crates/ccl/icn-ccl-compiler) - Contract Chain Language
 
 ### CLI Command Coverage
 
@@ -44,7 +44,7 @@ The walkthrough exercises these primary crates:
 
 ## Walkthrough Script
 
-The complete developer journey is automated in [`scripts/dev_walkthrough.sh`](../../scripts/dev_walkthrough.sh). You can run it directly:
+The complete developer journey is automated in [`scripts/dev_walkthrough.sh`](https://github.com/InterCooperative-Network/icn-v2/blob/main/scripts/dev_walkthrough.sh). You can run it directly:
 
 ```bash
 ./scripts/dev_walkthrough.sh
@@ -70,7 +70,7 @@ To clean up the working directory after completion:
 cargo run --release -p icn-cli -- key-gen --output founder-key.json
 ```
 
-This step uses [`icn-identity-core`](../../crates/common/icn-identity-core) to generate ed25519 keypairs for DIDs. These identities form the foundation of all authenticated operations in ICN.
+This step uses [`icn-identity-core`](https://github.com/InterCooperative-Network/icn-v2/tree/main/crates/common/icn-identity-core) to generate ed25519 keypairs for DIDs. These identities form the foundation of all authenticated operations in ICN.
 
 ### 2. Federation Initialization
 
@@ -81,7 +81,7 @@ cargo run --release -p icn-cli -- federation init \
   --key founder-key.json
 ```
 
-Federation initialization uses [`agoranet-core`](../../crates/agoranet/agoranet-core) to create a genesis DAG block with the founding participants and governance rules.
+Federation initialization uses [`agoranet-core`](https://github.com/InterCooperative-Network/icn-v2/tree/main/crates/agoranet/agoranet-core) to create a genesis DAG block with the founding participants and governance rules.
 
 ### 3. Node Startup & P2P Networking
 
@@ -94,7 +94,7 @@ cargo run --release -p icn-cli -- federation node start \
   --api-addr "127.0.0.1:5000"
 ```
 
-Nodes connect via libp2p in [`planetary-mesh`](../../crates/planetary-mesh) to form a decentralized network for DAG synchronization and message passing.
+Nodes connect via libp2p in [`planetary-mesh`](https://github.com/InterCooperative-Network/icn-v2/tree/main/crates/planetary-mesh) to form a decentralized network for DAG synchronization and message passing.
 
 ### 4. Policy Creation with CCL
 
@@ -104,7 +104,7 @@ cargo run --release -p icn-cli -- ccl compile \
   --output proposal.wasm
 ```
 
-The Contract Chain Language (CCL) compiler [`icn-ccl-compiler`](../../crates/ccl/icn-ccl-compiler) translates human-readable governance rules into WASM for deterministic execution.
+The Contract Chain Language (CCL) compiler [`icn-ccl-compiler`](https://github.com/InterCooperative-Network/icn-v2/tree/main/crates/ccl/icn-ccl-compiler) translates human-readable governance rules into WASM for deterministic execution.
 
 ### 5-6. Proposal Submission, Voting & Execution
 
@@ -116,7 +116,7 @@ cargo run --release -p icn-cli -- federation submit-proposal \
   --to http://127.0.0.1:5000
 ```
 
-Proposals follow a democratic workflow in [`agoranet-core`](../../crates/agoranet/agoranet-core):
+Proposals follow a democratic workflow in [`agoranet-core`](https://github.com/InterCooperative-Network/icn-v2/tree/main/crates/agoranet/agoranet-core):
 1. Submission (anchored in the DAG)
 2. Voting (cryptographically signed)
 3. Quorum verification
@@ -130,7 +130,7 @@ cargo run --release -p icn-cli -- wallet init \
   --output-dir ./wallet-data
 ```
 
-The [`icn-wallet`](../../crates/wallet/icn-wallet) manages identities, syncs with federations, and stores verifiable credentials.
+The [`icn-wallet`](https://github.com/InterCooperative-Network/icn-v2/tree/main/crates/wallet/icn-wallet) manages identities, syncs with federations, and stores verifiable credentials.
 
 ### 8-11. Mesh Computation Flow
 
@@ -142,11 +142,11 @@ cargo run --release -p icn-cli -- mesh submit-job \
   --to http://127.0.0.1:5000
 ```
 
-The mesh computation system in [`planetary-mesh`](../../crates/planetary-mesh) orchestrates distributed tasks:
+The mesh computation system in [`planetary-mesh`](https://github.com/InterCooperative-Network/icn-v2/tree/main/crates/planetary-mesh) orchestrates distributed tasks:
 1. Job submission with resource requirements
 2. Provider bidding based on capabilities
 3. Bid selection and dispatch
-4. Execution in the [`icn-runtime`](../../crates/runtime/icn-runtime) WASM environment
+4. Execution in the [`icn-runtime`](https://github.com/InterCooperative-Network/icn-v2/tree/main/crates/runtime/icn-runtime) WASM environment
 5. Result verification and receipt generation
 
 ### 12. Credential Export
