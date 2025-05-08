@@ -59,4 +59,7 @@ job-status:
 
 # Verify an execution receipt (edit <cid> as needed)
 verify-receipt:
-    cargo run --manifest-path crates/tools/icn-cli/Cargo.toml -- wallet verify-receipt --id <cid> 
+    cargo run --manifest-path crates/tools/icn-cli/Cargo.toml -- wallet verify-receipt --id <cid>
+
+gen-cli-docs:
+    cargo run --package icn-cli --bin gen_clap_docs 

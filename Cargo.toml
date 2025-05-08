@@ -3,10 +3,12 @@ members = [
     "crates/common/icn-core-types",
     "crates/common/icn-types",
     "crates/common/icn-identity-core",
+    "crates/common/icn-economics",
     "crates/runtime/icn-runtime",
     "crates/planetary-mesh",
     "crates/wallet/icn-wallet",
     "crates/tools/icn-cli",
+    "tools/gen-crate-map",
     "tests",
     "tests/integration"
 ]

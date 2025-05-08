@@ -112,4 +112,47 @@ jobs:
       
       - name: Run benchmarks
         run: cargo bench
+
+  feature-matrix:
+    name: Feature Compatibility Matrix (icn-types)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Install cargo-hack
+        run: cargo install cargo-hack
+
+      - name: Check all feature combinations for icn-types
+        run: |
+          cargo hack check \
+            -p icn-types \
+            --feature-powerset \
+            --skip-no-default-features \
+            --optional-deps=allow \
+            --deny-warnings
+
+  cli-docs:
+    name: CLI Docs Are Up To Date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Run CLI doc generator
+        # Ensure all necessary features are enabled for icn-cli if doc generation depends on them
+        run: cargo run --package icn-cli --bin gen_clap_docs
+
+      - name: Fail if docs out of date
+        run: git diff --exit-code docs/generated/icn.md
       

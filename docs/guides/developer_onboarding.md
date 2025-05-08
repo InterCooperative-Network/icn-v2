@@ -92,7 +92,7 @@ All execution results are:
 
 ```bash
 # Submit a mesh job to the network
-cargo run -- mesh submit-job \
+cargo run --release --bin icn-cli -- mesh submit-job \
   --manifest ../../examples/sample_job.toml \
   --to http://localhost:5001
 ```
@@ -100,7 +100,7 @@ cargo run -- mesh submit-job \
 View results:
 
 ```bash
-cargo run -- mesh job-status --job-id <id>
+cargo run --release --bin icn-cli -- mesh job-status --job-id <id>
 ```
 
 ---
