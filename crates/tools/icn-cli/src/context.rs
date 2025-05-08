@@ -132,6 +132,16 @@ impl CliContext {
         })
     }
 
+    // Method to get the default path for the DAG index database
+    // This path should align with the default defined in RuntimeConfig
+    pub fn get_default_dag_index_path(&self) -> PathBuf {
+        // For consistency, let's use the same logic as RuntimeConfig default
+        // which was "runtime_data/dag_index". We might want to make this
+        // configurable or derived from a shared constant later.
+        // Note: This doesn't use self._config_dir (.icn) by default.
+        PathBuf::from("runtime_data/dag_index") 
+    }
+
     // Note: These methods use &mut self because they modify the Option fields.
     // If context needs to be shared immutably across threads while loading,
     // internal RwLocks or RefCells might be needed for dag_store/loaded_key.
@@ -330,5 +340,22 @@ impl icn_types::dag::DagStore for MutableDagStore {
     
     async fn verify_branch(&self, tip: &Cid, resolver: &(dyn PublicKeyResolver + Send + Sync)) -> Result<(), DagError> {
         self.inner.verify_branch(tip, resolver).await
+    }
+} 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_get_default_dag_index_path() {
+        // Create a context (verbose=false doesn't affect this method)
+        let context = CliContext::new(false).expect("Failed to create CliContext");
+        
+        let expected_path = PathBuf::from("runtime_data/dag_index");
+        let actual_path = context.get_default_dag_index_path();
+        
+        assert_eq!(actual_path, expected_path, "Default DAG index path should match the expected value");
     }
 } 

@@ -356,4 +356,160 @@ impl ValidationResult {
             ValidationResult::OtherError(err) => Err(err),
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dag_indexing::{DagIndex, IndexError};
+    use icn_types::dag::{DagStore, DagError, SignedDagNode, DagNode, DagNodeMetadata, NodeScope, DagPayload};
+    use icn_types::{Did, Cid, ScopePolicyConfig, PolicyError};
+    use crate::policy::{MembershipIndex, PolicyLoader, ScopeType};
+    use std::sync::{Arc, Mutex};
+    use std::collections::{HashMap, HashSet};
+    use async_trait::async_trait;
+    use std::str::FromStr;
+    use chrono::Utc;
+    use ed25519_dalek::Signature;
+
+    // --- Mock Implementations ---
+
+    // Mock DagStore
+    #[derive(Clone, Default)]
+    struct MockDagStore {
+        added_nodes: Arc<Mutex<HashSet<String>>>,
+    }
+    #[async_trait]
+    impl DagStore for MockDagStore {
+        async fn add_node(&mut self, node: SignedDagNode) -> Result<Cid, DagError> {
+            let cid = node.calculate_cid().unwrap_or_else(|_| Cid::from_bytes(b"mock_cid_error").unwrap());
+            let mut nodes = self.added_nodes.lock().unwrap();
+            nodes.insert(cid.to_string());
+            Ok(cid)
+        }
+        // Implement other methods as needed, potentially returning errors or default values
+        async fn get_node(&self, _cid: &Cid) -> Result<SignedDagNode, DagError> { Err(DagError::NodeNotFound(Cid::from_bytes(b"dummy").unwrap())) }
+        async fn get_data(&self, _cid: &Cid) -> Result<Option<Vec<u8>>, DagError> { Ok(None) }
+        async fn get_tips(&self) -> Result<Vec<Cid>, DagError> { Ok(vec![]) }
+        async fn get_ordered_nodes(&self) -> Result<Vec<SignedDagNode>, DagError> { Ok(vec![]) }
+        async fn get_nodes_by_author(&self, _author: &Did) -> Result<Vec<SignedDagNode>, DagError> { Ok(vec![]) }
+        async fn get_nodes_by_payload_type(&self, _payload_type: &str) -> Result<Vec<SignedDagNode>, DagError> { Ok(vec![]) }
+        async fn find_path(&self, _from: &Cid, _to: &Cid) -> Result<Vec<SignedDagNode>, DagError> { Ok(vec![]) }
+        async fn verify_branch(&self, _tip: &Cid, _resolver: &(dyn icn_types::dag::PublicKeyResolver + Send + Sync)) -> Result<(), DagError> { Ok(()) }
+    }
+
+    // Mock DagIndex
+    #[derive(Clone, Default)]
+    struct MockDagIndex {
+        indexed_nodes: Arc<Mutex<HashMap<String, (Did, NodeScope)>>>,
+    }
+    impl DagIndex for MockDagIndex {
+        fn add_node_to_index(&self, cid: &Cid, metadata_provider: &DagNode) -> Result<(), IndexError> {
+            let mut indexed = self.indexed_nodes.lock().unwrap();
+            indexed.insert(cid.to_string(), (metadata_provider.author.clone(), metadata_provider.metadata.scope.clone()));
+            Ok(())
+        }
+        fn nodes_by_did(&self, _did: &Did) -> Result<Vec<Cid>, IndexError> { Ok(vec![]) }
+        fn nodes_by_scope(&self, _scope: &NodeScope) -> Result<Vec<Cid>, IndexError> { Ok(vec![]) }
+    }
+
+    // Mock MembershipIndex
+    #[derive(Clone, Default)]
+    struct MockMembershipIndex {}
+    impl MembershipIndex for MockMembershipIndex {
+        // Implement methods if needed by tests
+    }
+
+    // Mock PolicyLoader
+    #[derive(Clone, Default)]
+    struct MockPolicyLoader {
+        allow_all: bool, // Simple flag to control authorization check
+    }
+    impl PolicyLoader for MockPolicyLoader {
+        fn check_authorization(&self, _scope_type: &str, _scope_id: &str, _action: &str, _principal: &Did) -> Result<(), PolicyError> {
+            if self.allow_all {
+                Ok(())
+            } else {
+                Err(PolicyError::UnauthorizedAction("Mock Deny".to_string()))
+            }
+        }
+        fn load_policy(&self, _scope_type: &str, _scope_id: &str) -> Result<Arc<ScopePolicyConfig>, PolicyError> {
+            Err(PolicyError::PolicyNotFound("Mock".to_string()))
+        }
+    }
+    impl MockPolicyLoader {
+        fn allow_all() -> Self { Self { allow_all: true } }
+        // fn deny_all() -> Self { Self { allow_all: false } } // If needed
+    }
+
+    // Helper to create a simple test node
+    fn create_test_node(author_did_str: &str, scope: NodeScope, scope_id: Option<&str>) -> SignedDagNode {
+        let author = Did::from_str(author_did_str).unwrap();
+        let metadata = DagNodeMetadata {
+            federation_id: "test-fed".into(),
+            timestamp: Utc::now(),
+            label: None,
+            scope: scope.clone(),
+            scope_id: scope_id.map(String::from),
+        };
+        let node = DagNode {
+            author: author.clone(),
+            metadata,
+            payload: DagPayload::Raw(b"test payload".to_vec()),
+            parents: Vec::new(),
+        };
+        // Create a placeholder signature
+        let sig_bytes = [0u8; 64];
+        let signature = Signature::from_bytes(&sig_bytes);
+        SignedDagNode { node, signature, cid: None }
+    }
+
+    // --- Test Cases ---
+
+    #[tokio::test]
+    async fn test_process_node_valid_adds_to_store_and_index() {
+        // Arrange
+        let mock_store = MockDagStore::default();
+        let mock_index = MockDagIndex::default();
+        let mock_membership = Arc::new(MockMembershipIndex::default());
+        let mock_policy_loader = Arc::new(MockPolicyLoader::allow_all()); // Allow the action
+
+        let processor = DagProcessor::new(
+            mock_membership,
+            mock_policy_loader,
+            Arc::new(mock_index.clone()), // Pass Arc<MockDagIndex>
+        );
+
+        let test_node = create_test_node("did:icn:test:author1", NodeScope::Cooperative, Some("coop:test"));
+        let expected_cid = test_node.calculate_cid().unwrap();
+
+        let mut store_instance = mock_store.clone(); // Clone for mutable use
+
+        // Act
+        let result = processor.process_node(test_node, &mut store_instance).await;
+
+        // Assert
+        assert!(result.is_ok(), "process_node should succeed for valid node");
+        let processed_cid = result.unwrap();
+        assert_eq!(processed_cid, expected_cid, "Returned CID should match calculated CID");
+
+        // Check if added to store
+        let added_to_store = mock_store.added_nodes.lock().unwrap().contains(&expected_cid.to_string());
+        assert!(added_to_store, "Node should be added to the DAG store");
+
+        // Check if added to index
+        let indexed_data = mock_index.indexed_nodes.lock().unwrap();
+        assert!(indexed_data.contains_key(&expected_cid.to_string()), "Node should be added to the DAG index");
+        if let Some((indexed_author, indexed_scope)) = indexed_data.get(&expected_cid.to_string()) {
+            assert_eq!(indexed_author.to_string(), "did:icn:test:author1");
+            assert_eq!(*indexed_scope, NodeScope::Cooperative);
+        } else {
+            panic!("Indexed data not found for CID");
+        }
+    }
+
+    // TODO: Add test case for policy violation (using MockPolicyLoader::deny_all())
+    // TODO: Add test case for exemption logic (is_exempt_from_validation)
+    // TODO: Add test cases for process_policy_update if needed
+
 } 

@@ -99,4 +99,116 @@ impl DagIndex for SledDagIndex {
             None => Ok(vec![]), // Return an empty vector if no CIDs are associated with the scope
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use icn_types::dag::{DagNode, DagNodeMetadata, NodeScope, DagPayload}; // Use actual types
+    use icn_identity_core::Did;
+    use icn_core_types::Cid;
+    use tempfile::tempdir;
+    use std::str::FromStr;
+    use multihash::{Code, MultihashDigest};
+
+    // --- Test Helpers (similar to integration test) ---
+    fn mock_did(name: &str) -> Did {
+        Did::from_str(&format!("did:icn:test-{}", name)).unwrap()
+    }
+
+    fn mock_cid(id: u8) -> Cid {
+        let data = format!("node-content-{}", id).into_bytes();
+        Cid::new_v1(0x55, Code::Sha2_256.digest(&data))
+    }
+
+    // Creates a DagNode (not SignedDagNode as indexer uses DagNode)
+    fn mock_dag_node(index: u32, author: Did, scope: NodeScope) -> DagNode {
+        let metadata = DagNodeMetadata {
+            federation_id: "test-fed".into(),
+            timestamp: chrono::Utc::now(),
+            label: Some(format!("node-label-{}", index)),
+            scope: scope.clone(),
+            scope_id: Some(format!("scope-id-{}", index % 3)),
+        };
+
+        DagNode {
+            author: author.clone(),
+            metadata,
+            payload: DagPayload::Raw(format!("payload-data-{}", index).into_bytes()),
+            parents: Vec::new(),
+        }
+    }
+    // --- End Test Helpers ---
+
+    #[test]
+    fn test_sled_index_add_and_query() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let index_path = temp_dir.path().to_str().unwrap();
+        let index = SledDagIndex::new(index_path).expect("Failed to create SledDagIndex");
+
+        let did_a = mock_did("alice");
+        let did_b = mock_did("bob");
+        let scope_a = NodeScope::Community; // Keep it simple for testing
+        let scope_b = NodeScope::Cooperative;
+
+        let cid_1 = mock_cid(1);
+        let node_1 = mock_dag_node(1, did_a.clone(), scope_a.clone());
+        
+        let cid_2 = mock_cid(2);
+        let node_2 = mock_dag_node(2, did_b.clone(), scope_b.clone());
+        
+        let cid_3 = mock_cid(3);
+        let node_3 = mock_dag_node(3, did_a.clone(), scope_a.clone()); // did_a, scope_a again
+
+        // Index nodes
+        index.add_node_to_index(&cid_1, &node_1).unwrap();
+        index.add_node_to_index(&cid_2, &node_2).unwrap();
+        index.add_node_to_index(&cid_3, &node_3).unwrap();
+
+        // --- Verify nodes_by_did ---
+        let cids_by_did_a = index.nodes_by_did(&did_a).unwrap();
+        assert_eq!(cids_by_did_a.len(), 2, "Expected 2 nodes for DID A");
+        assert!(cids_by_did_a.contains(&cid_1));
+        assert!(cids_by_did_a.contains(&cid_3));
+
+        let cids_by_did_b = index.nodes_by_did(&did_b).unwrap();
+        assert_eq!(cids_by_did_b.len(), 1, "Expected 1 node for DID B");
+        assert!(cids_by_did_b.contains(&cid_2));
+
+        let did_c = mock_did("charlie"); // Non-existent DID
+        let cids_by_did_c = index.nodes_by_did(&did_c).unwrap();
+        assert!(cids_by_did_c.is_empty(), "Expected no nodes for DID C");
+
+        // --- Verify nodes_by_scope ---
+        let cids_by_scope_a = index.nodes_by_scope(&scope_a).unwrap();
+        assert_eq!(cids_by_scope_a.len(), 2, "Expected 2 nodes for Scope A");
+        assert!(cids_by_scope_a.contains(&cid_1));
+        assert!(cids_by_scope_a.contains(&cid_3));
+
+        let cids_by_scope_b = index.nodes_by_scope(&scope_b).unwrap();
+        assert_eq!(cids_by_scope_b.len(), 1, "Expected 1 node for Scope B");
+        assert!(cids_by_scope_b.contains(&cid_2));
+
+        let scope_c = NodeScope::Federation; // Non-existent Scope
+        let cids_by_scope_c = index.nodes_by_scope(&scope_c).unwrap();
+        assert!(cids_by_scope_c.is_empty(), "Expected no nodes for Scope C");
+    }
+
+    #[test]
+    fn test_sled_index_empty_queries() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let index_path = temp_dir.path().to_str().unwrap();
+        let index = SledDagIndex::new(index_path).expect("Failed to create SledDagIndex");
+
+        let did_a = mock_did("alice");
+        let scope_a = NodeScope::Community;
+
+        let cids_by_did = index.nodes_by_did(&did_a).unwrap();
+        assert!(cids_by_did.is_empty(), "Expected empty result for DID on empty index");
+
+        let cids_by_scope = index.nodes_by_scope(&scope_a).unwrap();
+        assert!(cids_by_scope.is_empty(), "Expected empty result for scope on empty index");
+    }
+
+    // TODO: Add tests for error conditions (sled errors, serialization errors if possible)
 } 
