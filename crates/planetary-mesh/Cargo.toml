@@ -7,6 +7,8 @@ edition = "2021"
 # ICN dependencies
 icn-types = { path = "../common/icn-types", features = ["persistence", "async"] }
 icn-identity-core = { path = "../common/icn-identity-core" }
+icn-core-types = { path = "../common/icn-core-types" }
+icn-economics = { path = "../common/icn-economics" }
 
 # Async/networking
 tokio = { version = "1.28", features = ["full"] }
@@ -26,7 +28,26 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # Cryptography
 rand = "0.8"
+ed25519-dalek = { version = "2.0.0", features = ["serde"] }
+hex = "0.4"
+multibase = "0.9"
+sha2 = "0.10"
 
 # System info
 sys-info = "0.9"
-num_cpus = "1.16" 
+num_cpus = "1.16"
+
+# Logging and metrics
+log = "0.4"
+prometheus = { version = "0.13", features = ["process"] }
+
+# Other
+uuid = { version = "1.6", features = ["v4"] }
+toml = "0.8"
+lazy_static = "1.4"
+tempfile = "3.19.1"
+base64 = "0.22.1"
+
+[features]
+metrics = []
+http-api = [] 

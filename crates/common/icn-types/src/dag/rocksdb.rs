@@ -655,6 +655,11 @@ impl DagStore for RocksDbDagStore {
         // TODO: Implement sync verification logic
         Ok(()) // Assume valid for now
     }
+
+    #[cfg(not(feature = "async"))]
+    fn get_data(&self, _cid: &Cid) -> Result<Option<Vec<u8>>, DagError> {
+        unimplemented!("get_data not yet implemented for RocksDbDagStore (sync)")
+    }
 }
 
 // Asynchronous implementation
@@ -1118,5 +1123,10 @@ impl DagStore for RocksDbDagStore {
             Ok(path_nodes)
 
         }).await.map_err(DagError::from)? // Propagate JoinError
+    }
+
+    #[cfg(feature = "async")]
+    async fn get_data(&self, _cid: &Cid) -> Result<Option<Vec<u8>>, DagError> {
+        unimplemented!("get_data not yet implemented for RocksDbDagStore (async)")
     }
 } 

@@ -9,8 +9,8 @@ serde_json = "1.0"
 serde_bytes = "0.11"
 thiserror = "1.0"
 base64 = { version = "0.22", optional = true }
-multihash = { version = "0.18", features = ["serde-codec", "sha2", "sha3", "blake2b", "blake3"] }
-# cid = { version = "0.10", features = ["serde-codec"] } # Use from core
+multihash = { version = "0.19.3", features = ["serde-codec"], optional = true }
+cid = { version = "0.11.1", optional = true }
 chrono = { version = "0.4", features = ["serde"] }
 ed25519-dalek = { version = "2.0", features = ["serde", "rand_core"], optional = true }
 rand = { version = "0.8", optional = true }
@@ -24,7 +24,7 @@ rocksdb = { version = "0.21", optional = true }
 async-trait = { version = "0.1", optional = true }
 tokio = { version = "1", features = ["sync", "macros", "rt", "time"], optional = true }
 futures = { version = "0.3", optional = true }
-serde_ipld_dagcbor = { version = "0.2.2", optional = true }
+serde_ipld_dagcbor = { version = "0.5.0", optional = true }
 
 # Metrics
 prometheus = { version = "0.13", optional = true }
@@ -37,6 +37,10 @@ libp2p-swarm = { version = "0.44", optional = true }
 
 # Add tracing
 tracing = { version = "0.1", optional = true }
+
+sha2 = "0.10.9"
+
+ciborium = "0.2"
 
 [dev-dependencies]
 tokio = { version = "1.27", features = ["full", "test-util"] }
@@ -51,3 +55,4 @@ persistence = ["dep:rocksdb", "dep:lazy_static", "async"] # Persistence implies 
 identity = ["dep:ed25519-dalek", "dep:rand", "dep:base64", "ed25519-dalek/rand_core"]
 metrics = ["dep:prometheus", "dep:lazy_static"]
 networking = ["dep:libp2p", "dep:libp2p-identity", "dep:libp2p-swarm", "dep:tokio", "dep:futures", "dep:async-trait"]
+ipld = ["dep:cid", "dep:multihash", "multihash/serde-codec"]

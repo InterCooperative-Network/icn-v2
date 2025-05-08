@@ -1,0 +1,39 @@
+namespace icn_wallet {
+    // Existing functions
+    string verify_credential(string json);
+
+    // Receipt functions
+    sequence<SerializedReceipt> list_receipts(
+        string? federation_did,
+        string? module_cid, 
+        string? scope,
+        string? status,
+        string? submitter_did,
+        u64? start_time,
+        u64? end_time,
+        u32? limit,
+        u32? offset
+    );
+    
+    SerializedReceipt? get_receipt_by_id(string id);
+    SerializedReceipt? get_receipt_by_cid(string cid);
+    boolean save_receipt(SerializedReceipt receipt);
+    boolean delete_receipt(string id);
+};
+
+// Receipt record for FFI
+[Serializable]
+dictionary SerializedReceipt {
+    string id;
+    string cid;
+    string federation_did;
+    string? module_cid;
+    string status;
+    string scope;
+    string? submitter;
+    u64 execution_timestamp;
+    string? result_summary;
+    string? source_event_id;
+    u64 wallet_stored_at;
+    string json_vc;
+}; 

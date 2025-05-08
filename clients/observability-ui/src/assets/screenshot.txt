@@ -1,0 +1,1 @@
+This is a placeholder for the dashboard screenshot. When deploying the dashboard, replace this file with an actual screenshot of the ICN Observability Dashboard showing the main interface or DAG Viewer component. 

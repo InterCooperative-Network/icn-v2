@@ -1,47 +1,144 @@
-use wasmtime::*;
-use anyhow::Result;
-use std::sync::Arc;
-use crate::abi::{bindings::register_host_functions, context::HostContext};
+// Export the executor module
+pub mod executor;
+// Re-export types from the executor module
+pub use executor::ModernWasmExecutor;
+pub use executor::ExecutionResult;
+pub use executor::ContextExtension;
+// Type alias for backward compatibility
+pub type WasmExecutor = ModernWasmExecutor;
 
-/// Executes WASM modules within a HostContext.
-pub struct WasmExecutor<T: HostContext + Send + Sync + 'static> { // Added Send + Sync
-    engine: Engine,
-    linker: Linker<Arc<T>>, // Store type is now Arc<T>
+// Implement ReceiptContextExt for any context extension
+impl<T: ContextExtension + ?Sized> crate::host::receipt::ReceiptContextExt for T {
+    fn node_did(&self) -> Option<&icn_types::Did> {
+        ContextExtension::node_did(self)
+    }
+    
+    fn federation_did(&self) -> Option<&icn_types::Did> {
+        ContextExtension::federation_did(self)
+    }
+    
+    fn caller_did(&self) -> Option<&icn_types::Did> {
+        ContextExtension::caller_did(self)
+    }
+    
+    fn federation_keypair(&self) -> Option<icn_identity_core::did::DidKey> {
+        ContextExtension::federation_keypair(self)
+    }
 }
 
-impl<T: HostContext + Send + Sync + 'static> WasmExecutor<T> { // Added Send + Sync
-    /// Creates a new executor, linking host functions defined in the ABI.
-    pub fn new() -> Result<Self> { // Return Result for potential linker errors
-        let mut config = Config::new();
-        config.async_support(true); // Keep sync for now based on bindings -- NOW ENABLED
-        let engine = Engine::new(&config)?;
-        let mut linker = Linker::new(&engine);
-
-        // Register host functions using the ABI bindings module
-        register_host_functions(&mut linker)?;
-
-        Ok(Self { engine, linker })
+// Implement ContextExtension for Arc<T> wrapped in a Store
+// This allows easier access to the context from wasmtime store operations
+impl<T: ContextExtension + Send + Sync + 'static> ContextExtension for wasmtime::Store<std::sync::Arc<T>> {
+    fn get_execution_config(&self) -> &crate::config::ExecutionConfig {
+        self.data().get_execution_config()
     }
-
-    /// Runs a WASM module with the given context.
-    /// Looks for standard entry points (_start, main, run).
-    pub fn run_module(&self, wasm_bytes: &[u8], ctx: Arc<T>) -> Result<()> {
-        let module = Module::new(&self.engine, wasm_bytes)?;
-        // Pass the Arc<T> context to the store
-        let mut store = Store::new(&self.engine, ctx);
-
-        // Instantiate using the pre-defined linker
-        let instance = self.linker.instantiate(&mut store, &module)?;
-
-        // Find and call the entry point function (sync)
-        let entry_func = instance.get_typed_func::<(), ()>(&mut store, "_start")
-            .or_else(|_| instance.get_typed_func::<(), ()>(&mut store, "main"))
-            .or_else(|_| instance.get_typed_func::<(), ()>(&mut store, "run"))
-            .map_err(|e| anyhow::anyhow!("No standard entrypoint (_start, main, run) found in module: {}", e))?;
-
-        // Call the entry point (sync)
-        entry_func.call(&mut store, ())?;
-
-        Ok(())
+    
+    fn get_dag_store_mut(&mut self) -> Option<&mut (dyn icn_types::dag::DagStore + Send + Sync)> {
+        // Convert &mut Store<Arc<T>> to a mutable reference to Arc<T>
+        let arc_mut = self.data_mut();
+        
+        // Try to get a mutable reference to T through the Arc
+        // This will only succeed if the Arc is uniquely owned
+        std::sync::Arc::get_mut(arc_mut).and_then(|inner| inner.get_dag_store_mut())
     }
-} 
+    
+    fn node_did(&self) -> Option<&icn_types::Did> {
+        self.data().node_did()
+    }
+    
+    fn federation_did(&self) -> Option<&icn_types::Did> {
+        self.data().federation_did()
+    }
+    
+    fn caller_did(&self) -> Option<&icn_types::Did> {
+        self.data().caller_did()
+    }
+    
+    fn federation_keypair(&self) -> Option<icn_identity_core::did::DidKey> {
+        self.data().federation_keypair()
+    }
+    
+    fn membership_index(&self) -> Option<std::sync::Arc<dyn crate::policy::MembershipIndex + Send + Sync>> {
+        self.data().membership_index()
+    }
+    
+    fn policy_loader(&self) -> Option<std::sync::Arc<dyn crate::policy::PolicyLoader + Send + Sync>> {
+        self.data().policy_loader()
+    }
+}
+
+// Implement ContextExtension for StoreContext
+impl<'a, T: ContextExtension + Send + Sync + 'static> ContextExtension for wasmtime::StoreContext<'a, std::sync::Arc<T>> {
+    fn get_execution_config(&self) -> &crate::config::ExecutionConfig {
+        self.data().get_execution_config()
+    }
+    
+    fn get_dag_store_mut(&mut self) -> Option<&mut (dyn icn_types::dag::DagStore + Send + Sync)> {
+        // StoreContext is immutable so we can't modify the DAG store
+        None
+    }
+    
+    fn node_did(&self) -> Option<&icn_types::Did> {
+        self.data().node_did()
+    }
+    
+    fn federation_did(&self) -> Option<&icn_types::Did> {
+        self.data().federation_did()
+    }
+    
+    fn caller_did(&self) -> Option<&icn_types::Did> {
+        self.data().caller_did()
+    }
+    
+    fn federation_keypair(&self) -> Option<icn_identity_core::did::DidKey> {
+        self.data().federation_keypair()
+    }
+    
+    fn membership_index(&self) -> Option<std::sync::Arc<dyn crate::policy::MembershipIndex + Send + Sync>> {
+        self.data().membership_index()
+    }
+    
+    fn policy_loader(&self) -> Option<std::sync::Arc<dyn crate::policy::PolicyLoader + Send + Sync>> {
+        self.data().policy_loader()
+    }
+}
+
+// Implement ContextExtension for StoreContextMut
+impl<'a, T: ContextExtension + Send + Sync + 'static> ContextExtension for wasmtime::StoreContextMut<'a, std::sync::Arc<T>> {
+    fn get_execution_config(&self) -> &crate::config::ExecutionConfig {
+        self.data().get_execution_config()
+    }
+    
+    fn get_dag_store_mut(&mut self) -> Option<&mut (dyn icn_types::dag::DagStore + Send + Sync)> {
+        // Convert &mut StoreContextMut<Arc<T>> to a mutable reference to Arc<T>
+        let arc_mut = self.data_mut();
+        
+        // Try to get a mutable reference to T through the Arc
+        // This will only succeed if the Arc is uniquely owned
+        std::sync::Arc::get_mut(arc_mut).and_then(|inner| inner.get_dag_store_mut())
+    }
+    
+    fn node_did(&self) -> Option<&icn_types::Did> {
+        self.data().node_did()
+    }
+    
+    fn federation_did(&self) -> Option<&icn_types::Did> {
+        self.data().federation_did()
+    }
+    
+    fn caller_did(&self) -> Option<&icn_types::Did> {
+        self.data().caller_did()
+    }
+    
+    fn federation_keypair(&self) -> Option<icn_identity_core::did::DidKey> {
+        self.data().federation_keypair()
+    }
+    
+    fn membership_index(&self) -> Option<std::sync::Arc<dyn crate::policy::MembershipIndex + Send + Sync>> {
+        self.data().membership_index()
+    }
+    
+    fn policy_loader(&self) -> Option<std::sync::Arc<dyn crate::policy::PolicyLoader + Send + Sync>> {
+        self.data().policy_loader()
+    }
+}

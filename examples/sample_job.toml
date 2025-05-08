@@ -1,0 +1,59 @@
+# ICN Mesh Job Manifest - Sample
+# This manifest defines a compute job for submission to the ICN mesh network
+
+# Unique identifier for the job (optional, will be auto-generated if not provided)
+id = "sample-job-001"
+
+# CID (Content Identifier) for the WASM module to execute
+# This should point to a valid WASM module stored in IPFS or another content-addressable storage
+wasm_module_cid = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
+
+# DID (Decentralized Identifier) of the job owner/requester
+# This should be a valid DID that the submitter has signing credentials for
+owner_did = "did:icn:user:requester"
+
+# Federation ID that this job should be executed within (optional)
+# If provided, only nodes within this federation will receive this job
+federation_id = "demo-federation"
+
+# Deadline for job execution in RFC3339 format (optional)
+# If provided, the job must be executed before this timestamp
+deadline = "2024-12-31T23:59:59Z"
+
+# Resource requirements for the job
+[resources]
+# CPU cores required
+cpu_cores = 2
+
+# Memory required in MB
+ram_mb = 1024
+
+# Storage required in GB (optional)
+storage_gb = 1
+
+# GPU requirements (optional)
+# gpu_type = "ANY"  # or specific model like "NVIDIA_A100"
+
+# Network bandwidth required in Mbps (optional)
+network_mbps = 100
+
+# Job parameters (input data)
+# This section contains arbitrary JSON-compatible parameters passed to the WASM module
+[parameters]
+input1 = 5
+input2 = 7
+operation = "add"
+
+# Optional job execution constraints
+[constraints]
+# Minimum renewable energy percentage requirement (optional)
+min_renewable_percent = 50
+
+# Geographic region constraints (optional)
+allowed_regions = ["us-east", "us-west", "eu-central"]
+
+# Security requirements (optional)
+requires_trusted_execution = false
+
+# Pricing constraints (optional)
+max_bid_price = 100 

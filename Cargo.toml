@@ -1,17 +1,19 @@
 [workspace]
 members = [
-    "crates/runtime/icn-runtime",
-    "crates/wallet/icn-wallet",
-    "crates/agoranet/agoranet-core",
-    "crates/mesh/planetary-mesh",
+    "crates/common/icn-core-types",
     "crates/common/icn-types",
     "crates/common/icn-identity-core",
-    "crates/common/icn-core-types",
+    "crates/runtime/icn-runtime",
+    "crates/planetary-mesh",
+    "crates/wallet/icn-wallet",
     "crates/tools/icn-cli",
+    "tests",
+    "tests/integration"
 ]
 resolver = "2"
 
 # Optional: Configure profiles for the workspace
 # [profile.release]
-# lto = true
-# codegen-units = 1
+# # opt-level = 'z' # Optimize for size
+# # lto = true
+# # codegen-units = 1

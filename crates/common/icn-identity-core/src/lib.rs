@@ -6,14 +6,43 @@ pub mod quorum;
 pub mod vc;
 // pub mod signature;
 pub mod manifest;
+pub mod trustbundle;
 // pub mod did_type;
 
 // Re-export key structs/functions
 // pub use did::{DidKey, DidKeyError};
-pub use quorum::{QuorumValidator, QuorumError};
+// pub use quorum::{QuorumValidator, QuorumError}; // Commenting out unresolved re-exports
+pub use quorum::{QuorumEngine, QuorumTally, QuorumOutcome, QuorumEngineError};
 pub use vc::{VerifiableCredential, VcIssuer};
+pub use trustbundle::{TrustBundle, QuorumConfig, QuorumType, QuorumProof, TrustError};
+pub use trustbundle::storage::{TrustBundleStore, MemoryTrustBundleStore, StorageError};
 // pub use signature::Signature;
 // pub use manifest::{AgentManifest, ManifestError};
 // pub use did_type::Did;
+
+// Re-export VC types
+pub use vc::execution_receipt::{
+    ExecutionReceipt, 
+    ExecutionSubject, 
+    ExecutionScope,
+    ExecutionStatus,
+    Proof as ExecutionReceiptProof,
+    ExecutionReceiptError
+};
+
+// Re-export governance VC types
+pub use vc::{
+    ProposalCredential,
+    ProposalSubject,
+    ProposalType,
+    ProposalStatus,
+    VotingThreshold,
+    VotingDuration,
+    ProposalError,
+    VoteCredential,
+    VoteSubject,
+    VoteDecision,
+    VoteError
+};
 
 pub fn placeholder() {}

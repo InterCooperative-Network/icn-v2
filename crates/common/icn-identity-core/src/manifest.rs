@@ -16,6 +16,13 @@ pub enum Architecture {
     Other,
 }
 
+// Add Default implementation for Architecture
+impl Default for Architecture {
+    fn default() -> Self {
+        Architecture::X86_64
+    }
+}
+
 /// GPU capability information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GpuProfile {
@@ -107,6 +114,19 @@ pub struct EnergyInfo {
     
     /// Energy source details
     pub source: Vec<EnergySource>,
+}
+
+// Add Default implementation for EnergyInfo
+impl Default for EnergyInfo {
+    fn default() -> Self {
+        EnergyInfo {
+            renewable_percentage: 0,
+            battery_percentage: None,
+            charging: None,
+            power_consumption_watts: None,
+            source: vec![EnergySource::Grid],
+        }
+    }
 }
 
 /// Energy source type

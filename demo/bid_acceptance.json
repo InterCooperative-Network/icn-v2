@@ -1,0 +1,26 @@
+{
+  "credential": {
+    "@context": [
+      "https://www.w3.org/2018/credentials/v1",
+      "https://icn.network/credentials/mesh/v1"
+    ],
+    "id": "urn:uuid:34567890-b98c-45d3-c456-426614174002",
+    "type": ["VerifiableCredential", "BidAcceptance"],
+    "issuer": "did:icn:requester",
+    "issuanceDate": "2023-10-15T15:31:45Z",
+    "credentialSubject": {
+      "job_id": "sample-job-001",
+      "bid_index": 1,
+      "bidder_did": "did:icn:worker01",
+      "price": 30,
+      "timestamp": "2023-10-15T15:31:45Z"
+    },
+    "proof": {
+      "type": "Ed25519Signature2020",
+      "created": "2023-10-15T15:31:45Z",
+      "verificationMethod": "did:icn:requester#keys-1",
+      "proofPurpose": "assertionMethod",
+      "proofValue": "REQUESTER_SIGNATURE_PLACEHOLDER"
+    }
+  }
+}

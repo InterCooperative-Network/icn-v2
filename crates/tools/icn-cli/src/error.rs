@@ -3,6 +3,7 @@ use icn_types::dag::DagError;
 // TODO: Add imports for other error types used (DidKeyError, CborError, NetworkError etc.)
 // use icn_identity_core::did::DidKeyError; 
 use std::io;
+use icn_core_types::did::DidParseError;
 
 #[derive(Error, Debug)]
 pub enum CliError {
@@ -48,7 +49,46 @@ pub enum CliError {
 
     #[error("Generic Error: {0}")]
     Any(#[from] anyhow::Error), // Catch-all for other anyhow errors
+    
+    // Additional error variants we need for mesh commands
+    
+    #[error("Invalid Argument: {0}")]
+    InvalidArgument(String),
+    
+    #[error("Not Found: {0}")]
+    NotFound(String),
+    
+    #[error("Verification Failed: {0}")]
+    VerificationFailed(String),
+    
+    #[error("Invalid Key: {0}")]
+    InvalidKey(String),
+    
+    #[error("Identity Error: {0}")]
+    IdentityError(String),
+    
+    #[error("Serialization Error: {0}")]
+    SerializationError(String),
+    
+    #[error("Unimplemented: {0}")]
+    Unimplemented(String),
+    
+    #[error("Other Error: {0}")]
+    Other(Box<dyn std::error::Error + Send + Sync>),
+    
+    #[error("IO Error: {0}")]
+    IoError(String),
+    
+    #[error("DAG Error: {0}")]
+    DagError(String),
 }
 
 // Define the standard Result type alias
-pub type CliResult<T = ()> = Result<T, CliError>; 
+pub type CliResult<T = ()> = Result<T, CliError>;
+
+// Implementation of From trait for DidParseError
+impl From<DidParseError> for CliError {
+    fn from(err: DidParseError) -> Self {
+        CliError::IdentityError(format!("DID Parse Error: {}", err))
+    }
+} 

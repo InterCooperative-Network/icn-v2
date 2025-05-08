@@ -1,0 +1,24 @@
+[
+  {
+    "job_manifest_cid": "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+    "bidder_node_id": "did:icn:worker01",
+    "price": 30,
+    "confidence": 0.95,
+    "offered_capabilities": [
+      {"CpuCores": 4},
+      {"RamMb": 2048}
+    ],
+    "expires_at": "2023-10-16T15:31:15Z"
+  },
+  {
+    "job_manifest_cid": "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+    "bidder_node_id": "did:icn:node:67890",
+    "price": 35,
+    "confidence": 0.90,
+    "offered_capabilities": [
+      {"CpuCores": 2},
+      {"RamMb": 1536}
+    ],
+    "expires_at": "2023-10-16T12:31:15Z"
+  }
+]

@@ -18,4 +18,7 @@ pub mod revocation_notice;
 pub use node::MeshNode;
 pub use scheduler::{Scheduler, TaskRequest, TaskBid, MatchResult, CapabilityIndex};
 pub use cap_index::CapabilitySelector;
-pub use manifest_verifier::{ManifestVerifier, ManifestVerificationError}; 
+pub use manifest_verifier::{ManifestVerifier, ManifestVerificationError};
+
+pub mod types;
+pub use types::{JobManifest, NodeCapability, NodeCapabilityInfo, Bid, JobStatus, ResourceType}; 

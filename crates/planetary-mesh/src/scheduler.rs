@@ -1,15 +1,68 @@
-use crate::cap_index::{CapabilitySelector};
-use crate::manifest_verifier::{ManifestVerifier, ManifestVerificationError};
-use anyhow::{Result, anyhow, Context};
-use icn_identity_core::{Did, manifest::NodeManifest, did::DidKey};
-use icn_types::dag::{DagStore, Cid, DagNodeBuilder, DagPayload, SignedDagNode};
+use anyhow::{anyhow, Context, Result};
+use log::{debug, info, warn};
+use ed25519_dalek::Signature;
+use icn_core_types::Did;
+use icn_identity_core::{
+    did::DidKey,
+    manifest::{
+        Architecture as IdArchitecture, CapabilitySelector, EnergyInfo as IdEnergyInfo, 
+        EnergySource, GpuApi, GpuProfile, NodeManifest
+    },
+};
+use icn_types::{
+    dag::{DagNode, DagNodeBuilder, DagNodeMetadata, DagPayload, DagStore, SharedDagStore, SignedDagNode},
+    Cid,
+};
 use serde::{Serialize, Deserialize};
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
-use log::{debug, info, warn, error};
-use uuid;
+use uuid::Uuid;
+use hex;
+use chrono::Utc;
+
+// Use crate imports for manifest verification
+use crate::manifest_verifier::{ManifestVerifier, ManifestVerificationError};
+// Use our own Architecture and EnergyInfo types to avoid conflicts
+use crate::cap_index::CapabilitySelector as MeshCapabilitySelector;
+
+use icn_types::dag::NodeScope;
+// Use fully qualified names for different ResourceType implementations
+use icn_economics::token::ResourceType as EconomicResourceType;
+use icn_economics::storage::TokenStore;
+use icn_economics::transaction::{ResourceTransaction, TransactionType};
+use crate::types::ResourceType as MeshResourceType;
+
+/// Architecture type with Default implementation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Architecture {
+    pub name: String,
+    pub version: String,
+}
+
+impl Default for Architecture {
+    fn default() -> Self {
+        Self {
+            name: "unknown".to_string(),
+            version: "unknown".to_string(),
+        }
+    }
+}
+
+/// Energy info with Default implementation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnergyInfo {
+    pub source: String,
+    pub renewable_percentage: u8,
+}
+
+impl Default for EnergyInfo {
+    fn default() -> Self {
+        Self {
+            source: "unknown".to_string(),
+            renewable_percentage: 0,
+        }
+    }
+}
 
 /// Task request with requirements
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,7 +168,7 @@ pub struct CapabilityIndex {
     pub manifests: RwLock<HashMap<Did, (NodeManifest, String)>>,
     
     /// DAG store for retrieving manifests
-    dag_store: Arc<Box<dyn DagStore>>,
+    dag_store: SharedDagStore,
     
     /// Manifest verifier for signature checking
     verifier: ManifestVerifier,
@@ -129,18 +182,12 @@ pub struct CapabilityIndex {
 
 impl CapabilityIndex {
     /// Create a new capability index with default configuration
-    pub fn new(dag_store: Arc<Box<dyn DagStore>>) -> Self {
-        Self {
-            manifests: RwLock::new(HashMap::new()),
-            dag_store,
-            verifier: ManifestVerifier::new(),
-            config: CapabilityIndexConfig::default(),
-            verification_failure_handler: RwLock::new(None),
-        }
+    pub fn new(dag_store: SharedDagStore) -> Self {
+        Self::with_config(dag_store, CapabilityIndexConfig::default())
     }
     
     /// Create a new capability index with custom configuration
-    pub fn with_config(dag_store: Arc<Box<dyn DagStore>>, config: CapabilityIndexConfig) -> Self {
+    pub fn with_config(dag_store: SharedDagStore, config: CapabilityIndexConfig) -> Self {
         let verifier = if let Some(trusted_dids) = &config.trusted_dids {
             ManifestVerifier::with_trusted_dids(trusted_dids.clone())
         } else {
@@ -223,7 +270,7 @@ impl CapabilityIndex {
     }
     
     /// Filter manifests based on a capability selector
-    pub async fn filter_manifests(&self, selector: &CapabilitySelector) -> Vec<(NodeManifest, String)> {
+    pub async fn filter_manifests(&self, selector: &MeshCapabilitySelector) -> Vec<(NodeManifest, String)> {
         let manifests = self.manifests.read().await;
         manifests
             .values()
@@ -312,6 +359,22 @@ impl CapabilityIndex {
     }
 }
 
+/// Match result with cooperative context
+#[derive(Debug, Clone)]
+pub struct ScopedMatchResult {
+    /// Original match result
+    pub base: MatchResult,
+    
+    /// Origin cooperative ID
+    pub origin_coop: String,
+    
+    /// Executor cooperative ID
+    pub executor_coop: String,
+    
+    /// Transaction CIDs for resource tracking
+    pub transaction_cids: Vec<String>,
+}
+
 /// Mesh scheduler for task-node matching
 pub struct Scheduler {
     /// Federation ID this scheduler belongs to
@@ -321,13 +384,16 @@ pub struct Scheduler {
     cap_index: Arc<CapabilityIndex>,
     
     /// DAG store for publishing task tickets and bids
-    dag_store: Arc<Box<dyn DagStore>>,
+    dag_store: SharedDagStore,
     
     /// Scheduler's DID
     scheduler_did: Did,
     
     /// Scheduler's DID key for signing
     did_key: Option<DidKey>,
+    
+    /// Token store for resource accounting
+    token_store: Option<Arc<dyn TokenStore + Send + Sync>>,
 }
 
 impl Scheduler {
@@ -335,7 +401,7 @@ impl Scheduler {
     pub fn new(
         federation_id: String,
         cap_index: Arc<CapabilityIndex>,
-        dag_store: Arc<Box<dyn DagStore>>,
+        dag_store: SharedDagStore,
         scheduler_did: Did,
     ) -> Self {
         Self {
@@ -344,6 +410,7 @@ impl Scheduler {
             dag_store,
             scheduler_did,
             did_key: None,
+            token_store: None,
         }
     }
     
@@ -351,7 +418,7 @@ impl Scheduler {
     pub fn new_with_key(
         federation_id: String,
         cap_index: Arc<CapabilityIndex>,
-        dag_store: Arc<Box<dyn DagStore>>,
+        dag_store: SharedDagStore,
         did_key: DidKey,
     ) -> Self {
         let scheduler_did = did_key.did().clone();
@@ -361,7 +428,31 @@ impl Scheduler {
             dag_store,
             scheduler_did,
             did_key: Some(did_key),
+            token_store: None,
         }
+    }
+    
+    /// Create a new scheduler with token store for resource accounting
+    pub fn new_with_token_store(
+        federation_id: String,
+        cap_index: Arc<CapabilityIndex>,
+        dag_store: SharedDagStore,
+        scheduler_did: Did,
+        token_store: Arc<dyn TokenStore + Send + Sync>,
+    ) -> Self {
+        Self {
+            federation_id,
+            cap_index,
+            dag_store,
+            scheduler_did,
+            did_key: None,
+            token_store: Some(token_store),
+        }
+    }
+    
+    /// Set the token store for resource accounting
+    pub fn set_token_store(&mut self, token_store: Arc<dyn TokenStore + Send + Sync>) {
+        self.token_store = Some(token_store);
     }
     
     /// Listen for incoming task requests and bids
@@ -372,12 +463,12 @@ impl Scheduler {
     }
     
     /// Dispatch a task request to suitable nodes
-    pub async fn dispatch(&self, request: TaskRequest, capabilities: Option<CapabilitySelector>) -> Result<MatchResult> {
+    pub async fn dispatch(&self, request: TaskRequest, capabilities: Option<MeshCapabilitySelector>) -> Result<MatchResult> {
         info!("Dispatching task request from {}", request.requestor);
         
         // Create a default capability selector if none was provided
         let selector = capabilities.unwrap_or_else(|| {
-            let mut selector = CapabilitySelector::new();
+            let mut selector = MeshCapabilitySelector::new();
             
             // Set minimum requirements based on the task request
             selector.min_cores = Some(request.cores as u16);
@@ -437,12 +528,8 @@ impl Scheduler {
             .with_label("TaskBid".to_string())
             .build()?;
             
-        // Create a signed node (in a real implementation this would be properly signed)
-        let signed_bid_node = SignedDagNode {
-            node: bid_node,
-            signature: vec![], // Would be properly signed in production
-            cid: None,
-        };
+        // Create a signed node
+        let signed_bid_node = create_empty_signed_node(bid_node);
         
         // Add to DAG to get CID
         let bid_cid = self.dag_store.add_node(signed_bid_node).await?;
@@ -467,7 +554,7 @@ impl Scheduler {
     async fn create_dispatch_audit_record(
         &self,
         request: &TaskRequest,
-        selector: &CapabilitySelector,
+        selector: &MeshCapabilitySelector,
         matching_manifests: &[(NodeManifest, String)],
         selected_bid: &TaskBid,
         bid_cid: &Cid,
@@ -582,18 +669,17 @@ impl Scheduler {
             .build()?;
             
         // Create a signed node
-        let mut signed_audit_node = SignedDagNode {
-            node: audit_node,
-            signature: vec![], // Will be properly signed if we have a key
-            cid: None, // Will be computed when added to the DAG
-        };
+        let mut signed_audit_node = create_empty_signed_node(audit_node);
         
         // Sign the DAG node if we have a DID key
         if let Some(did_key) = &self.did_key {
+            // Replace manual signing with our utility function
             let node_bytes = serde_json::to_vec(&signed_audit_node.node)
                 .context("Failed to serialize audit node")?;
             
-            signed_audit_node.signature = did_key.sign(&node_bytes).to_bytes().to_vec();
+            // Create a properly signed node
+            let signed_node = create_signed_node(signed_audit_node.node.clone(), did_key)?;
+            signed_audit_node = signed_node;
         }
         
         // Add to DAG to get CID
@@ -661,26 +747,273 @@ impl Scheduler {
         
         Ok(())
     }
+    
+    /// Dispatch a job across cooperatives
+    pub async fn dispatch_cross_coop(
+        &self,
+        request: TaskRequest,
+        origin_coop: String,
+    ) -> Result<ScopedMatchResult> {
+        // Verify the origin cooperative has enough resource tokens
+        self.verify_resource_budget(&request, &origin_coop).await?;
+        
+        // Find the best node for the job
+        let match_result = self.dispatch(request.clone(), None).await?;
+        
+        // Get the executor cooperative ID from the selected node's manifest
+        let executor_coop = self.get_coop_for_node(&match_result.bid.bidder).await?;
+        
+        // Create a resource debit transaction for the origin cooperative
+        let resource_cost = self.calculate_resource_cost(&request)?;
+        let debit_tx = ResourceTransaction::new_debit(
+            EconomicResourceType::ComputeUnit,
+            resource_cost,
+            &origin_coop,
+            &self.federation_id,
+            self.scheduler_did.clone(),
+        );
+        
+        // Create a resource credit transaction for the executor cooperative
+        let execution_fee = self.calculate_execution_fee(&request)?;
+        let credit_tx = ResourceTransaction::new_credit(
+            EconomicResourceType::ComputeUnit,
+            execution_fee,
+            &executor_coop,
+            &self.federation_id,
+            self.scheduler_did.clone(),
+        );
+        
+        // Record the transactions in the DAG
+        let mut transaction_cids = Vec::new();
+        
+        // Record debit in origin cooperative's DAG
+        let debit_node = DagNodeBuilder::new()
+            .with_payload(DagPayload::Json(serde_json::to_value(&debit_tx)?))
+            .with_author(self.scheduler_did.clone())
+            .with_federation_id(self.federation_id.clone())
+            .with_scope(NodeScope::Cooperative)
+            .with_scope_id(origin_coop.clone())
+            .with_label("ResourceDebit".to_string())
+            .build()?;
+        
+        let signed_debit_node = if let Some(key) = &self.did_key {
+            create_signed_node(debit_node, key)?
+        } else {
+            create_empty_signed_node(debit_node)
+        };
+        
+        let debit_cid = self.dag_store.add_node(signed_debit_node).await?;
+        transaction_cids.push(debit_cid.to_string());
+        
+        // Record credit in executor cooperative's DAG
+        let credit_node = DagNodeBuilder::new()
+            .with_payload(DagPayload::Json(serde_json::to_value(&credit_tx)?))
+            .with_author(self.scheduler_did.clone())
+            .with_federation_id(self.federation_id.clone())
+            .with_scope(NodeScope::Cooperative)
+            .with_scope_id(executor_coop.clone())
+            .with_label("ResourceCredit".to_string())
+            .build()?;
+        
+        let signed_credit_node = if let Some(key) = &self.did_key {
+            create_signed_node(credit_node, key)?
+        } else {
+            create_empty_signed_node(credit_node)
+        };
+        
+        let credit_cid = self.dag_store.add_node(signed_credit_node).await?;
+        transaction_cids.push(credit_cid.to_string());
+        
+        // Record cross-cooperative transaction in federation DAG
+        let cross_coop_tx = ResourceTransaction::new_transfer(
+            EconomicResourceType::ComputeUnit,
+            resource_cost,
+            &origin_coop,
+            &executor_coop,
+            &self.federation_id,
+            self.scheduler_did.clone(),
+        );
+        
+        let transfer_node = DagNodeBuilder::new()
+            .with_payload(DagPayload::Json(serde_json::to_value(&cross_coop_tx)?))
+            .with_author(self.scheduler_did.clone())
+            .with_federation_id(self.federation_id.clone())
+            .with_scope(NodeScope::Federation)
+            .with_label("CrossCoopTransaction".to_string())
+            .build()?;
+        
+        let signed_transfer_node = if let Some(key) = &self.did_key {
+            create_signed_node(transfer_node, key)?
+        } else {
+            create_empty_signed_node(transfer_node)
+        };
+        
+        let transfer_cid = self.dag_store.add_node(signed_transfer_node).await?;
+        transaction_cids.push(transfer_cid.to_string());
+        
+        // Apply transactions to the token store if available
+        if let Some(token_store) = &self.token_store {
+            token_store.apply_transaction(&debit_tx).await.map_err(|e| 
+                anyhow!("Failed to apply debit transaction: {}", e)
+            )?;
+            
+            token_store.apply_transaction(&credit_tx).await.map_err(|e| 
+                anyhow!("Failed to apply credit transaction: {}", e)
+            )?;
+        }
+        
+        // Create the scoped match result
+        let scoped_result = ScopedMatchResult {
+            base: match_result,
+            origin_coop,
+            executor_coop,
+            transaction_cids,
+        };
+        
+        Ok(scoped_result)
+    }
+    
+    /// Verify that a cooperative has sufficient resources for a job
+    async fn verify_resource_budget(&self, request: &TaskRequest, coop_id: &str) -> Result<bool> {
+        if let Some(token_store) = &self.token_store {
+            let required_tokens = self.calculate_resource_cost(request)?;
+            let available_tokens = token_store
+                .get_balance(coop_id, &EconomicResourceType::ComputeUnit)
+                .await
+                .map_err(|e| anyhow!("Failed to get balance: {}", e))?;
+            
+            if available_tokens < required_tokens {
+                return Err(anyhow!("Insufficient compute units. Required: {}, Available: {}", 
+                    required_tokens, available_tokens));
+            }
+            
+            Ok(true)
+        } else {
+            // If no token store is available, just approve the job
+            Ok(true)
+        }
+    }
+    
+    /// Calculate resource cost based on task requirements
+    fn calculate_resource_cost(&self, request: &TaskRequest) -> Result<u64> {
+        // Base cost for any job
+        let mut cost: u64 = 10;
+        
+        // Add cost for memory
+        cost += request.memory_mb / 10;
+        
+        // Add cost for cores
+        cost += request.cores * 5;
+        
+        // Add cost for priority (1-100 scale)
+        cost += (request.priority as u64).max(1);
+        
+        Ok(cost)
+    }
+    
+    /// Calculate execution fee (what the executor cooperative receives)
+    fn calculate_execution_fee(&self, request: &TaskRequest) -> Result<u64> {
+        // Executor gets 80% of the total cost
+        let total_cost = self.calculate_resource_cost(request)?;
+        let fee = (total_cost * 80) / 100;
+        Ok(fee)
+    }
+    
+    /// Get the cooperative ID for a node
+    async fn get_coop_for_node(&self, node_did: &Did) -> Result<String> {
+        let manifest_opt = self.cap_index.get_manifest(node_did).await;
+        
+        if let Some((manifest, _)) = manifest_opt {
+            // Check for cooperative ID in various fields
+            // Since NodeManifest doesn't have a metadata field directly,
+            // check other relevant fields that might contain this information
+            
+            // Check in trust_fw_hash, which might encode the coop ID
+            if manifest.trust_fw_hash.contains("coop:") {
+                let parts: Vec<&str> = manifest.trust_fw_hash.split("coop:").collect();
+                if parts.len() > 1 {
+                    let coop_part = parts[1].split(":").next().unwrap_or("unknown");
+                    return Ok(coop_part.to_string());
+                }
+            }
+            
+            // Check mesh protocols for coop info
+            for protocol in &manifest.mesh_protocols {
+                if protocol.starts_with("coop:") {
+                    return Ok(protocol.trim_start_matches("coop:").to_string());
+                }
+            }
+            
+            // Fallback: use the first part of the DID as the coop ID
+            let did_str = node_did.to_string();
+            let parts: Vec<&str> = did_str.split(':').collect();
+            if parts.len() >= 3 {
+                let possible_coop = parts[2];
+                if possible_coop.contains('-') {
+                    let coop_parts: Vec<&str> = possible_coop.split('-').collect();
+                    if !coop_parts.is_empty() {
+                        return Ok(coop_parts[0].to_string());
+                    }
+                }
+                return Ok(possible_coop.to_string());
+            }
+            
+            // Ultimate fallback
+            Ok("unknown-coop".to_string())
+        } else {
+            Err(anyhow!("Could not find manifest for node {}", node_did))
+        }
+    }
+}
+
+// Utility function to create an empty signature DAG node
+fn create_empty_signed_node(node: DagNode) -> SignedDagNode {
+    // Create an empty signature (all zeros)
+    // Use try_from instead of from_bytes to handle errors correctly
+    let empty_sig = Signature::try_from([0u8; 64].as_ref())
+        .expect("Invalid empty signature data");
+    
+    SignedDagNode {
+        node,
+        signature: empty_sig,
+        cid: None,
+    }
+}
+
+// Utility function to create a properly signed DAG node
+fn create_signed_node(node: DagNode, did_key: &DidKey) -> Result<SignedDagNode, anyhow::Error> {
+    let node_bytes = serde_json::to_vec(&node)
+        .context("Failed to serialize node")?;
+    
+    let signature = did_key.sign(&node_bytes);
+    
+    Ok(SignedDagNode {
+        node,
+        signature,
+        cid: None,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cap_index::CapabilitySelector;
     use icn_identity_core::manifest::{
-        Architecture, GpuApi, EnergySource,
         NodeManifest, EnergyInfo, GpuProfile
     };
     use icn_types::dag::memory::MemoryDagStore;
     
     async fn create_test_scheduler() -> (Scheduler, Arc<CapabilityIndex>) {
-        let dag_store = Arc::new(Box::new(MemoryDagStore::new()) as Box<dyn DagStore>);
+        // Create a memory DagStore and wrap it in SharedDagStore
+        let memory_store = MemoryDagStore::new();
+        let dag_store = SharedDagStore::new(Box::new(memory_store) as Box<dyn DagStore + Send + Sync>);
+        
+        // Create the capability index with shared store
         let cap_index = Arc::new(CapabilityIndex::new(dag_store.clone()));
         
         // Add some test manifests
         let manifest1 = NodeManifest {
             did: "did:icn:node1".into(),
-            arch: Architecture::X86_64,
+            arch: IdArchitecture::X86_64,
             cores: 8,
             gpu: Some(GpuProfile {
                 model: "Test GPU".to_string(),
@@ -694,7 +1027,7 @@ mod tests {
             storage_bytes: 1_000_000_000_000, // 1TB
             sensors: vec![],
             actuators: vec![],
-            energy_profile: EnergyInfo {
+            energy_profile: IdEnergyInfo {
                 renewable_percentage: 75,
                 battery_percentage: Some(80),
                 charging: Some(true),
@@ -709,14 +1042,14 @@ mod tests {
         
         let manifest2 = NodeManifest {
             did: "did:icn:node2".into(),
-            arch: Architecture::Arm64,
+            arch: IdArchitecture::Arm64,
             cores: 4,
             gpu: None,
             ram_mb: 8192,
             storage_bytes: 500_000_000_000, // 500GB
             sensors: vec![],
             actuators: vec![],
-            energy_profile: EnergyInfo {
+            energy_profile: IdEnergyInfo {
                 renewable_percentage: 0,
                 battery_percentage: None,
                 charging: None,
@@ -760,14 +1093,16 @@ mod tests {
         };
         
         // Create a selector that only matches x86_64 architecture
-        let mut selector = CapabilitySelector::new();
-        selector.arch = Some(Architecture::X86_64);
+        let mut selector = MeshCapabilitySelector::new();
+        selector.arch = Some(IdArchitecture::X86_64);
         
         let result = scheduler.dispatch(request, Some(selector)).await;
         assert!(result.is_ok());
         
         let match_result = result.unwrap();
-        assert_eq!(match_result.bid.bidder, "did:icn:node1");
+        // Use a proper Did object for comparison
+        let expected_did: Did = "did:icn:node1".into();
+        assert_eq!(match_result.bid.bidder, expected_did);
     }
     
     #[tokio::test]
@@ -788,7 +1123,7 @@ mod tests {
         };
         
         // Create a selector that requires a GPU with CUDA
-        let mut selector = CapabilitySelector::new();
+        let mut selector = MeshCapabilitySelector::new();
         selector.gpu_requirements = Some(crate::cap_index::GpuRequirements {
             min_vram_mb: Some(4096),
             min_cores: None,
@@ -801,7 +1136,9 @@ mod tests {
         assert!(result.is_ok());
         
         let match_result = result.unwrap();
-        assert_eq!(match_result.bid.bidder, "did:icn:node1");
+        // Use a proper Did object for comparison
+        let expected_did: Did = "did:icn:node1".into();
+        assert_eq!(match_result.bid.bidder, expected_did);
     }
     
     #[tokio::test]
@@ -822,7 +1159,7 @@ mod tests {
         };
         
         // Create a selector that requires renewable energy
-        let mut selector = CapabilitySelector::new();
+        let mut selector = MeshCapabilitySelector::new();
         selector.energy_requirements = Some(crate::cap_index::EnergyRequirements {
             min_renewable_percentage: Some(50),
             required_sources: Some(vec![EnergySource::Solar]),
@@ -835,7 +1172,9 @@ mod tests {
         assert!(result.is_ok());
         
         let match_result = result.unwrap();
-        assert_eq!(match_result.bid.bidder, "did:icn:node1");
+        // Use a proper Did object for comparison
+        let expected_did: Did = "did:icn:node1".into();
+        assert_eq!(match_result.bid.bidder, expected_did);
     }
     
     #[tokio::test]
@@ -856,7 +1195,7 @@ mod tests {
         };
         
         // Create a selector with requirements that no node can meet
-        let mut selector = CapabilitySelector::new();
+        let mut selector = MeshCapabilitySelector::new();
         selector.min_cores = Some(32); // Much more than any node has
         
         let result = scheduler.dispatch(request, Some(selector)).await;

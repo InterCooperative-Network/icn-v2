@@ -5,8 +5,9 @@ edition = "2021"
 
 # Add features section
 [features]
-default = []
-persistence = [] # Declare the persistence feature
+default = ["mesh"]
+mesh = ["planetary-mesh"]
+persistence = ["icn-identity-core/persistence"] # Enable persistence in dependencies
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -20,25 +21,38 @@ hyper = { version = "0.14", features = ["server", "http1"] }
 icn-types = { path = "../../common/icn-types", features = ["persistence", "async"] }
 icn-identity-core = { path = "../../common/icn-identity-core" }
 icn-core-types = { path = "../../common/icn-core-types" }
-clap = { version = "4.0", features = ["derive"] }
+icn-runtime = { path = "../../runtime/icn-runtime" }
+planetary-mesh = { path = "../../planetary-mesh", optional = true }
+
+clap = { version = "4.2", features = ["derive"] }
+chrono = { version = "0.4.26", features = ["serde"] }
+tokio = { version = "1.28", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+toml = "0.8"
+hex = "0.4.3"
+ed25519-dalek = "2.0.0"
+uuid = { version = "1.4", features = ["v4", "serde"] }
+rand = "0.8"
+multibase = "0.9"
 cid = "0.10"
-chrono = { version = "0.4", features = ["serde"] }
-dirs = "5.0.1"
+multihash = "0.18"
 anyhow = "1.0"
 thiserror = "1.0"
-ed25519-dalek = { version = "2.0.0", features = ["serde"] }
-rand = "0.8"
-tokio = { version = "1", features = ["full"] }
-prometheus = { version = "0.13", features = ["process"] }
-lazy_static = "1.4"
-hex = "0.4"
-icn-wallet = { path = "../../wallet/icn-wallet" }
-multibase = "0.9"
+base64 = "0.21"
+serde_ipld_dagcbor = "0.4"
+num_cpus = "1.16.0"
+sys-info = "0.9.1"
+colored = "2.0"
+async-trait = "0.1"
+dirs = "5.0.1"
+sysinfo = "0.29.10"
+wasmtime = "14.0.4"
 
 [build-dependencies]
 # Add any build-time dependencies here if needed
 
 [dev-dependencies]
-# Add any development-time dependencies here if needed
+assert_cmd = "2.0"
+predicates = "3.0"
+tempfile = "3.8"

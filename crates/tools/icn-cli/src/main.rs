@@ -13,13 +13,38 @@ use context::CliContext;
 use error::CliError;
 use commands::handle_dag_command; // Import the specific handler
 use commands::handle_mesh_command; // Add handle_mesh_command
+use commands::handle_federation_command; // Add federation handler
+use commands::runtime::handle_runtime_command; // 👈 NEW
+use commands::handle_proposal_commands; // Add proposal handler
+use commands::handle_vote_commands; // Add vote handler
+use commands::{handle_bundle_command, handle_receipt_command, handle_dag_sync_command}; // ADDED
+use commands::handle_policy_command; // Add policy handler import
+use commands::handle_key_gen; // Add keygen handler
+// Import the individual observability handlers
+use commands::observability::{
+    handle_dag_view, 
+    handle_inspect_policy, 
+    handle_validate_quorum, 
+    handle_activity_log, 
+    handle_federation_overview
+};
 // use icn_types::ExecutionResult; // Needs locating
 use std::path::PathBuf;
 use tokio;
 
+// Add command handlers
+use commands::coop::CoopCommands;
+use commands::coop::handle_coop_command;
+use commands::community::CommunityCommands;
+use commands::community::handle_community_command;
+use commands::federation::FederationCommands;
+use commands::scope::ScopeCommands;
+use commands::scope::handle_scope_command;
+use commands::observability::ObservabilityCommands;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
+#[command(propagate_version = true)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -65,8 +90,41 @@ enum Commands {
     #[command(subcommand)]
     Mesh(commands::mesh::MeshCommands),
 
+    /// Federation management commands
+    #[command(subcommand)]
+    Federation(FederationCommands),
+
     /// Manage trust policies
-    Policy,
+    #[command(subcommand)]
+    Policy(commands::policy::PolicyCommands),
+
+    /// Runtime commands
+    #[command(subcommand)]
+    Runtime(commands::runtime::RuntimeCommands),
+    
+    /// Governance proposal commands
+    #[command(subcommand)]
+    Proposal(commands::proposal::ProposalCommands),
+    
+    /// Voting commands
+    #[command(subcommand)]
+    Vote(commands::vote::VoteCommands),
+
+    /// Cooperative commands
+    #[command(subcommand)]
+    Coop(CoopCommands),
+    
+    /// Community commands
+    #[command(subcommand)]
+    Community(CommunityCommands),
+
+    /// Generic scope commands (works with both cooperatives and communities)
+    #[command(subcommand)]
+    Scope(ScopeCommands),
+    
+    /// Observability commands for federation transparency
+    #[command(subcommand)]
+    Observe(ObservabilityCommands),
 }
 
 // Removed DagCommands enum definition from here (moved to commands/dag.rs)
@@ -75,39 +133,71 @@ enum Commands {
 
 // Main function using the new structure
 #[tokio::main]
-async fn main() -> Result<(), CliError> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
+    let mut ctx = CliContext::new(false)?;
 
-    // Initialize context
-    let mut context = CliContext::new(cli.verbose > 0)?;
-
-    // Match top-level command and dispatch
     match &cli.command {
+        Commands::Coop(coop_cmd) => {
+            commands::coop::handle_coop_command(coop_cmd, &mut ctx).await?;
+        },
+        Commands::Community(community_cmd) => {
+            commands::community::handle_community_command(community_cmd, &mut ctx).await?;
+        },
+        Commands::Federation(federation_cmd) => {
+            commands::federation::handle_federation_command(&mut ctx, federation_cmd).await?;
+        },
+        Commands::Scope(scope_cmd) => {
+            commands::scope::handle_scope_command(scope_cmd, &mut ctx).await?;
+        },
         Commands::Dag(cmd) => {
-            handle_dag_command(&mut context, cmd).await?
+            handle_dag_command(&mut ctx, cmd).await?
         }
-        Commands::KeyGen { output: _output } => {
-            println!("Executing key-gen...");
-            // TODO: Implement key-gen logic (could also be moved to commands/keygen.rs)
-            unimplemented!("KeyGen handler")
+        Commands::KeyGen { output } => {
+            handle_key_gen(&mut ctx, output).await?
         }
         Commands::Bundle(cmd) => {
-            // Call the handler from the bundle module
-            commands::bundle::handle_bundle_command(&mut context, cmd).await?
+            handle_bundle_command(&mut ctx, cmd).await?
         }
          Commands::Receipt(cmd) => {
-            // Call the handler from the receipt module
-            commands::receipt::handle_receipt_command(&mut context, cmd).await?
+            handle_receipt_command(&mut ctx, cmd).await?
         }
         Commands::Mesh(cmd) => {
-            handle_mesh_command(&mut context, cmd).await?
+            handle_mesh_command(cmd.clone(), &ctx).await?
         }
          Commands::SyncP2P(cmd) => {
-            // Call the handler from the sync_p2p module
-            commands::sync_p2p::handle_dag_sync_command(&mut context, cmd).await?
+            handle_dag_sync_command(&mut ctx, cmd).await?
         }
-        Commands::Policy => {
-            todo!("Implement Policy commands")
+        Commands::Runtime(cmd) => {
+            handle_runtime_command(&mut ctx, cmd).await?
+        }
+        Commands::Policy(cmd) => {
+            handle_policy_command(&mut ctx, cmd).await?
+        }
+        Commands::Proposal(cmd) => {
+            handle_proposal_commands(cmd.clone(), &mut ctx).await?
+        }
+        Commands::Vote(cmd) => {
+            handle_vote_commands(cmd.clone(), &mut ctx).await?
+        }
+        Commands::Observe(cmd) => {
+            match cmd {
+                ObservabilityCommands::DagView(options) => {
+                    handle_dag_view(&mut ctx, &options).await?
+                },
+                ObservabilityCommands::InspectPolicy(options) => {
+                    handle_inspect_policy(&mut ctx, &options).await?
+                },
+                ObservabilityCommands::ValidateQuorum { cid, show_signers, dag_dir, output } => {
+                    handle_validate_quorum(&mut ctx, cid, *show_signers, dag_dir.as_deref(), output).await?
+                },
+                ObservabilityCommands::ActivityLog(options) => {
+                    handle_activity_log(&mut ctx, &options).await?
+                },
+                ObservabilityCommands::FederationOverview { federation_id, dag_dir, output } => {
+                    handle_federation_overview(&mut ctx, federation_id, dag_dir.as_deref(), output).await?
+                },
+            }
         }
     }
     

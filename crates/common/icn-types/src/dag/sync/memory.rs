@@ -98,10 +98,9 @@ impl<S: DagStore + Send + Sync + 'static> DAGSyncService for MemoryDAGSyncServic
     async fn verify_nodes(&self, nodes: &[DagNode]) -> VerificationResult {
         println!("MemoryDAGSyncService: Verifying {} nodes", nodes.len());
         for node in nodes {
-            if let Some(fid) = &node.metadata.federation_id {
-                if fid != &self.federation_id {
-                    return VerificationResult::Rejected { reason: format!("Node federation ID {} mismatch (expected {})", fid, self.federation_id) };
-                }
+            let fid = &node.metadata.federation_id;
+            if fid != &self.federation_id {
+                return VerificationResult::Rejected { reason: format!("Node federation ID {} mismatch (expected {})", fid, self.federation_id) };
             }
         }
         VerificationResult::Verified

@@ -23,7 +23,7 @@ pub enum DidKeyError {
 }
 
 /// Manages an Ed25519 keypair (SigningKey + VerifyingKey) associated with a DID.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DidKey {
     signing_key: SigningKey,
     verifying_key: VerifyingKey,
@@ -58,6 +58,12 @@ impl DidKey {
     /// Get the verifying key (public key).
     pub fn verifying_key(&self) -> &VerifyingKey {
         &self.verifying_key
+    }
+
+    /// Returns a reference to the underlying Ed25519 signing key.
+    /// Use with care—this exposes private key material for direct signing.
+    pub fn signing_key(&self) -> &SigningKey {
+        &self.signing_key
     }
 
     /// Sign a message using the secret key.
