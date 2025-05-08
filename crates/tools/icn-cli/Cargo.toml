@@ -5,9 +5,10 @@ edition = "2021"
 
 # Add features section
 [features]
-default = ["mesh"]
+default = ["mesh", "agora"]
 mesh = ["planetary-mesh"]
 persistence = ["icn-identity-core/persistence"] # Enable persistence in dependencies
+agora = ["dep:agoranet-core", "dep:icn-core-types", "dep:tokio"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -20,14 +21,14 @@ hyper = { version = "0.14", features = ["server", "http1"] }
 
 icn-types = { path = "../../common/icn-types", features = ["persistence", "async"] }
 icn-identity-core = { path = "../../common/icn-identity-core" }
-icn-core-types = { path = "../../common/icn-core-types" }
+icn-core-types = { path = "../../common/icn-core-types", optional = true }
 icn-runtime = { path = "../../runtime/icn-runtime" }
 planetary-mesh = { path = "../../planetary-mesh", optional = true }
 
 clap = { version = "4.5", features = ["derive"] }
 clap_complete = "4.5"
 chrono = { version = "0.4.26", features = ["serde"] }
-tokio = { version = "1.28", features = ["full"] }
+tokio = { version = "1.28", features = ["full"], optional = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 toml = "0.8"
@@ -50,6 +51,16 @@ dirs = "5"
 sysinfo = "0.29.10"
 wasmtime = "14.0.4"
 icn-ccl-compiler = { path = "../../ccl/icn-ccl-compiler" }
+icn-ccl-parser = { path = "../../ccl/icn-ccl-parser" }
+
+# Workspace dependencies (conditionally enabled by features)
+# planetary-mesh = { path = "../../planetary-mesh", optional = true } # Removed duplicate
+# icn-runtime = { path = "../../runtime/icn-runtime", optional = true } # Removed duplicate
+# icn-types = { path = "../../common/icn-types", optional = true } # Removed duplicate
+agoranet-core = { path = "../../agoranet/agoranet-core", optional = true }
+
+# Async runtime needed for agora handlers
+# tokio = { version = "1", features = ["rt-multi-thread", "macros"], optional = true } # Remove this added one
 
 [build-dependencies]
 # Add any build-time dependencies here if needed

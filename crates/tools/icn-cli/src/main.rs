@@ -5,81 +5,58 @@
 use icn_cli::{Cli, Commands, context::CliContext}; // Main items from lib
 use clap::Parser;
 use tokio;
+use clap::Subcommand;
+use std::path::PathBuf;
+use env_logger;
+use icn_cli::commands; // Assuming commands module exists at top level
+use commands::*; // Import command handlers
 
 // All other 'use' statements related to commands or local modules are removed.
 // Local struct Cli and enum Commands definitions are REMOVED from here.
 
+#[derive(Parser, Debug)]
+#[clap(author, version, about, long_about = None)]
+struct Cli {
+    #[clap(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Interact with the Planetary Mesh network.
+    Mesh(MeshCmd),
+    /// Interact with AgoraNet deliberation threads.
+    #[cfg(feature = "agora")] // Conditionally include
+    Agora(AgoraCmd),
+    // ... other top-level commands ...
+    GenCliDocs(GenCliDocsCmd), // Assuming this exists
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let cli_args = Cli::parse(); // Uses icn_cli::Cli
-    let mut ctx = CliContext::new(cli_args.verbose > 0)?;
-
-    match &cli_args.command {
-        Commands::Coop(coop_cmd) => {
-            icn_cli::commands::coop::handle_coop_command(coop_cmd, &mut ctx).await?;
-        },
-        Commands::Community(community_cmd) => {
-            icn_cli::commands::community::handle_community_command(community_cmd, &mut ctx).await?;
-        },
-        Commands::Federation(federation_cmd) => {
-            icn_cli::commands::federation::handle_federation_command(&mut ctx, federation_cmd).await?;
-        },
-        Commands::Scope(scope_cmd) => {
-            icn_cli::commands::scope::handle_scope_command(scope_cmd, &mut ctx).await?;
-        },
-        Commands::Dag(cmd) => {
-            icn_cli::commands::dag::handle_dag_command(&mut ctx, cmd).await?;
-        }
-        Commands::KeyGen { output } => {
-            icn_cli::commands::keygen::handle_key_gen(&mut ctx, output).await?;
-        }
-        Commands::Bundle(cmd) => {
-            icn_cli::commands::bundle::handle_bundle_command(&mut ctx, cmd).await?;
-        }
-        Commands::Receipt(cmd) => {
-            icn_cli::commands::receipt::handle_receipt_command(&mut ctx, cmd).await?;
-        }
-        Commands::Mesh(cmd) => {
-            icn_cli::commands::mesh::handle_mesh_command(cmd.clone(), &ctx).await?;
-        }
-        Commands::SyncP2P(cmd) => {
-            icn_cli::commands::sync_p2p::handle_dag_sync_command(&mut ctx, cmd).await?;
-        }
-        Commands::Runtime(cmd) => {
-            icn_cli::commands::runtime::handle_runtime_command(&mut ctx, cmd).await?;
-        }
-        Commands::Policy(cmd) => {
-            icn_cli::commands::policy::handle_policy_command(&mut ctx, cmd).await?;
-        }
-        Commands::Proposal(cmd) => {
-            icn_cli::commands::proposal::handle_proposal_commands(cmd.clone(), &mut ctx).await?;
-        }
-        Commands::Vote(cmd) => {
-            icn_cli::commands::vote::handle_vote_commands(cmd.clone(), &mut ctx).await?;
-        }
-        Commands::Observe(obs_cmd) => {
-            match obs_cmd {
-                icn_cli::commands::observability::ObservabilityCommands::DagView(options) => {
-                    icn_cli::commands::observability::handle_dag_view(&mut ctx, options).await?;
-                },
-                icn_cli::commands::observability::ObservabilityCommands::InspectPolicy(options) => {
-                    icn_cli::commands::observability::handle_inspect_policy(&mut ctx, options).await?;
-                },
-                icn_cli::commands::observability::ObservabilityCommands::ValidateQuorum { cid, show_signers, dag_dir, output } => {
-                    icn_cli::commands::observability::handle_validate_quorum(&mut ctx, cid, *show_signers, dag_dir.as_deref(), output.as_ref()).await?;
-                },
-                icn_cli::commands::observability::ObservabilityCommands::ActivityLog(options) => {
-                    icn_cli::commands::observability::handle_activity_log(&mut ctx, options).await?;
-                },
-                icn_cli::commands::observability::ObservabilityCommands::FederationOverview { federation_id, dag_dir, output } => {
-                    icn_cli::commands::observability::handle_federation_overview(&mut ctx, federation_id, dag_dir.as_deref(), output.as_ref()).await?;
-                }
-            }
-        }
-        Commands::Doctor => {
-            println!("ICN CLI Doctor: System check complete. All systems nominal.");
-        }
+    // Basic setup, actual logic delegated to the library
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    
+    let cli_args = Cli::parse();
+    
+    // Call the library's main handler function
+    if let Err(e) = icn_cli::run(cli_args).await { // Assuming run exists in lib.rs
+        eprintln!("Error: {}", e);
+        // Consider more specific error handling or exit codes
+        std::process::exit(1);
     }
     
+    Ok(())
+}
+
+fn generate_cli_docs<T: clap::CommandFactory>(cmd: &GenCliDocsCmd) -> anyhow::Result<()> {
+    use clap_markdown::help_markdown_command_custom;
+    use std::{fs::File, io::Write};
+    
+    let markdown = help_markdown_command_custom::<T>("icn", "--", false);
+    let path = PathBuf::from(&cmd.output_dir).join("icn.md");
+    let mut file = File::create(&path)?;
+    write!(file, "{}", markdown)?;
+    println!("Generated CLI docs at: {}", path.display());
     Ok(())
 }

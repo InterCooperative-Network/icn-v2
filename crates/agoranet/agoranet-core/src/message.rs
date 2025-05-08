@@ -90,6 +90,10 @@ pub struct AmendmentBody {
 pub struct ThreadAnchor {
     /// CID of the latest message envelope included in this anchor.
     pub tail: Cid,
+    /// SHA-256 Merkle root over all message CIDs since previous anchor.
+    pub merkle_root: [u8; 32],
     /// Unix timestamp (seconds since epoch) when the anchor was created.
     pub timestamp: i64,
+    /// Optional CID of previous anchor (None for genesis anchor).
+    pub prev_anchor: Option<Cid>,
 } 

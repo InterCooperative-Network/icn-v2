@@ -57,6 +57,7 @@ dependencies = [
  "sha2",
  "thiserror 1.0.69",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1802,6 +1803,7 @@ dependencies = [
 name = "icn-cli"
 version = "0.1.0"
 dependencies = [
+ "agoranet-core",
  "anyhow",
  "assert_cmd",
  "async-trait",
@@ -1816,6 +1818,7 @@ dependencies = [
  "hex",
  "hyper",
  "icn-ccl-compiler",
+ "icn-ccl-parser",
  "icn-core-types",
  "icn-identity-core",
  "icn-runtime",

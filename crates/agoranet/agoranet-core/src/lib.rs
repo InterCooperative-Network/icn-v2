@@ -13,11 +13,14 @@ pub mod message;
 pub mod storage;
 /// Defines the AgoraThread structure and associated operations.
 pub mod thread;
+/// Placeholder for forwarding anchors to the federation layer.
+pub mod forwarder;
 
 // Re-exports based on the battle-plan hint
 // These will cause errors until the types are defined in their respective modules.
 pub use message::{Message, Body as MessageBody, ThreadAnchor}; // Renamed Body to avoid conflict if thread::Body exists
 pub use thread::{AgoraThread, Proposal, ThreadOperations}; // Added ThreadOperations trait
+pub use forwarder::forward_anchor;
 
 #[cfg(test)]
 mod tests {

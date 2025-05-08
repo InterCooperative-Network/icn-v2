@@ -19,6 +19,10 @@ pub struct AgoraThread<S: AsyncStorage + Send + Sync + 'static> {
     pub id: Cid,
     // Store message CIDs in order, messages themselves are in AsyncStorage.
     message_cids: Arc<RwLock<Vec<Cid>>>,
+    // Keep track of the last anchor CID for linking
+    last_anchor_cid: Arc<RwLock<Option<Cid>>>,
+    // Keep track of message index where the last anchor occurred
+    last_anchor_index: Arc<RwLock<usize>>,
     storage: Arc<S>,
 }
 
@@ -28,28 +32,54 @@ impl<S: AsyncStorage + Send + Sync + 'static> AgoraThread<S> {
         Self {
             id,
             message_cids: Arc::new(RwLock::new(Vec::new())),
+            last_anchor_cid: Arc::new(RwLock::new(None)),
+            last_anchor_index: Arc::new(RwLock::new(0)),
             storage,
         }
     }
 
     /// Checks if an anchor should be created based on message count.
     async fn should_anchor(&self) -> Result<bool, AgoraError> {
-        // TODO: Make configurable via ThreadConfig or similar
-        const ANCHOR_EVERY: usize = 25;
-        let guard = self.message_cids.read().await;
-        // Only anchor if there are messages and the count hits the threshold
-        Ok(!guard.is_empty() && guard.len() % ANCHOR_EVERY == 0)
+        const ANCHOR_EVERY: usize = 25; // Keep consistent with test
+        let messages = self.message_cids.read().await;
+        let last_anchor_idx = *self.last_anchor_index.read().await;
+        let current_idx = messages.len();
+        // Anchor if enough messages passed since last anchor OR if it's the first message
+        // (We might want a specific genesis anchor later)
+        Ok(!messages.is_empty() && (current_idx - last_anchor_idx >= ANCHOR_EVERY))
     }
 
-    /// Creates and persists a `ThreadAnchor` IPLD object pointing to the given tail message CID.
+    /// Creates and persists a `ThreadAnchor` IPLD object.
     async fn anchor_now(&self, tail_cid: &Cid) -> Result<Cid, AgoraError> {
+        let prev_anchor = self.last_anchor_cid.read().await.clone();
+        let merkle_root: [u8; 32] = {
+            // Placeholder: Hash the tail CID for now.
+            // TODO: Implement actual Merkle root calculation over message CIDs since last anchor.
+            use sha2::{Sha256, Digest};
+            let mut hasher = Sha256::new();
+            hasher.update(tail_cid.hash().digest());
+            hasher.finalize().into()
+        };
+
         let anchor = ThreadAnchor {
             tail: tail_cid.clone(),
+            merkle_root,
             timestamp: chrono::Utc::now().timestamp(),
+            prev_anchor,
         };
-        log::debug!("Creating anchor for thread {} pointing to tail {}", self.id, tail_cid);
-        // Use put_ipld from AsyncStorage trait
-        self.storage.put_ipld(&anchor).await
+        log::debug!("Creating anchor for thread {}: prev={:?}, tail={}, root={:?}", 
+            self.id, anchor.prev_anchor, anchor.tail, hex::encode(anchor.merkle_root));
+        
+        let anchor_cid = self.storage.put_ipld(&anchor).await?;
+        
+        // Update last anchor state *after* successfully storing the new one
+        {
+            let msg_count = self.message_cids.read().await.len();
+            *self.last_anchor_cid.write().await = Some(anchor_cid.clone());
+            *self.last_anchor_index.write().await = msg_count; 
+        }
+
+        Ok(anchor_cid)
     }
 }
 
@@ -86,24 +116,22 @@ pub trait ThreadOperations: Send + Sync {
 impl<S: AsyncStorage + Send + Sync + 'static> ThreadOperations for AgoraThread<S> {
     /// Appends a message, stores it via IPLD, updates internal CID list, and potentially anchors.
     async fn append(&self, msg: Message) -> Result<(Cid, Option<Cid>), AgoraError> {
-        // 1. Persist the message using put_ipld, get its CID
         let cid: Cid = self.storage.put_ipld(&msg).await?;
-
-        // 2. Add the CID to the in-memory list
-        let anchor_cid = {
+        let anchor_cid_opt = {
             let mut guard = self.message_cids.write().await;
             guard.push(cid.clone());
             
-            // 3. Check if anchoring is needed and perform it (within the write lock scope is fine)
+            // Drop guard before calling should_anchor/anchor_now to avoid deadlock
+            drop(guard); 
+
             if self.should_anchor().await? {
                 log::info!("Anchor triggered automatically for thread {} at message {}", self.id, cid);
                 Some(self.anchor_now(&cid).await?)
             } else {
                 None
             }
-        }; // Release write lock here
-
-        Ok((cid, anchor_cid))
+        };
+        Ok((cid, anchor_cid_opt))
     }
 
     /// Manually trigger anchoring based on the last message.

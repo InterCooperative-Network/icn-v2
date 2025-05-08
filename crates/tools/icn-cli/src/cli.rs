@@ -37,81 +37,46 @@ pub mod commands {
     pub use crate::commands::vote;
 }
 
-#[derive(Parser, Debug)] // Added Debug for gen_clap_docs if needed
-#[command(author, version, about, long_about = None)]
-#[command(propagate_version = true)]
-pub struct Cli {
-    #[command(subcommand)]
-    pub command: Commands,
+// Import command structs from the commands module
+use crate::commands::*;
 
-    #[arg(short, long, global = true, action = clap::ArgAction::Count)]
-    pub verbose: u8,
+#[derive(Parser, Debug)]
+#[clap(author, version, about, long_about = None)]
+pub struct Cli {
+    #[clap(flatten)
+    pub global_opts: GlobalOpts,
+
+    #[clap(subcommand)]
+    pub command: Commands,
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Parser, Debug)]
+pub struct GlobalOpts {
+     #[clap(short, long, action = clap::ArgAction::Count, global = true)]
+     pub verbose: u8,
+}
+
+#[derive(Subcommand, Debug, Clone)] // Added Clone
 pub enum Commands {
-    /// Generate a new DID key
-    #[command(name = "key-gen")]
-    KeyGen {
-        /// Output file to save the key (defaults to ~/.icn/key.json)
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-    },
-
-    /// DAG commands
-    #[command(subcommand)]
-    Dag(commands::dag::DagCommands),
-
-    /// TrustBundle commands
-    #[command(subcommand)]
-    Bundle(commands::bundle::BundleCommands),
-
-    /// ExecutionReceipt commands
-    #[command(subcommand)]
-    Receipt(commands::receipt::ReceiptCommands),
-    
-    /// Advanced DAG sync commands with libp2p support
-    #[command(subcommand)]
-    SyncP2P(commands::sync_p2p::DagSyncCommands),
-
-    /// Interact with the ICN mesh network (libp2p)
-    #[command(subcommand)]
-    Mesh(commands::mesh::MeshCommands),
-
-    /// Federation management commands
-    #[command(subcommand)]
-    Federation(commands::federation::FederationCommands),
-
-    /// Manage trust policies
-    #[command(subcommand)]
-    Policy(commands::policy::PolicyCommands),
-
-    /// Runtime commands
-    #[command(subcommand)]
-    Runtime(commands::runtime::RuntimeCommands),
-    
-    /// Governance proposal commands
-    #[command(subcommand)]
-    Proposal(commands::proposal::ProposalCommands),
-    
-    /// Voting commands
-    #[command(subcommand)]
-    Vote(commands::vote::VoteCommands),
-
-    /// Cooperative commands
-    #[command(subcommand)]
-    Coop(commands::coop::CoopCommands),
-    
-    /// Community commands
-    #[command(subcommand)]
-    Community(commands::community::CommunityCommands),
-
-    /// Generic scope commands (works with both cooperatives and communities)
-    #[command(subcommand)]
-    Scope(commands::scope::ScopeCommands),
-    
-    /// Observability commands for federation transparency
-    #[command(subcommand)]
-    Observe(commands::observability::ObservabilityCommands),
+    Coop(coop::CoopCmd),
+    Receipt(receipt::ReceiptCmd),
+    Mesh(mesh::MeshCmd),
+    SyncP2P(sync_p2p::SyncP2PCmd),
+    Community(community::CommunityCmd),
+    Federation(federation::FederationCmd),
+    Scope(scope::ScopeCmd),
+    Dag(dag::DagCmd),
+    KeyGen { output: Option<std::path::PathBuf> },
+    Bundle(bundle::BundleCmd),
+    Runtime(runtime::RuntimeCmd),
+    Policy(policy::PolicyCmd),
+    Proposal(proposal::ProposalCommands),
+    Vote(vote::VoteCommands),
+    Observe(observability::ObservabilityCommands),
     Doctor,
+    GenCliDocs(gen_cli_docs::GenCliDocsCmd),
+    
+    /// Interact with AgoraNet deliberation threads.
+    #[cfg(feature = "agora")]
+    Agora(agora::AgoraCmd), // NEW
 } 
