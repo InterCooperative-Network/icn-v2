@@ -13,6 +13,10 @@ icn-core-types = { path = "../../crates/common/icn-core-types" }
 icn-identity-core = { path = "../../crates/common/icn-identity-core" }
 icn-types = { path = "../../crates/common/icn-types" }
 icn-wallet = { path = "../../crates/wallet/icn-wallet" }
+icn-runtime = { path = "../../crates/runtime/icn-runtime" }
+log = "0.4"
+env_logger = "0.11"
+wasmtime = "12"
 rand = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
