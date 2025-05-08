@@ -1406,6 +1406,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "gen-crate-readmes"
+version = "0.1.0"
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
