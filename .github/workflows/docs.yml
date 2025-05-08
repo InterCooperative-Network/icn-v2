@@ -14,17 +14,18 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-    - name: Set up Rust
+    - name: Set up Rust toolchain
       uses: actions-rs/toolchain@v1
       with:
         toolchain: stable
         override: true
         components: rustfmt, clippy
 
-    - name: Cache cargo registry and target directory
-      uses: actions/cache@v3
+    - name: Cache Cargo (registry, git dependencies, target)
+      uses: actions/cache@v4
       with:
         path: |
           ~/.cargo/registry
@@ -35,10 +36,9 @@ jobs:
           ${{ runner.os }}-cargo-docs-
 
     - name: Set up Node.js
-      uses: actions/setup-node@v3
+      uses: actions/setup-node@v4
       with:
         node-version: '20'
-        cache: 'npm'
 
     - name: Install markdown-link-check
       run: npm install -g markdown-link-check
@@ -53,19 +53,19 @@ jobs:
 
     - name: Check Markdown links
       run: |
-        echo "Checking links in docs/index.md"
+        echo "Checking links in docs/index.md..."
         markdown-link-check docs/index.md
-        echo "Checking links in other markdown files in docs/"
-        find docs -path docs/index.md -prune -o -name '*.md' -print0 | xargs -0 -L1 markdown-link-check --quiet || echo "markdown-link-check found broken links. Will not fail CI for now."
+        echo "Checking links in other Markdown files in docs/ directory..."
+        markdown-link-check docs/**/*.md --quiet || echo "markdown-link-check identified potential issues. This will not fail the build for now."
 
-    - name: Check crate README freshness and build docs
+    - name: Update generated docs, build site, and check for diff
       run: |
         ./scripts/update_docs.sh
         git diff --exit-code
 
-    - name: Deploy to GitHub Pages
+    - name: Deploy to GitHub Pages (on push to main)
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      uses: peaceiris/actions-gh-pages@v3
+      uses: peaceiris/actions-gh-pages@v4
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         publish_dir: ./site 
