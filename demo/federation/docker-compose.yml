@@ -1,0 +1,25 @@
+version: '3'
+services:
+  node1:
+    image: alpine:latest
+    volumes:
+      - ./health_server.sh:/health_server.sh
+    command: ["sh", "-c", "apk add --no-cache bash netcat-openbsd && bash /health_server.sh 5001"]
+    ports:
+      - "5001:5001"
+
+  node2:
+    image: alpine:latest
+    volumes:
+      - ./health_server.sh:/health_server.sh
+    command: ["sh", "-c", "apk add --no-cache bash netcat-openbsd && bash /health_server.sh 5002"]
+    ports:
+      - "5002:5002"
+  
+  node3:
+    image: alpine:latest
+    volumes:
+      - ./health_server.sh:/health_server.sh
+    command: ["sh", "-c", "apk add --no-cache bash netcat-openbsd && bash /health_server.sh 5003"]
+    ports:
+      - "5003:5003" 
