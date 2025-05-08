@@ -47,8 +47,15 @@ impl Default for ExecutionConfig {
 pub struct RuntimeConfig {
     #[serde(default)]
     pub execution: ExecutionConfig,
+
+    #[serde(default = "default_dag_index_path")]
+    pub dag_index_path: PathBuf,
     // pub networking: NetworkingConfig, // Example for other configs
     // pub storage: StorageConfig,       // Example for other configs
+}
+
+fn default_dag_index_path() -> PathBuf {
+    PathBuf::from("runtime_data/dag_index") // Default path for the index
 }
 
 // Example for other config structs if needed in the future

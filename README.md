@@ -1,6 +1,11 @@
 # ICN v2
 
+[![codecov](https://codecov.io/gh/your-username/icn-v2/branch/main/graph/badge.svg)](https://codecov.io/gh/your-username/icn-v2)
+<!-- Add other badges here, e.g., for security checks, crates.io version -->
+
 A clean-slate refactor of the InterCooperative Network's federated infrastructure, emphasizing modular design, verifiable governance, and decentralized coordination.
+
+<!-- Reminder: Security is checked in CI using cargo-audit and cargo-deny. Consider adding a badge for this if available. -->
 
 ## Key Features
 
@@ -86,6 +91,61 @@ icn mesh scheduler \
 ```
 
 See the [Mesh Computation Guide](docs/guides/mesh_compute.md) for details.
+
+## Mesh Job Submission Flow Diagram
+
+For a visual representation of the mesh job submission workflow, see the diagram below. For more details and a textual description of the flow, please refer to [docs/diagrams/mesh-flow.md](docs/diagrams/mesh-flow.md).
+
+```mermaid
+sequenceDiagram
+    participant R as Requester
+    participant F as Federation
+    participant S as Scheduler
+    participant N as Provider Nodes
+    participant D as DAG
+
+    Note over R: Prepare Job
+    
+    %% Job Submission
+    R->>R: Generate Job Manifest
+    R->>R: Sign with Requester DID
+    R->>F: Submit Job (VC)
+    F->>D: Anchor Job
+    D-->>F: Return Job CID
+    F-->>R: Job CID/ID
+
+    %% Bidding
+    F->>N: Announce Job to Capable Nodes
+    N->>N: Evaluate Capability Match
+    N->>F: Submit Bids (Signed)
+    F->>D: Anchor Bids
+    R->>F: Request Bids for Job
+    F-->>R: Return Available Bids
+    
+    %% Bid Selection
+    R->>R: Select Bid
+    R->>R: Sign Dispatch Authorization
+    R->>F: Submit Dispatch (VC)
+    F->>D: Anchor Dispatch
+    
+    %% Execution
+    F->>S: Dispatch to Scheduler
+    S->>N: Assign Job to Selected Node
+    Note over N: Execute WASM Job
+    
+    %% Result & Receipt
+    N->>N: Sign Execution Receipt (VC)
+    N->>F: Submit Result & Receipt
+    F->>D: Anchor Result & Receipt
+    F-->>R: Notify of Completion
+    
+    %% Verification
+    R->>F: Request Result
+    F-->>R: Return Result & Receipt CID
+    R->>D: Fetch Receipt
+    R->>R: Verify Signature Chain
+    Note over R: Verified Result
+```
 
 ## Contributing
 

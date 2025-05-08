@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 //! Placeholder for icn-cli binary
 
 // Use anyhow temporarily for non-refactored commands
@@ -125,6 +126,7 @@ enum Commands {
     /// Observability commands for federation transparency
     #[command(subcommand)]
     Observe(ObservabilityCommands),
+    Doctor, // Added Doctor command
 }
 
 // Removed DagCommands enum definition from here (moved to commands/dag.rs)
@@ -198,6 +200,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     handle_federation_overview(&mut ctx, federation_id, dag_dir.as_deref(), output).await?
                 },
             }
+        }
+        Commands::Doctor => { // Added handler for Doctor command
+            commands::doctor::run_diagnostics().await?
         }
     }
     

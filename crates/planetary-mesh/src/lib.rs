@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 //! Planetary Mesh - A decentralized compute fabric for the InterCooperative Network
 //! 
 //! This crate provides the core functionality for the planetary mesh including:

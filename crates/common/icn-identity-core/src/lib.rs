@@ -45,4 +45,6 @@ pub use vc::{
     VoteError
 };
 
+pub use ed25519_dalek::PublicKey;
+
 pub fn placeholder() {}

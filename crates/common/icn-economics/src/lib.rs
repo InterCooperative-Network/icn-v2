@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 // ! ICN-Economics: Economic primitives for the InterCooperative Network
 // !
 // ! This crate provides token and resource tracking for cooperative economics within ICN.

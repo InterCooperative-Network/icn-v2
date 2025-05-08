@@ -17,3 +17,14 @@ resolver = "2"
 # # opt-level = 'z' # Optimize for size
 # # lto = true
 # # codegen-units = 1
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+rand = "0.8"
+tempfile = "3"
+multihash = "0.18" # For mock_cid
+
+[[bench]]
+name = "dag_benchmarks" # Benchmark binary name
+harness = false           # Required for criterion
+path = "benches/dag.rs"   # Path to the benchmark file

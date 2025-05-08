@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 //! ICN Wallet SDK for dispatch credential verification
 //!
 //! Provides functionality for verifying ICN dispatch credentials against

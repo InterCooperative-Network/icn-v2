@@ -115,6 +115,18 @@ pub struct DagNodeMetadata {
     pub scope_id: Option<String>,
 }
 
+impl Default for DagNodeMetadata {
+    fn default() -> Self {
+        Self {
+            federation_id: "default_federation".to_string(), // Or some other sensible default
+            timestamp: Utc::now(), // Default to current time
+            label: None,
+            scope: NodeScope::default(), // Uses NodeScope's default (Federation)
+            scope_id: None,
+        }
+    }
+}
+
 /// Defines the content types that can be stored in a DAG node
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "type", content = "content")]

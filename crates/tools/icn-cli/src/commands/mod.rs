@@ -13,6 +13,7 @@ pub mod coop;
 pub mod community;
 pub mod scope;
 pub mod observability;
+pub mod doctor;
 
 // Re-export handlers for main.rs
 pub use dag::handle_dag_command;

@@ -1,8 +1,9 @@
 use icn_types::{
     Did, Cid, ScopePolicyConfig, PolicyError,
-    dag::{SignedDagNode, DagStore, DagError, DagPayload},
+    dag::{SignedDagNode, DagStore, DagError, DagPayload, DagNodeMetadata, NodeScope},
 };
 use crate::policy::{MembershipIndex, PolicyLoader};
+use crate::dag_indexing::DagIndex;
 use log::{info, warn, error, debug};
 use std::sync::Arc;
 
@@ -46,6 +47,9 @@ pub struct DagProcessor {
     
     /// Policy loader to retrieve policies for different scopes
     policy_loader: Arc<dyn PolicyLoader + Send + Sync>,
+    
+    /// Dag index for auxiliary indexing
+    dag_index: Arc<dyn DagIndex + Send + Sync>,
 }
 
 impl DagProcessor {
@@ -53,10 +57,12 @@ impl DagProcessor {
     pub fn new(
         membership_index: Arc<dyn MembershipIndex + Send + Sync>,
         policy_loader: Arc<dyn PolicyLoader + Send + Sync>,
+        dag_index: Arc<dyn DagIndex + Send + Sync>,
     ) -> Self {
         Self {
             _membership_index: membership_index,
             policy_loader,
+            dag_index,
         }
     }
     
@@ -79,7 +85,7 @@ impl DagProcessor {
                 Some(id) => id.clone(),
                 None => {
                     // If scope_id is not set, use federation_id as the scope for federation-level operations
-                    if let icn_types::dag::NodeScope::Federation = node.node.metadata.scope {
+                    if let NodeScope::Federation = node.node.metadata.scope {
                         node.node.metadata.federation_id.clone()
                     } else {
                         // For non-federation scopes, scope_id is required
@@ -269,7 +275,7 @@ impl DagProcessor {
     #[cfg(feature = "async")]
     pub async fn process_node<S: DagStore + Send + Sync>(
         &self, 
-        node: SignedDagNode, 
+        mut node: SignedDagNode, 
         dag_store: &mut S
     ) -> Result<Cid, DagError> {
         // Check for policy update approval
@@ -281,8 +287,28 @@ impl DagProcessor {
         // Validate node against policy
         match self.validate_node(&node).await {
             ValidationResult::Valid => {
-                // Node passes policy validation, add it to the DAG
-                dag_store.add_node(node).await
+                // Ensure node has its CID before adding to store and index
+                let node_cid = node.ensure_cid()?;
+                let metadata = node.node.metadata.clone(); // Clone metadata for indexing
+                let author_did = node.node.author.clone(); // Clone author DID for indexing metadata
+
+                // Add to main DAG store
+                dag_store.add_node(node).await?;
+                
+                // Add to auxiliary DAG index
+                info!("Node {} added to DAG store. Attempting to index.", node_cid);
+                // TEMPORARY: Create a temporary struct that matches what SledDagIndex expects if NodeMetadata is a distinct type
+                struct IndexerMetadata<'a> {
+                    author: &'a Did,
+                    scope: &'a NodeScope,
+                }
+                let indexer_meta = IndexerMetadata { author: &author_did, scope: &metadata.scope };
+                
+                if let Err(e) = self.dag_index.add_node_to_index(&node_cid, &node.node) {
+                     error!("Failed to add node {} to DAG index: {:?}", node_cid, e);
+                }
+
+                Ok(node_cid)
             },
             ValidationResult::PolicyViolation(err) => {
                 error!("Policy violation: {}", err);
@@ -299,13 +325,12 @@ impl DagProcessor {
     #[cfg(not(feature = "async"))]
     pub fn process_node<S: DagStore + Send + Sync>(
         &self, 
-        node: SignedDagNode, 
+        mut node: SignedDagNode, 
         dag_store: &mut S
     ) -> Result<Cid, DagError> {
-        // Validate node against policy
         match self.validate_node(&node) {
             ValidationResult::Valid => {
-                // Node passes policy validation, add it to the DAG
+                let node_cid = node.ensure_cid()?;
                 dag_store.add_node(node)
             },
             ValidationResult::PolicyViolation(err) => {
