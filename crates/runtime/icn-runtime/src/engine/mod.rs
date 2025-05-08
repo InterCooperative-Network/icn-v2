@@ -1,11 +1,23 @@
 // Export the executor module
 pub mod executor;
+// New Wasmtime integration with DAG store verification
+pub mod wasmtime_integration;
+
 // Re-export types from the executor module
 pub use executor::ModernWasmExecutor;
 pub use executor::ExecutionResult;
 pub use executor::ContextExtension;
 // Type alias for backward compatibility
 pub type WasmExecutor = ModernWasmExecutor;
+
+// Re-export types from the wasmtime_integration module
+pub use wasmtime_integration::{
+    WasmExecutionConfig, 
+    WasmExecutionContext, 
+    WasmExecutionResult, 
+    WasmExecutionMetrics, 
+    create_execution_receipt
+};
 
 // Implement ReceiptContextExt for any context extension
 impl<T: ContextExtension + ?Sized> crate::host::receipt::ReceiptContextExt for T {

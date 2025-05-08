@@ -14,6 +14,7 @@ icn-identity-core = { path = "../../crates/common/icn-identity-core" }
 icn-types = { path = "../../crates/common/icn-types" }
 icn-wallet = { path = "../../crates/wallet/icn-wallet" }
 icn-runtime = { path = "../../crates/runtime/icn-runtime" }
+icn-services-storage = { path = "../../crates/services/storage" }
 log = "0.4"
 env_logger = "0.11"
 wasmtime = "12"
@@ -22,7 +23,16 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.0", features = ["full"] }
 uuid = { version = "1.4", features = ["v4", "serde"] }
+tempfile = "3.8"
 
 [[test]]
 name = "dag_store_task_receipt"
-path = "dag_store_task_receipt.rs" 
+path = "dag_store_task_receipt.rs"
+
+[[test]]
+name = "dag_storage_tests"
+path = "dag_storage_tests.rs"
+
+[[test]]
+name = "wasmtime_integration_test"
+path = "wasmtime_integration_test.rs" 
