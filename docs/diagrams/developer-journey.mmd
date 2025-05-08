@@ -1,0 +1,26 @@
+flowchart TD
+    A[Key Generation] --> B[Federation Init]
+    B --> C[Start Nodes]
+    C --> D[Submit Proposal]
+    D --> E[Vote + Execute]
+    E --> F[Wallet Init + Sync]
+    F --> G[Submit Mesh Job]
+    G --> H[Bid + Execute]
+    H --> I[Result + Receipt]
+    I --> J[Export Credential]
+    
+    style A fill:#a8d1ff,stroke:#0066cc
+    style B fill:#a8d1ff,stroke:#0066cc
+    style C fill:#a8d1ff,stroke:#0066cc
+    style D fill:#9cf1a4,stroke:#2e8b57
+    style E fill:#9cf1a4,stroke:#2e8b57
+    style F fill:#a8d1ff,stroke:#0066cc
+    style G fill:#ffd966,stroke:#b7950b
+    style H fill:#ffd966,stroke:#b7950b
+    style I fill:#ffd966,stroke:#b7950b
+    style J fill:#ff9999,stroke:#cc3333
+    
+    classDef federation fill:#a8d1ff,stroke:#0066cc;
+    classDef governance fill:#9cf1a4,stroke:#2e8b57;
+    classDef mesh fill:#ffd966,stroke:#b7950b;
+    classDef credential fill:#ff9999,stroke:#cc3333; 

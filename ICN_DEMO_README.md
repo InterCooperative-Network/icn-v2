@@ -1,6 +1,6 @@
 # ICN Federation Demo
 
-This is a simplified demo that shows the key features of the Interoperable Compute Network (ICN) federation system.
+This is a simplified demo that shows the key features of the (ICN) federation system.
 
 ## Prerequisites
 

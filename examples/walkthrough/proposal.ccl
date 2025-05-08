@@ -1,0 +1,24 @@
+// Simple resource allocation proposal
+policy "resource_allocation" {
+  description = "Allocate resources for mesh computation"
+  
+  action "allocate_compute" {
+    parameters {
+      max_ram_mb: u32,
+      max_cpu_cores: u8,
+      priority: string
+    }
+    
+    validation {
+      require(max_ram_mb <= 8192, "RAM allocation must be <= 8GB")
+      require(max_cpu_cores <= 4, "CPU cores must be <= 4")
+      require(priority in ["low", "medium", "high"], "Invalid priority")
+    }
+    
+    effect {
+      // This would contain the actual resource allocation logic
+      log("Resources allocated: RAM={}, CPU={}, Priority={}", 
+          max_ram_mb, max_cpu_cores, priority)
+    }
+  }
+} 
