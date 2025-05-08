@@ -1,0 +1,9 @@
+# Sample Proposal TOML
+title = "Sample Test Proposal"
+description = "This is a sample proposal for testing the ICN demo flow"
+author = "did:icn:test:admin"
+scope_id = "test-federation"
+proposal_type = "TextProposal"
+
+[content]
+text = "This is a sample text proposal for testing purposes." 

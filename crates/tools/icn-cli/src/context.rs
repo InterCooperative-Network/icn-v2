@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use icn_types::dag::memory::MemoryDagStore;
 use thiserror::Error;
 use std::collections::HashMap;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 
 // A simple in-memory resolver for keys loaded via context
 #[derive(Debug, Error)]
@@ -93,11 +94,13 @@ impl PublicKeyResolver for SimpleKeyResolver {
 }
 
 // Structure to deserialize the key file JSON
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize)]
 struct KeyFileJson {
     did: String,
-    #[allow(dead_code)] // Silence warning for unused field
-    secret_key_hex: String, 
+    #[serde(rename = "privateKey")]
+    private_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    created: Option<String>,
 }
 
 pub struct CliContext {
@@ -179,39 +182,12 @@ impl CliContext {
             return Ok(key.clone());
         }
         
-        if self.verbose {
-            println!("Loading key from: {:?}", key_path);
-        }
-        
-        let key_json_str = std::fs::read_to_string(&key_path) // Borrow key_path
-            .map_err(|e| CliError::Config(format!("Failed to read key file {:?}: {}", key_path, e)))?;
-            
-        let key_file_data: KeyFileJson = serde_json::from_str(&key_json_str)
-            .map_err(|e| CliError::Config(format!("Failed to parse key file JSON {:?}: {}", key_path, e)))?;
-            
-        let secret_bytes = hex::decode(&key_file_data.secret_key_hex) 
-             .map_err(|e| CliError::Config(format!("Invalid hex in secret key {:?}: {}", key_path, e)))?;
-        
-        let signing_key = SigningKey::from_bytes(secret_bytes.as_slice().try_into()
-            .map_err(|_| CliError::Config(format!("Invalid secret key length in {:?}", key_path)))?) ;
-            
-        let did_key = DidKey::from_signing_key(signing_key); 
-             
-        // Check if the derived DID matches the one in the file
-        if did_key.did().to_string() != key_file_data.did {
-             return Err(CliError::Config(format!("DID mismatch in key file {:?}: expected {}, found {}", key_path, key_file_data.did, did_key.did())));
-        }
+        // Load the key using the existing method
+        let did_key = self.load_did_key(&key_path)?;
         
         let arc_did_key = Arc::new(did_key);
         self._loaded_key = Some(arc_did_key.clone());
         
-        // Add the loaded key to the simple resolver - Use the Arc
-        let verifying_key = arc_did_key.verifying_key().clone();
-        self._key_resolver.add_key(arc_did_key.did().clone(), verifying_key); 
-            
-        if self.verbose {
-            println!("Loaded key for DID: {}", arc_did_key.did()); // Use Arc here too
-        }
         Ok(arc_did_key)
     }
 
@@ -240,17 +216,35 @@ impl CliContext {
         let key_file_data: KeyFileJson = serde_json::from_str(&key_json_str)
             .map_err(|e| CliError::Config(format!("Failed to parse key file JSON {:?}: {}", key_path, e)))?;
             
-        let secret_bytes = hex::decode(&key_file_data.secret_key_hex) 
-             .map_err(|e| CliError::Config(format!("Invalid hex in secret key {:?}: {}", key_path, e)))?;
+        // Parse the private key format
+        let private_key = &key_file_data.private_key;
+        
+        // Check if it's the new format (ed25519-priv:BASE64)
+        if !private_key.starts_with("ed25519-priv:") {
+            return Err(CliError::Config(format!("Unsupported private key format in {:?}", key_path)));
+        }
+        
+        // Extract the BASE64 part
+        let private_key_base64 = &private_key["ed25519-priv:".len()..];
+        
+        // Decode BASE64 to bytes - use the STANDARD engine correctly
+        let secret_bytes = BASE64_STANDARD.decode(private_key_base64)
+            .map_err(|e| CliError::Config(format!("Invalid BASE64 in private key {:?}: {}", key_path, e)))?;
+        
+        if secret_bytes.len() != 32 {
+            return Err(CliError::Config(format!("Invalid Ed25519 key length in {:?}: expected 32 bytes, got {}", 
+                key_path, secret_bytes.len())));
+        }
         
         let signing_key = SigningKey::from_bytes(secret_bytes.as_slice().try_into()
-            .map_err(|_| CliError::Config(format!("Invalid secret key length in {:?}", key_path)))?) ;
+            .map_err(|_| CliError::Config(format!("Invalid secret key length in {:?}", key_path)))?);
             
         let did_key = DidKey::from_signing_key(signing_key); 
-             
+         
         // Check if the derived DID matches the one in the file
         if did_key.did().to_string() != key_file_data.did {
-             return Err(CliError::Config(format!("DID mismatch in key file {:?}: expected {}, found {}", key_path, key_file_data.did, did_key.did())));
+             return Err(CliError::Config(format!("DID mismatch in key file {:?}: expected {}, found {}", 
+                key_path, key_file_data.did, did_key.did())));
         }
         
         // Add the loaded key to the simple resolver
