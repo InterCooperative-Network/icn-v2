@@ -6,23 +6,20 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0"
 tokio = { version = "1", features = ["full"] }
-libp2p = {
-    version = "0.52",
-    features = [
-        "gossipsub",
-        "tcp",
-        "dns",
-        "yamux",
-        "mplex",
-        "macros",
-        "identify",
-        "kad",
-        "mdns",
-        "tokio",
-        "ping",
-        "noise"
-    ]
-}
+libp2p = { version = "0.52", features = [
+    "gossipsub",
+    "tcp",
+    "dns",
+    "yamux",
+    "mplex",
+    "macros",
+    "identify",
+    "kad",
+    "mdns",
+    "tokio",
+    "ping",
+    "noise"
+] }
 hyper = { version = "0.14", features = ["full"] }
 tracing = "0.1"
 icn-types = { path = "../../common/icn-types", features=["ipld"] }
@@ -38,7 +35,7 @@ hex = "0.4"
 # Add other necessary dependencies as implementations are filled out, e.g.:
 # icn-identity-core = { path = "../../common/icn-identity-core" }
 # rocksdb = { version = "0.21", optional = true }
-# sled = "0.34" # If runtime node needs its own sled instance separate from icn-runtime's 
+# sled = "0.34" # If runtime node needs its own sled instance separate from icn-runtime\'s 
 
 [dev-dependencies]
 # ... existing dev-dependencies ... 

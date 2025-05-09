@@ -1,4 +1,4 @@
-use crate::rocksdb_dag_store::{DagStore, NodeScope, DagStoreError};
+use crate::rocksdb_dag_store::{DagStore, ScopeAuthorization, DagStoreError};
 use icn_common::dag::{DAGNode, DAGNodeID};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -40,14 +40,14 @@ pub struct ExecutionResult {
 }
 
 /// Runtime executor that uses DAG storage for lineage verification
-pub struct DagVerifiedExecutor<S: DagStore> {
-    /// DAG store for lineage verification
-    dag_store: Arc<S>,
+pub struct DagVerifiedExecutor {
+    /// DAG store for lineage verification (using trait object)
+    dag_store: Arc<dyn DagStore + Send + Sync>,
 }
 
-impl<S: DagStore> DagVerifiedExecutor<S> {
-    /// Create a new executor with the given DAG store
-    pub fn new(dag_store: Arc<S>) -> Self {
+impl DagVerifiedExecutor {
+    /// Create a new executor with the given DAG store trait object
+    pub fn new(dag_store: Arc<dyn DagStore + Send + Sync>) -> Self {
         Self { dag_store }
     }
     
@@ -55,7 +55,7 @@ impl<S: DagStore> DagVerifiedExecutor<S> {
     pub async fn execute_wasm_module(
         &self,
         cid: &DAGNodeID,
-        scope: &NodeScope,
+        scope: &ScopeAuthorization,
     ) -> Result<ExecutionResult, RuntimeExecutionError> {
         // First, verify the lineage
         if !self.dag_store.verify_lineage(cid, scope).await? {
@@ -97,7 +97,7 @@ impl<S: DagStore> DagVerifiedExecutor<S> {
     pub async fn append_and_execute(
         &self,
         node: DAGNode,
-        scope: &NodeScope,
+        scope: &ScopeAuthorization,
     ) -> Result<ExecutionResult, RuntimeExecutionError> {
         // First, add the node to the DAG
         let node_id = self.dag_store.append_node(node).await?;

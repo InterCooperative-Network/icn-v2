@@ -1,33 +1,54 @@
+#[cfg(feature = "wasmtime")]
 use crate::policy::PolicyError;
+#[cfg(feature = "wasmtime")]
 use anyhow::Result;
+#[cfg(feature = "wasmtime")]
 use icn_types::dag::{DagStore, SignedDagNode, DagError, Cid};
+#[cfg(feature = "wasmtime")]
 use icn_types::Did;
+#[cfg(feature = "wasmtime")]
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "wasmtime")]
 use std::sync::Arc;
+#[cfg(feature = "wasmtime")]
 use tracing::{debug, error, info, trace, warn};
+#[cfg(feature = "wasmtime")]
 use wasmtime::{Config, Engine, Instance, Module, Store};
 
 /// Runtime error types when working with WASM execution
-#[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
     #[error("DAG store error: {0}")]
     DagStore(String),
     
+    #[error("DAG node not found: {0}")]
+    NodeNotFound(String),
+    
+    #[error("DAG verification error: {0}")]
+    DagVerification(String),
+    
+    #[error("DAG serialization error: {0}")]
+    DagSerialization(String),
+
     #[error("Policy error: {0}")]
     Policy(#[from] PolicyError),
     
+    #[cfg(feature = "wasmtime")]
     #[error("Invalid module: {0}")]
     InvalidModule(String),
     
+    #[cfg(feature = "wasmtime")]
     #[error("Module compilation error: {0}")]
     ModuleCompilation(String),
     
+    #[cfg(feature = "wasmtime")]
     #[error("WASM instantiation error: {0}")]
     WasmInstantiation(String),
     
+    #[cfg(feature = "wasmtime")]
     #[error("WASM execution error: {0}")]
     WasmExecution(String),
     
+    #[cfg(feature = "wasmtime")]
     #[error("WASM engine error: {0}")]
     WasmEngine(String),
     
@@ -35,13 +56,34 @@ pub enum RuntimeError {
     Other(String),
 }
 
+#[cfg(feature = "wasmtime")]
 impl From<DagError> for RuntimeError {
     fn from(err: DagError) -> Self {
-        RuntimeError::DagStore(err.to_string())
+        match err {
+            DagError::NodeNotFound(cid) => RuntimeError::NodeNotFound(cid.to_string()),
+            DagError::ParentNotFound { child, parent } => 
+                RuntimeError::DagVerification(format!("Parent {} not found for child {}", parent, child)),
+            DagError::InvalidSignature(cid) => 
+                RuntimeError::DagVerification(format!("Invalid signature for node {}", cid)),
+            DagError::SerializationError(msg) => RuntimeError::DagSerialization(msg),
+            DagError::InvalidNodeData(msg) => RuntimeError::DagStore(msg),
+            DagError::PublicKeyResolutionError(did, msg) => 
+                RuntimeError::Other(format!("PublicKey resolution failed for {}: {}", did, msg)),
+            DagError::StorageError(msg) => RuntimeError::DagStore(msg),
+            DagError::RocksDbError(db_err) => RuntimeError::DagStore(db_err.to_string()),
+            DagError::JoinError(join_err) => RuntimeError::Other(join_err.to_string()),
+            DagError::CidError(msg) => RuntimeError::DagStore(msg),
+            DagError::CidMismatch(cid) => 
+                RuntimeError::DagVerification(format!("CID mismatch for node {}", cid)),
+            DagError::MissingParent(cid) => 
+                RuntimeError::DagVerification(format!("Missing parent for node {}", cid)),
+            DagError::PolicyError(policy_err) => RuntimeError::Policy(policy_err), // Handled by #[from] but explicit is okay
+        }
     }
 }
 
 /// Configuration for a WASM execution
+#[cfg(feature = "wasmtime")]
 #[derive(Debug, Clone)]
 pub struct WasmExecutionConfig {
     /// Maximum memory size in bytes
@@ -57,6 +99,7 @@ pub struct WasmExecutionConfig {
     pub enable_debug: bool,
 }
 
+#[cfg(feature = "wasmtime")]
 impl Default for WasmExecutionConfig {
     fn default() -> Self {
         Self {
@@ -69,6 +112,7 @@ impl Default for WasmExecutionConfig {
 }
 
 /// Execution context for a WASM module
+#[cfg(feature = "wasmtime")]
 pub struct WasmExecutionContext {
     /// DAG store for verification
     dag_store: Arc<dyn DagStore + Send + Sync>,
@@ -81,6 +125,7 @@ pub struct WasmExecutionContext {
 }
 
 /// Result of a WASM execution
+#[cfg(feature = "wasmtime")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WasmExecutionResult {
     /// Whether execution was successful
@@ -100,6 +145,7 @@ pub struct WasmExecutionResult {
 }
 
 /// Metrics from a WASM execution
+#[cfg(feature = "wasmtime")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WasmExecutionMetrics {
     /// Execution time in milliseconds
@@ -112,6 +158,7 @@ pub struct WasmExecutionMetrics {
     pub fuel_consumed: u64,
 }
 
+#[cfg(feature = "wasmtime")]
 impl WasmExecutionContext {
     /// Create a new WASM execution context
     pub fn new(
@@ -278,6 +325,7 @@ impl WasmExecutionContext {
 }
 
 /// Create a receipt node for a successful execution
+#[cfg(feature = "wasmtime")]
 pub async fn create_execution_receipt(
     dag_store: &Arc<dyn DagStore + Send + Sync>,
     module_cid: &Cid,

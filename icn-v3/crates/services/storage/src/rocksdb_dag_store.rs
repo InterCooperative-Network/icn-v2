@@ -127,7 +127,7 @@ impl Default for ConnectionConfig {
 
 /// Scope for node authorization
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NodeScope {
+pub struct ScopeAuthorization {
     /// The scope identifier
     pub scope_id: String,
     
@@ -141,7 +141,7 @@ pub struct NodeScope {
     pub constraints: Option<HashMap<String, serde_json::Value>>,
 }
 
-impl NodeScope {
+impl ScopeAuthorization {
     /// Create a new scope
     pub fn new(scope_id: String) -> Self {
         Self {
@@ -187,7 +187,7 @@ pub struct RocksDbDagStore {
     db: Arc<Mutex<Option<DB>>>,
     
     /// Known scopes
-    scopes: Arc<Mutex<HashMap<String, NodeScope>>>,
+    scopes: Arc<Mutex<HashMap<String, ScopeAuthorization>>>,
 }
 
 /// DAG storage trait
@@ -206,7 +206,7 @@ pub trait DagStore: Send + Sync + 'static {
     async fn node_exists(&self, cid: &DAGNodeID) -> Result<bool, DagStoreError>;
     
     /// Verify the lineage of a node against a scope
-    async fn verify_lineage(&self, cid: &DAGNodeID, scope: &NodeScope) -> Result<bool, DagStoreError>;
+    async fn verify_lineage(&self, cid: &DAGNodeID, scope: &ScopeAuthorization) -> Result<bool, DagStoreError>;
     
     /// Get nodes by type
     async fn get_nodes_by_type(
@@ -234,10 +234,10 @@ pub trait DagStore: Send + Sync + 'static {
     async fn get_metadata(&self) -> Result<DagMetadata, DagStoreError>;
     
     /// Register a scope
-    async fn register_scope(&self, scope: NodeScope) -> Result<(), DagStoreError>;
+    async fn register_scope(&self, scope: ScopeAuthorization) -> Result<(), DagStoreError>;
     
     /// Get a scope
-    async fn get_scope(&self, scope_id: &str) -> Result<Option<NodeScope>, DagStoreError>;
+    async fn get_scope(&self, scope_id: &str) -> Result<Option<ScopeAuthorization>, DagStoreError>;
     
     /// Compact the database
     async fn compact(&self) -> Result<(), DagStoreError>;
@@ -346,7 +346,7 @@ impl RocksDbDagStore {
     async fn validate_node_lineage_for_scope(
         &self,
         node: &DAGNode,
-        scope: &NodeScope
+        scope: &ScopeAuthorization
     ) -> Result<bool, DagStoreError> {
         // First check if the node's creator is authorized for this scope
         if !scope.is_authorized(&node.header.creator.id()) {
@@ -483,10 +483,10 @@ impl DagStore for RocksDbDagStore {
         // Check if the scope exists
         let scope_exists = self.scope_exists(&node.header.scope).await?;
         if !scope_exists {
-            // Create a default scope for this node
-            let mut scope = NodeScope::new(node.header.scope.clone());
-            scope.add_identity(node.header.creator.id().to_string());
-            self.register_scope(scope).await?;
+            // Create a default scope authorization for this node
+            let mut scope_auth = ScopeAuthorization::new(node.header.scope.clone());
+            scope_auth.add_identity(node.header.creator.id().to_string());
+            self.register_scope(scope_auth).await?;
         }
         
         // Verify that all parent nodes exist
@@ -591,7 +591,7 @@ impl DagStore for RocksDbDagStore {
         }
     }
     
-    async fn verify_lineage(&self, cid: &DAGNodeID, scope: &NodeScope) -> Result<bool, DagStoreError> {
+    async fn verify_lineage(&self, cid: &DAGNodeID, scope: &ScopeAuthorization) -> Result<bool, DagStoreError> {
         // Get the node
         let node = match self.get_node(cid).await? {
             Some(node) => node,
@@ -620,7 +620,7 @@ impl DagStore for RocksDbDagStore {
             }
         }
         
-        // Validate the node's lineage
+        // Validate the node's lineage using the scope authorization rules
         self.validate_node_lineage_for_scope(&node, scope).await
     }
     
@@ -854,13 +854,13 @@ impl DagStore for RocksDbDagStore {
         }
     }
     
-    async fn register_scope(&self, scope: NodeScope) -> Result<(), DagStoreError> {
+    async fn register_scope(&self, scope: ScopeAuthorization) -> Result<(), DagStoreError> {
         let mut scopes = self.scopes.lock().unwrap();
         scopes.insert(scope.scope_id.clone(), scope);
         Ok(())
     }
     
-    async fn get_scope(&self, scope_id: &str) -> Result<Option<NodeScope>, DagStoreError> {
+    async fn get_scope(&self, scope_id: &str) -> Result<Option<ScopeAuthorization>, DagStoreError> {
         let scopes = self.scopes.lock().unwrap();
         Ok(scopes.get(scope_id).cloned())
     }

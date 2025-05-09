@@ -19,7 +19,7 @@ metrics-exporter-prometheus = "0.11"
 # tokio-metrics = "0.2" # Removed due to feature conflict with tokio >= 1.26
 hyper = { version = "0.14", features = ["server", "http1"] }
 
-icn-types = { path = "../../../common/icn-types" }
+icn-types = { path = "../../common/icn-types" }
 icn-identity-core = { path = "../../common/icn-identity-core", features = [] }
 icn-core-types = { path = "../../common/icn-core-types", optional = true }
 icn-runtime = { path = "../../runtime/icn-runtime" }

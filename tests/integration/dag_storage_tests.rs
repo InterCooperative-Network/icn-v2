@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use icn_types::dag::{DagNode, DagPayload, SignedDagNode};
-    use icn_services_storage::{RocksDbDagStore, DagStore, NodeScope, ConnectionConfig};
+    use icn_services_storage::{RocksDbDagStore, DagStore, ScopeAuthorization, ConnectionConfig};
     use std::sync::Arc;
     use std::collections::HashSet;
     use tempfile::TempDir;
@@ -39,9 +39,9 @@ mod tests {
         SignedDagNode::new(node, None)
     }
 
-    /// Helper function to create a node scope
-    fn create_test_scope(scope_id: &str, authorized_ids: Vec<&str>) -> NodeScope {
-        let mut scope = NodeScope::new(scope_id.to_string());
+    /// Helper function to create a node scope authorization
+    fn create_test_scope(scope_id: &str, authorized_ids: Vec<&str>) -> ScopeAuthorization {
+        let mut scope = ScopeAuthorization::new(scope_id.to_string());
         for id in authorized_ids {
             scope.add_identity(id.to_string());
         }

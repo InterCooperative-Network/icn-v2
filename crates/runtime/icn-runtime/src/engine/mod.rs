@@ -1,6 +1,7 @@
 // Export the executor module
 pub mod executor;
 // New Wasmtime integration with DAG store verification
+#[cfg(feature = "wasmtime")]
 pub mod wasmtime_integration;
 
 // Re-export types from the executor module
@@ -11,6 +12,7 @@ pub use executor::ContextExtension;
 pub type WasmExecutor = ModernWasmExecutor;
 
 // Re-export types from the wasmtime_integration module
+#[cfg(feature = "wasmtime")]
 pub use wasmtime_integration::{
     WasmExecutionConfig, 
     WasmExecutionContext, 

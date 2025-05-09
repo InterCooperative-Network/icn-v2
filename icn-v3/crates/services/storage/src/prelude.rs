@@ -1,10 +1,6 @@
-pub mod rocksdb_dag_store;
-pub mod runtime_integration;
-#[cfg(test)]
-mod tests;
-pub mod prelude;
+//! Prelude module for easy importing of common types
 
-pub use rocksdb_dag_store::{
+pub use crate::rocksdb_dag_store::{
     RocksDbDagStore,
     ScopeAuthorization,
     DagStoreError,
@@ -12,7 +8,7 @@ pub use rocksdb_dag_store::{
     DagStore,
 };
 
-pub use runtime_integration::{
+pub use crate::runtime_integration::{
     DagVerifiedExecutor,
     ExecutionResult,
     RuntimeExecutionError,
